@@ -1,0 +1,21 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { BRAIN_DIR, ensureDir, exists, write } from './common.mjs';
+
+const dirs = ['features', 'modules', 'decisions', 'sessions', 'vector-db'].map(d => path.join(BRAIN_DIR, d));
+dirs.forEach(ensureDir);
+
+const files = {
+  'context_index.md': `# Context Index\n\nPurpose: compact, low-token map of the project. Claude should load this first.\n\n## Project Snapshot\n- Status: Needs Review\n- Stack: Needs Review\n- Primary goal: Needs Review\n\n## Current Focus\n- Needs Review\n\n## Core Modules\n- Needs Review\n\n## Active Features\n- Needs Review\n\n## Key Decisions\n- Needs Review\n\n## Retrieval Hints\n- Use semantic search before loading full specs.\n- Load master_plan.md only when details are missing or ambiguous.\n`,
+  'master_plan.md': `# Master Plan\n\nPaste or import the complete project plan here.\n\nAfter adding it, ask Claude:\n\n> Use the project-brain skill. Ingest .project-brain/master_plan.md and update context_index, product_plan, modules, features, and decisions.\n`,
+  'product_plan.md': `# Product Plan\n\n## Vision\nNeeds Review\n\n## Target Users\nNeeds Review\n\n## Core Value Proposition\nNeeds Review\n\n## Roadmap\n### Now\n- Needs Review\n\n### Next\n- Needs Review\n\n### Later\n- Needs Review\n\n## Non-Goals\n- Needs Review\n`,
+  'repo_context.md': `# Repo Context\n\n## Stack\n- Framework: Needs Review\n- Language: Needs Review\n- Package manager: Needs Review\n\n## Commands\n- Install: \`npm install\`\n- Dev: Needs Review\n- Lint: Needs Review\n- Typecheck: Needs Review\n- Test: Needs Review\n- Build: Needs Review\n\n## Architecture Conventions\n- Needs Review\n\n## Git Workflow\n- Branches: \`feature/*\`, \`fix/*\`, \`refactor/*\`, \`chore/*\`, \`docs/*\`, \`test/*\`\n- Commit format: \`type(scope): short description\`\n\n## Code Conventions\n- TypeScript-first where applicable.\n- Avoid \`any\` unless justified.\n- Keep modules cohesive.\n`,
+  'active_state.md': `# Active State\n\n## Developers\n- Needs Review\n\n## Active Work\n- Needs Review\n\n## Blockers\n- None recorded\n\n## Overlaps / Conflict Risks\n- None recorded\n\n## Last Sync\n- Needs Review\n`
+};
+
+for (const [name, content] of Object.entries(files)) {
+  const p = path.join(BRAIN_DIR, name);
+  if (!exists(p)) write(p, content);
+}
+
+console.log('Initialized .project-brain');

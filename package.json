@@ -1,0 +1,25 @@
+{
+  "name": "project-brain-skill-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local semantic project brain scripts for Claude Skill usage.",
+  "type": "module",
+  "scripts": {
+    "brain:init": "node skills/project-brain/scripts/brain-init.mjs",
+    "brain:index": "node skills/project-brain/scripts/brain-index.mjs",
+    "brain:search": "node skills/project-brain/scripts/brain-search.mjs",
+    "brain:sync": "node skills/project-brain/scripts/brain-sync.mjs",
+    "brain:guard": "node skills/project-brain/scripts/brain-guard.mjs",
+    "brain:health": "node skills/project-brain/scripts/brain-health.mjs",
+    "brain:install-hooks": "bash skills/project-brain/bin/install-hooks.sh"
+  },
+  "dependencies": {
+    "@xenova/transformers": "^2.17.2",
+    "fast-glob": "^3.3.2",
+    "gray-matter": "^4.0.3"
+  },
+  "optionalDependencies": {
+    "@lancedb/lancedb": "^0.9.0"
+  },
+  "devDependencies": {}
+}
