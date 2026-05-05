@@ -41,6 +41,8 @@ Do not commit:
 - `.project-brain/index_manifest.json`
 - `.project-brain/search_index.json`
 
+The local vector backend is selected with `BRAIN_STORE=auto|json|lance`. `auto` prefers LanceDB when the optional dependency is installed and falls back to the JSON cache.
+
 ## Standard commands
 
 When asked to initialize:
@@ -55,6 +57,9 @@ When asked to search context:
 
 ```bash
 npm run brain:search -- "query text"
+npm run brain:search -- "query text" --summary-only
+npm run brain:search -- "query text" --modules-only
+npm run brain:pack -- "query text" --max-tokens 3000
 ```
 
 When asked to sync:
@@ -73,6 +78,15 @@ When asked to guard/check:
 
 ```bash
 npm run brain:guard
+```
+
+When asked to track short-lived work context:
+
+```bash
+npm run brain:session -- start
+npm run brain:session -- end
+npm run brain:session -- list
+npm run brain:session -- clean
 ```
 
 ## Operating modes

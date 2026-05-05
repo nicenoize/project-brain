@@ -85,9 +85,21 @@ npm run brain:init
 npm run brain:update-skill
 npm run brain:index
 npm run brain:search -- "auth checkout module"
+npm run brain:search -- "auth checkout module" --summary-only
+npm run brain:pack -- "auth checkout module" --max-tokens 3000
+npm run brain:session -- start
 npm run brain:sync
 npm run brain:guard
 npm run brain:health
+```
+
+Useful retrieval env vars:
+
+```bash
+BRAIN_STORE=auto|json|lance
+BRAIN_EMBED_PROVIDER=local|openai
+BRAIN_HYBRID_ALPHA=0.7
+BRAIN_SESSION_TTL_HOURS=72
 ```
 
 ## How it works
@@ -96,6 +108,7 @@ npm run brain:health
 - `.project-brain/context_index.md` is the compressed low-token map agents load first.
 - `.project-brain/master_plan.md` stores the full plan.
 - The semantic index is rebuilt locally from committed files and selected source files.
+- Retrieval uses LanceDB when `@lancedb/lancedb` is available, with the atomic JSON cache as the default-compatible fallback.
 - The pre-commit hook runs guard checks and syncs the index.
 - The post-merge and post-checkout hooks run `brain:update-skill` to fast-forward the canonical skill checkout.
 
@@ -111,6 +124,33 @@ flowchart LR
   Brain --> Index["local semantic index<br/>generated, not committed"]
   PB --> Hooks["Git hooks + CI<br/>auto update + guard"]
   Hooks --> App
+```
+
+### Skill Runtime
+
+```mermaid
+flowchart TD
+  Agent["Agent using project-brain skill"] --> Load["Load context_index.md<br/>then active_state.md"]
+  Load --> Need{"Need more context?"}
+  Need -- "yes" --> Query["brain:search or brain:pack"]
+  Need -- "no" --> Work["Implement / review / plan"]
+
+  Query --> Embed["Embed query<br/>local MiniLM or OpenAI"]
+  Embed --> Store["Vector store adapter<br/>BRAIN_STORE=auto|json|lance"]
+  Store --> Json["JSON cache<br/>.project-brain/search_index.json"]
+  Store --> Lance["LanceDB table<br/>.project-brain/vector-db/"]
+  Json --> Rank["Hybrid ranking<br/>dense + keyword"]
+  Lance --> Rank
+  Rank --> Pack["Relevant chunks<br/>summaries, modules, code, docs"]
+  Pack --> Work
+
+  Source["Markdown brain + selected source files"] --> Chunk["Code-aware chunking<br/>file summaries + module summaries"]
+  Chunk --> Index["brain:index / brain:sync<br/>incremental upsert/delete"]
+  Index --> Store
+
+  Session["brain:session<br/>start/end/list/clean"] --> Store
+  Work --> Update["Update Markdown brain<br/>when durable facts change"]
+  Update --> Source
 ```
 
 ## Team workflow

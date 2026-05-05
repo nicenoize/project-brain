@@ -6,6 +6,7 @@ export const ROOT = process.cwd();
 export const BRAIN_DIR = path.join(ROOT, '.project-brain');
 export const SKILL_DIR = path.join(ROOT, 'skills', 'project-brain');
 export const VECTOR_DIR = path.join(BRAIN_DIR, 'vector-db');
+export const LANCE_DIR = VECTOR_DIR;
 export const JSON_INDEX = path.join(BRAIN_DIR, 'search_index.json');
 export const MANIFEST = path.join(BRAIN_DIR, 'index_manifest.json');
 
@@ -13,6 +14,12 @@ export function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); }
 export function exists(p) { return fs.existsSync(p); }
 export function read(p, fallback = '') { return exists(p) ? fs.readFileSync(p, 'utf8') : fallback; }
 export function write(p, data) { ensureDir(path.dirname(p)); fs.writeFileSync(p, data); }
+export function atomicWrite(p, data) {
+  ensureDir(path.dirname(p));
+  const tmp = `${p}.tmp`;
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, p);
+}
 export function sha256(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
 export function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'untitled'; }
 
@@ -25,6 +32,8 @@ export function mergePackageScripts(pkg) {
     'brain:sync': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-sync.mjs',
     'brain:guard': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-guard.mjs',
     'brain:health': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-health.mjs',
+    'brain:session': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-session.mjs',
+    'brain:pack': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-pack.mjs',
     'brain:install-hooks': 'bash skills/project-brain/bin/install-hooks.sh',
     'brain:update-skill': 'bash skills/project-brain/bin/update.sh'
   };
