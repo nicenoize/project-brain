@@ -121,6 +121,7 @@ function recordText(record) {
     ...(record.exportedSymbols || []),
     ...(record.symbolKinds || []),
     ...(record.imports || []),
+    ...(record.references || []),
     record.text
   ].filter(Boolean).join(' ');
 }

@@ -288,6 +288,7 @@ export function normalizeRecord(record) {
     lineStart: Number(record.lineStart || 0),
     lineEnd: Number(record.lineEnd || 0),
     imports: normalizeList(record.imports),
+    references: normalizeList(record.references),
     vector: Array.from(record.vector || [])
   };
 }

@@ -67,6 +67,7 @@ function toJsonResult(record) {
     lineStart: record.lineStart,
     lineEnd: record.lineEnd,
     imports: record.imports,
+    references: record.references,
     text: record.text
   };
 }

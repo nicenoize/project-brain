@@ -38,8 +38,32 @@ export function buildGraph(records) {
       addNode(nodes, `import:${specifier}`, 'import', specifier);
       addEdge(edges, `file:${record.file}`, `import:${specifier}`, 'imports');
     }
+    for (const reference of record.references || []) {
+      addNode(nodes, `reference:${reference}`, 'reference', reference);
+      addEdge(edges, `file:${record.file}`, `reference:${reference}`, 'references');
+    }
   }
+  addResolvedReferenceEdges(nodes, edges, records);
   return { nodes: [...nodes.values()], edges: [...edges.values()] };
+}
+
+function addResolvedReferenceEdges(nodes, edges, records) {
+  const definitions = new Map();
+  for (const record of records) {
+    for (const symbol of record.symbols || []) {
+      if (!definitions.has(symbol)) definitions.set(symbol, new Set());
+      definitions.get(symbol).add(record.file);
+    }
+  }
+  for (const record of records) {
+    for (const reference of record.references || []) {
+      for (const targetFile of definitions.get(reference) || []) {
+        if (targetFile === record.file) continue;
+        addNode(nodes, `file:${targetFile}`, 'file', targetFile);
+        addEdge(edges, `file:${record.file}`, `file:${targetFile}`, `calls:${reference}`);
+      }
+    }
+  }
 }
 
 function addNode(nodes, id, type, label) {

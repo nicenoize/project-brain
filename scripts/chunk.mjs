@@ -23,13 +23,15 @@ export async function chunkCode(text, filePath, opts = {}) {
   const maxChars = opts.maxChars || DEFAULT_MAX_CHARS;
   const symbols = await findSymbols(text, filePath);
   const imports = findImports(text);
+  const importedNames = findImportedNames(text);
   if (!symbols.length) {
     return chunkText(text, maxChars, opts.overlap || 250).map(part => ({
       text: part,
       heading: path.basename(filePath),
       embeddingText: `${filePath}\n${part}`,
       symbols: [],
-      imports
+      imports,
+      references: findReferences(part, importedNames)
     }));
   }
 
@@ -44,7 +46,7 @@ export async function chunkCode(text, filePath, opts = {}) {
     const lineStart = lineNumberAt(text, start);
     const lineEnd = lineStart + body.split('\n').length - 1;
     if (currentLen && currentLen + body.length > maxChars) {
-      chunks.push(codeChunk(filePath, current, imports));
+      chunks.push(codeChunk(filePath, current, imports, importedNames));
       current = [];
       currentLen = 0;
     }
@@ -58,7 +60,7 @@ export async function chunkCode(text, filePath, opts = {}) {
     });
     currentLen += body.length;
   }
-  if (current.length) chunks.push(codeChunk(filePath, current, imports));
+  if (current.length) chunks.push(codeChunk(filePath, current, imports, importedNames));
   return chunks;
 }
 
@@ -74,7 +76,8 @@ export function chunkSummary(text, filePath, docData = {}) {
       heading: title,
       isSummary: true,
       symbols,
-      imports
+      imports,
+      references: []
     };
   }
   const headings = [...text.matchAll(/^#{1,3}\s+(.+)$/gm)].map(match => match[1].trim()).slice(0, 40);
@@ -172,7 +175,39 @@ function findImports(text) {
   return [...imports];
 }
 
-function codeChunk(filePath, parts, imports = []) {
+function findImportedNames(text) {
+  const names = new Set();
+  for (const match of text.matchAll(/^\s*import(?:\s+type)?\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]/gm)) {
+    const clause = match[1].trim();
+    const named = clause.match(/\{([\s\S]*?)\}/);
+    if (named) {
+      for (const part of named[1].split(',')) {
+        const local = part.trim().split(/\s+as\s+/).pop()?.trim();
+        if (local) names.add(local);
+      }
+    }
+    const defaultName = clause.replace(/\{[\s\S]*?\}/, '').split(',')[0].trim();
+    if (defaultName && /^[A-Za-z_$][\w$]*$/.test(defaultName)) names.add(defaultName);
+  }
+  return [...names];
+}
+
+function findReferences(text, candidateSymbols = []) {
+  const code = stripStringsAndComments(text);
+  const refs = new Set();
+  for (const symbol of candidateSymbols) {
+    const name = typeof symbol === 'string' ? symbol : symbol.name;
+    if (!name) continue;
+    const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'g');
+    if (pattern.test(code)) refs.add(name);
+  }
+  for (const match of code.matchAll(/\b([A-Za-z_$][A-Za-z0-9_$]{2,})\b/g)) {
+    if (!JS_WORDS.has(match[1])) refs.add(match[1]);
+  }
+  return [...refs];
+}
+
+function codeChunk(filePath, parts, imports = [], importedNames = []) {
   const heading = parts.map(part => part.name).join(', ');
   const text = parts.map(part => part.body).join('\n\n');
   const symbols = parts.map(part => part.name);
@@ -187,9 +222,30 @@ function codeChunk(filePath, parts, imports = []) {
     exportedSymbols,
     lineStart: Math.min(...parts.map(part => part.lineStart || 1)),
     lineEnd: Math.max(...parts.map(part => part.lineEnd || 1)),
-    imports
+    imports,
+    references: findReferences(text, [...importedNames, ...symbols])
   };
 }
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripStringsAndComments(text) {
+  return String(text)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/.*$/gm, ' ')
+    .replace(/`(?:\\[\s\S]|[^`\\])*`/g, ' ')
+    .replace(/'(?:\\.|[^'\\])*'/g, ' ')
+    .replace(/"(?:\\.|[^"\\])*"/g, ' ');
+}
+
+const JS_WORDS = new Set([
+  'const', 'let', 'var', 'function', 'class', 'extends', 'return', 'import', 'export', 'from',
+  'async', 'await', 'for', 'while', 'if', 'else', 'switch', 'case', 'break', 'continue',
+  'try', 'catch', 'finally', 'throw', 'new', 'this', 'super', 'true', 'false', 'null',
+  'undefined', 'typeof', 'instanceof', 'delete', 'void', 'yield', 'default'
+]);
 
 function lineNumberAt(text, index) {
   return text.slice(0, index).split('\n').length;
