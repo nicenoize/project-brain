@@ -1,8 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import fg from 'fast-glob';
-import matter from 'gray-matter';
 
 export const ROOT = process.cwd();
 export const BRAIN_DIR = path.join(ROOT, '.project-brain');
@@ -21,16 +19,17 @@ export function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').
 export function mergePackageScripts(pkg) {
   pkg.scripts ||= {};
   const scripts = {
-    'brain:init': 'node skills/project-brain/scripts/brain-init.mjs',
-    'brain:index': 'node skills/project-brain/scripts/brain-index.mjs',
-    'brain:search': 'node skills/project-brain/scripts/brain-search.mjs',
-    'brain:sync': 'node skills/project-brain/scripts/brain-sync.mjs',
-    'brain:guard': 'node skills/project-brain/scripts/brain-guard.mjs',
-    'brain:health': 'node skills/project-brain/scripts/brain-health.mjs',
-    'brain:install-hooks': 'bash skills/project-brain/bin/install-hooks.sh'
+    'brain:init': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-init.mjs',
+    'brain:index': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-index.mjs',
+    'brain:search': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-search.mjs',
+    'brain:sync': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-sync.mjs',
+    'brain:guard': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-guard.mjs',
+    'brain:health': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-health.mjs',
+    'brain:install-hooks': 'bash skills/project-brain/bin/install-hooks.sh',
+    'brain:update-skill': 'bash skills/project-brain/bin/update.sh'
   };
   for (const [k, v] of Object.entries(scripts)) {
-    if (!pkg.scripts[k]) pkg.scripts[k] = v;
+    if (!pkg.scripts[k] || pkg.scripts[k].includes('skills/project-brain/')) pkg.scripts[k] = v;
   }
   return pkg;
 }
@@ -39,8 +38,7 @@ export function mergePackageDeps(pkg) {
   pkg.dependencies ||= {};
   const deps = {
     '@xenova/transformers': '^2.17.2',
-    'fast-glob': '^3.3.2',
-    'gray-matter': '^4.0.3'
+    'fast-glob': '^3.3.2'
   };
   for (const [k, v] of Object.entries(deps)) {
     if (!pkg.dependencies[k] && !(pkg.devDependencies && pkg.devDependencies[k])) pkg.dependencies[k] = v;
@@ -51,6 +49,7 @@ export function mergePackageDeps(pkg) {
 }
 
 export async function listIndexableFiles() {
+  const { default: fg } = await import('fast-glob');
   const patterns = [
     '.project-brain/**/*.md',
     'README.md',
@@ -92,8 +91,14 @@ export function chunkText(text, maxChars = 1800, overlap = 250) {
 }
 
 export function parseDoc(file, content) {
-  const parsed = matter(content);
-  return { file, data: parsed.data || {}, body: parsed.content || content };
+  const frontmatter = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!frontmatter) return { file, data: {}, body: content };
+  const data = {};
+  for (const line of frontmatter[1].split('\n')) {
+    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (match) data[match[1]] = match[2].replace(/^["']|["']$/g, '');
+  }
+  return { file, data, body: frontmatter[2] || '' };
 }
 
 export function cosine(a, b) {
