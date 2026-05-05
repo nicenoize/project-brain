@@ -71,6 +71,7 @@ npm run brain:search -- "query text"
 npm run brain:search -- "query text" --summary-only
 npm run brain:search -- "query text" --modules-only
 npm run brain:symbol -- SymbolName SymbolName
+npm run brain:impact -- SymbolName
 npm run brain:pack -- "query text" --max-tokens 3000
 npm run brain:graph -- --format json
 npm run brain:eval

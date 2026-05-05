@@ -84,6 +84,7 @@ for (const file of changedFiles) {
       lineStart: chunk.lineStart || 0,
       lineEnd: chunk.lineEnd || 0,
       imports: chunk.imports || [],
+      references: chunk.references || [],
       vector: vectors[i]
     });
   }
