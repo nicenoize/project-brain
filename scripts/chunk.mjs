@@ -39,13 +39,23 @@ export async function chunkCode(text, filePath, opts = {}) {
   for (let i = 0; i < symbols.length; i++) {
     const start = symbols[i].index;
     const end = symbols[i + 1]?.index || text.length;
-    const body = text.slice(start, end).trim();
+    const rawBody = text.slice(start, end);
+    const body = rawBody.trim();
+    const lineStart = lineNumberAt(text, start);
+    const lineEnd = lineStart + body.split('\n').length - 1;
     if (currentLen && currentLen + body.length > maxChars) {
       chunks.push(codeChunk(filePath, current, imports));
       current = [];
       currentLen = 0;
     }
-    current.push({ name: symbols[i].name, kind: symbols[i].kind, body });
+    current.push({
+      name: symbols[i].name,
+      kind: symbols[i].kind,
+      exported: symbols[i].exported,
+      lineStart,
+      lineEnd,
+      body
+    });
     currentLen += body.length;
   }
   if (current.length) chunks.push(codeChunk(filePath, current, imports));
@@ -128,7 +138,7 @@ async function findSymbolsAst(text, filePath) {
   function visit(node) {
     const name = node.parent === source ? symbolName(node) : '';
     if (name) {
-      symbols.push({ name, kind: ts.SyntaxKind[node.kind], index: node.getStart(source) });
+      symbols.push({ name, kind: ts.SyntaxKind[node.kind], exported: hasExport(node), index: node.getStart(source) });
     }
     ts.forEachChild(node, visit);
   }
@@ -143,11 +153,15 @@ async function findSymbolsAst(text, filePath) {
     }
     return '';
   }
+
+  function hasExport(node) {
+    return Boolean(ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export);
+  }
 }
 
 function findSymbolsRegex(text) {
   const pattern = /^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
-  return [...text.matchAll(pattern)].map(match => ({ name: match[1], kind: 'regex', index: match.index || 0 }));
+  return [...text.matchAll(pattern)].map(match => ({ name: match[1], kind: 'regex', exported: match[0].trim().startsWith('export'), index: match.index || 0 }));
 }
 
 function findImports(text) {
@@ -162,13 +176,23 @@ function codeChunk(filePath, parts, imports = []) {
   const heading = parts.map(part => part.name).join(', ');
   const text = parts.map(part => part.body).join('\n\n');
   const symbols = parts.map(part => part.name);
+  const symbolKinds = parts.map(part => part.kind || '').filter(Boolean);
+  const exportedSymbols = parts.filter(part => part.exported).map(part => part.name);
   return {
     text,
     heading,
     embeddingText: `${filePath}\n${heading}\n${text}`,
     symbols,
+    symbolKinds,
+    exportedSymbols,
+    lineStart: Math.min(...parts.map(part => part.lineStart || 1)),
+    lineEnd: Math.max(...parts.map(part => part.lineEnd || 1)),
     imports
   };
+}
+
+function lineNumberAt(text, index) {
+  return text.slice(0, index).split('\n').length;
 }
 
 function isCodeExt(ext) {

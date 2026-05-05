@@ -79,6 +79,10 @@ for (const file of changedFiles) {
       mtime: stat.mtime.toISOString(),
       hash,
       symbols: chunk.symbols || [],
+      symbolKinds: chunk.symbolKinds || [],
+      exportedSymbols: chunk.exportedSymbols || [],
+      lineStart: chunk.lineStart || 0,
+      lineEnd: chunk.lineEnd || 0,
       imports: chunk.imports || [],
       vector: vectors[i]
     });

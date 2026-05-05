@@ -70,12 +70,13 @@ When asked to search context:
 npm run brain:search -- "query text"
 npm run brain:search -- "query text" --summary-only
 npm run brain:search -- "query text" --modules-only
+npm run brain:symbol -- SymbolName SymbolName
 npm run brain:pack -- "query text" --max-tokens 3000
 npm run brain:graph -- --format json
 npm run brain:eval
 ```
 
-Retrieval ranks with dense vector similarity, keyword relevance, metadata, and current branch/diff boosts. Set `BRAIN_CONTEXT_FILES` to comma-separated files when the current task should favor a specific diff or changed-file set.
+Retrieval ranks with dense vector similarity, keyword relevance, exact symbol matches, metadata, and current branch/diff boosts. Set `BRAIN_CONTEXT_FILES` to comma-separated files when the current task should favor a specific diff or changed-file set.
 
 When asked to sync:
 

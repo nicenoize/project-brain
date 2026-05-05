@@ -34,6 +34,7 @@ export function mergePackageScripts(pkg) {
     'brain:health': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-health.mjs',
     'brain:session': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-session.mjs',
     'brain:pack': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-pack.mjs',
+    'brain:symbol': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-search.mjs --type code --symbol',
     'brain:graph': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-graph.mjs',
     'brain:eval': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-eval.mjs',
     'brain:install-hooks': 'bash skills/project-brain/bin/install-hooks.sh',
