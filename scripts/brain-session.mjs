@@ -64,7 +64,7 @@ async function cleanSessions() {
 
 async function upsertSessionRecord(file, changedFiles, expiresAt) {
   const embedder = openEmbedder();
-  const store = await openStore({ model: embedder.modelName });
+  const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
   const relative = path.relative(ROOT, file);
   const text = read(file);
   const vector = await embedder.embed(`${relative}\n${text}`);

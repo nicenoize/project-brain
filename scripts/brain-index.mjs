@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexableFiles, parseDoc } from './common.mjs';
 import { dispatchChunker } from './chunk.mjs';
@@ -25,7 +26,7 @@ if (oldManifest.model && oldManifest.model !== embedder.modelName) {
   forceRebuild = true;
 }
 
-const store = await openStore({ model: embedder.modelName });
+const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
 const files = await listIndexableFiles();
 const fileSet = new Set(files);
 const currentHashes = new Map();
@@ -53,8 +54,9 @@ for (const file of changedFiles) {
   const content = read(path.join(ROOT, file));
   if (!content.trim()) continue;
   const hash = currentHashes.get(file);
+  const stat = fs.statSync(path.join(ROOT, file));
   const doc = parseDoc(file, content);
-  const chunks = dispatchChunker(file, doc.body, doc.data);
+  const chunks = await dispatchChunker(file, doc.body, doc.data);
   const vectors = await embedder.embedBatch(chunks.map(chunk => chunk.embeddingText || `${file}\n${chunk.text}`));
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
@@ -69,6 +71,15 @@ for (const file of changedFiles) {
       embeddingText: chunk.embeddingText || `${file}\n${chunk.text}`,
       isSummary: Boolean(chunk.isSummary),
       isModuleSummary: false,
+      isProjectSummary: false,
+      module: inferModule(file, doc.data),
+      feature: inferFeature(file, doc.data),
+      decision: inferDecision(file, doc.data),
+      sourceKind: inferSourceKind(file),
+      mtime: stat.mtime.toISOString(),
+      hash,
+      symbols: chunk.symbols || [],
+      imports: chunk.imports || [],
       vector: vectors[i]
     });
   }
@@ -80,7 +91,7 @@ await rebuildModuleSummaries(store, embedder);
 const allRecords = await store.getAll();
 const idsByFile = new Map();
 for (const record of allRecords) {
-  if (record.isModuleSummary || record.id.startsWith('session:')) continue;
+  if (record.isModuleSummary || record.isProjectSummary || record.id.startsWith('session:')) continue;
   if (!idsByFile.has(record.file)) idsByFile.set(record.file, []);
   idsByFile.get(record.file).push(record.id);
 }
@@ -104,7 +115,7 @@ await store.close();
 
 async function rebuildModuleSummaries(store, embedder) {
   const all = await store.getAll();
-  const staleModuleIds = all.filter(record => record.isModuleSummary).map(record => record.id);
+  const staleModuleIds = all.filter(record => record.isModuleSummary || record.isProjectSummary || record.type === 'feature-summary').map(record => record.id);
   if (staleModuleIds.length) await store.delete(staleModuleIds);
 
   const groups = new Map();
@@ -131,10 +142,65 @@ async function rebuildModuleSummaries(store, embedder) {
       embeddingText: `${dir}\n${text}`,
       isSummary: true,
       isModuleSummary: true,
+      isProjectSummary: false,
+      module: dir,
       vector
     });
   }
   if (moduleRecords.length) await store.upsert(moduleRecords);
+  await rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords);
+}
+
+async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords) {
+  const all = await store.getAll();
+  const summaries = all.filter(record => record.isSummary && !record.isModuleSummary && !record.isProjectSummary && record.type !== 'session');
+  const featureGroups = new Map();
+  for (const record of summaries) {
+    if (!record.feature) continue;
+    if (!featureGroups.has(record.feature)) featureGroups.set(record.feature, []);
+    featureGroups.get(record.feature).push(record);
+  }
+
+  const aggregateRecords = [];
+  for (const [feature, records] of featureGroups) {
+    if (records.length < 1) continue;
+    const text = records.map(record => `## ${record.file}\n${record.text}`).join('\n\n');
+    aggregateRecords.push({
+      id: sha256(`feature:${feature}:${records.map(record => record.id).sort().join(':')}`),
+      file: `.project-brain/features/${feature}.md`,
+      chunk: -3,
+      title: `${feature} feature summary`,
+      type: 'feature-summary',
+      heading: feature,
+      text,
+      embeddingText: `${feature}\n${text}`,
+      isSummary: true,
+      isModuleSummary: false,
+      isProjectSummary: false,
+      feature,
+      vector: await embedder.embed(`${feature}\n${text}`)
+    });
+  }
+
+  const projectInputs = moduleRecords.length ? moduleRecords : summaries;
+  if (projectInputs.length >= 2) {
+    const text = projectInputs.map(record => `## ${record.heading || record.file}\n${record.text}`).join('\n\n');
+    aggregateRecords.push({
+      id: sha256(`project:${projectInputs.map(record => record.id).sort().join(':')}`),
+      file: '.project-brain/project-summary',
+      chunk: -4,
+      title: 'Project summary',
+      type: 'project-summary',
+      heading: 'project',
+      text,
+      embeddingText: `project\n${text}`,
+      isSummary: true,
+      isModuleSummary: false,
+      isProjectSummary: true,
+      vector: await embedder.embed(`project\n${text}`)
+    });
+  }
+  if (aggregateRecords.length) await store.upsert(aggregateRecords);
 }
 
 function splitEnv(name) {
@@ -148,4 +214,29 @@ function inferType(file) {
   if (file.includes('/sessions/')) return 'session';
   if (/\.[cm]?[jt]sx?$/.test(file)) return 'code';
   return 'doc';
+}
+
+function inferModule(file, data = {}) {
+  if (data.module) return data.module;
+  if (file.includes('/modules/')) return path.basename(file, path.extname(file));
+  const parts = file.split('/');
+  if (['app', 'pages', 'components', 'lib', 'src', 'server', 'actions'].includes(parts[0])) return parts.slice(0, 2).join('/');
+  return path.dirname(file) === '.' ? '' : path.dirname(file);
+}
+
+function inferFeature(file, data = {}) {
+  if (data.feature) return data.feature;
+  return file.includes('/features/') ? path.basename(file, path.extname(file)) : '';
+}
+
+function inferDecision(file, data = {}) {
+  if (data.decision) return data.decision;
+  return file.includes('/decisions/') ? path.basename(file, path.extname(file)) : '';
+}
+
+function inferSourceKind(file) {
+  if (file.startsWith('.project-brain/')) return 'brain';
+  if (/\.[cm]?[jt]sx?$/.test(file)) return 'code';
+  if (/\.mdx?$/.test(file)) return 'doc';
+  return 'other';
 }

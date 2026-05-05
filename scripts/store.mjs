@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { JSON_INDEX, LANCE_DIR, atomicWrite, ensureDir, read } from './common.mjs';
 
 export const TABLE_NAME = 'brain_records';
@@ -143,8 +144,103 @@ export class LanceStore extends BrainStore {
   }
 }
 
+export class QdrantStore extends BrainStore {
+  constructor(options = {}) {
+    super();
+    this.url = (options.url || process.env.BRAIN_QDRANT_URL || 'http://localhost:6333').replace(/\/$/, '');
+    this.collection = options.collection || process.env.BRAIN_QDRANT_COLLECTION || 'project_brain';
+    this.apiKey = options.apiKey || process.env.BRAIN_QDRANT_API_KEY || '';
+    this.model = options.model || null;
+    this.dims = Number(options.dims || process.env.BRAIN_VECTOR_DIMS || 384);
+    this.mirror = new JsonStore(options);
+  }
+
+  async upsert(records) {
+    const normalized = records.map(normalizeRecord);
+    if (!normalized.length) return;
+    await this.ensureCollection(normalized[0].vector.length || this.dims);
+    await this.mirror.upsert(normalized);
+    await this.request(`/collections/${this.collection}/points?wait=true`, {
+      method: 'PUT',
+      body: {
+        points: normalized.map(record => ({
+          id: pointId(record.id),
+          vector: record.vector,
+          payload: { ...record, vector: undefined }
+        }))
+      }
+    });
+  }
+
+  async delete(ids) {
+    if (!ids.length) return;
+    await this.mirror.delete(ids);
+    await this.ensureCollection(this.dims);
+    await this.request(`/collections/${this.collection}/points/delete?wait=true`, {
+      method: 'POST',
+      body: { points: ids.map(pointId) }
+    });
+  }
+
+  async search(queryVec, topK, filter = {}) {
+    await this.ensureCollection(queryVec.length || this.dims);
+    const response = await this.request(`/collections/${this.collection}/points/search`, {
+      method: 'POST',
+      body: { vector: queryVec, limit: topK * 10, with_payload: true, with_vector: true }
+    });
+    return (response.result || [])
+      .map(point => ({ ...normalizeRecord({ ...(point.payload || {}), vector: point.vector || [] }), score: point.score || 0 }))
+      .filter(record => matchesFilter(record, filter))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK);
+  }
+
+  async getAll() {
+    await this.ensureCollection(this.dims);
+    const records = [];
+    let offset = null;
+    do {
+      const response = await this.request(`/collections/${this.collection}/points/scroll`, {
+        method: 'POST',
+        body: { limit: 256, offset, with_payload: true, with_vector: true }
+      });
+      for (const point of response.result?.points || []) {
+        records.push(normalizeRecord({ ...(point.payload || {}), vector: point.vector || [] }));
+      }
+      offset = response.result?.next_page_offset || null;
+    } while (offset);
+    return records;
+  }
+
+  async ensureCollection(dims) {
+    const response = await fetch(`${this.url}/collections/${this.collection}`);
+    if (response.ok) return;
+    await this.request(`/collections/${this.collection}`, {
+      method: 'PUT',
+      body: { vectors: { size: dims, distance: 'Cosine' } }
+    });
+  }
+
+  async request(pathname, options = {}) {
+    const response = await fetch(`${this.url}${pathname}`, {
+      method: options.method || 'GET',
+      headers: {
+        'content-type': 'application/json',
+        ...(this.apiKey ? { 'api-key': this.apiKey } : {})
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined
+    });
+    if (!response.ok) throw new Error(`Qdrant request failed (${response.status}): ${await response.text()}`);
+    return response.json();
+  }
+}
+
 export async function openStore(options = {}) {
   const requested = options.backend || process.env.BRAIN_STORE || 'auto';
+  if (requested === 'qdrant') {
+    console.log('Project Brain store: qdrant');
+    return new QdrantStore(options);
+  }
   if (requested !== 'json') {
     try {
       const lancedb = await import('@lancedb/lancedb');
@@ -160,6 +256,11 @@ export async function openStore(options = {}) {
   return new JsonStore(options);
 }
 
+function pointId(id) {
+  const hex = /^[a-f0-9]{64}$/i.test(id) ? id : crypto.createHash('sha256').update(String(id)).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
 export function normalizeRecord(record) {
   return {
     id: String(record.id),
@@ -172,8 +273,17 @@ export function normalizeRecord(record) {
     embeddingText: record.embeddingText || record.text || '',
     isSummary: Boolean(record.isSummary),
     isModuleSummary: Boolean(record.isModuleSummary),
+    isProjectSummary: Boolean(record.isProjectSummary),
     branch: record.branch || '',
     expiresAt: record.expiresAt || '',
+    module: record.module || inferModule(record.file || ''),
+    feature: record.feature || inferFeature(record.file || ''),
+    decision: record.decision || inferDecision(record.file || ''),
+    sourceKind: record.sourceKind || '',
+    mtime: record.mtime || '',
+    hash: record.hash || '',
+    symbols: normalizeList(record.symbols),
+    imports: normalizeList(record.imports),
     vector: Array.from(record.vector || [])
   };
 }
@@ -182,7 +292,29 @@ export function matchesFilter(record, filter = {}) {
   if (filter.summaryOnly && !record.isSummary) return false;
   if (filter.modulesOnly && !record.isModuleSummary) return false;
   if (filter.type && record.type !== filter.type) return false;
+  if (filter.file && record.file !== filter.file) return false;
   return true;
+}
+
+function normalizeList(value) {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (!value) return [];
+  return String(value).split(/[,\n]/).map(item => item.trim()).filter(Boolean);
+}
+
+function inferModule(file) {
+  if (file.includes('/modules/')) return path.basename(file, path.extname(file));
+  const parts = file.split('/');
+  if (['app', 'pages', 'components', 'lib', 'src', 'server', 'actions'].includes(parts[0])) return parts.slice(0, 2).join('/');
+  return path.dirname(file) === '.' ? '' : path.dirname(file);
+}
+
+function inferFeature(file) {
+  return file.includes('/features/') ? path.basename(file, path.extname(file)) : '';
+}
+
+function inferDecision(file) {
+  return file.includes('/decisions/') ? path.basename(file, path.extname(file)) : '';
 }
 
 function toScore(row) {

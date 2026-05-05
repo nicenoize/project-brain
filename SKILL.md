@@ -41,7 +41,18 @@ Do not commit:
 - `.project-brain/index_manifest.json`
 - `.project-brain/search_index.json`
 
-The local vector backend is selected with `BRAIN_STORE=auto|json|lance`. `auto` prefers LanceDB when the optional dependency is installed and falls back to the JSON cache.
+The local vector backend is selected with `BRAIN_STORE=auto|json|lance|qdrant`. `auto` prefers LanceDB when the optional dependency is installed and falls back to the JSON cache. `qdrant` uses `BRAIN_QDRANT_URL`, `BRAIN_QDRANT_COLLECTION`, and optional `BRAIN_QDRANT_API_KEY`.
+
+Default retrieval requires no API keys: local MiniLM embeddings plus JSON/LanceDB local cache. OpenAI embeddings require `OPENAI_API_KEY`; hosted Qdrant usually requires `BRAIN_QDRANT_API_KEY`.
+
+## Token-saving communication
+
+Use the external Caveman skill for compressed agent communication when available.
+
+- Internal progress, handoffs, investigations, and reviews: prefer `$caveman ultra`.
+- User-facing summaries: keep concise and understandable; do not hide risk or ordering for token savings.
+- Temporarily drop compression for security warnings, destructive actions, or ambiguous multi-step instructions.
+- Caveman affects wording only. Durable facts still belong in `.project-brain/*.md`.
 
 ## Standard commands
 
@@ -60,7 +71,11 @@ npm run brain:search -- "query text"
 npm run brain:search -- "query text" --summary-only
 npm run brain:search -- "query text" --modules-only
 npm run brain:pack -- "query text" --max-tokens 3000
+npm run brain:graph -- --format json
+npm run brain:eval
 ```
+
+Retrieval ranks with dense vector similarity, keyword relevance, metadata, and current branch/diff boosts. Set `BRAIN_CONTEXT_FILES` to comma-separated files when the current task should favor a specific diff or changed-file set.
 
 When asked to sync:
 
@@ -219,6 +234,7 @@ Rules:
 - Cavemem may be used by each team member as local personal/session memory.
 - Cavemem output is never authoritative until promoted into `.project-brain/*.md`.
 - Do not store secrets, `.env*`, private customer data, dependency folders, build output, or generated Project Brain indexes in Cavemem.
+- Caveman may be used for low-token communication; it is not memory and does not replace Project Brain or Cavemem.
 
 ## Collaboration rules
 

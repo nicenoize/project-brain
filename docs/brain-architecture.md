@@ -7,7 +7,7 @@ flowchart TD
   Global["Global Project Brain repo<br/>/Users/seebo/Coding/project-brain"] --> Skill["Reusable skill<br/>SKILL.md"]
   Global --> Scripts["Reusable scripts<br/>brain:guard, brain:index, brain:update-skill"]
   Global --> Templates["Reusable templates<br/>PR template, GitHub workflow, Git hooks"]
-  Global --> Conventions["Global conventions<br/>GitFlow, code rules, Cavemem policy"]
+  Global --> Conventions["Global conventions<br/>GitFlow, code rules, Cavemem + Caveman policy"]
 
   App["Application repo<br/>club-ops or another app"] --> AppBrain["Project memory<br/>.project-brain/*.md"]
   App --> Link["skills/project-brain<br/>symlink/submodule/checkout"]
@@ -19,16 +19,19 @@ flowchart TD
   Templates --> CI["GitHub Actions<br/>fetch Project Brain + run checks"]
   Templates --> Hooks["Local Git hooks<br/>update skill after pull/checkout"]
 
+  Dev["Developer / agent"] --> App
   Cavemem["Cavemem<br/>local/session recall"] --> AppBrain
   Cavemem -. "durable facts get promoted" .-> AppBrain
+  Caveman["Caveman<br/>low-token communication"] -. "compresses agent chatter only" .-> Dev
 ```
 
 ## Source Of Truth
 
-- Global Project Brain repo owns reusable skill code, scripts, templates, GitFlow rules, code conventions, and Cavemem policy.
+- Global Project Brain repo owns reusable skill code, scripts, templates, GitFlow rules, code conventions, Cavemem policy, and Caveman token-budget guidance.
 - Application repos own project-specific memory under `.project-brain/`.
 - Generated indexes are local caches and are never the source of truth.
 - Cavemem is useful personal recall, but shared facts must be promoted into `.project-brain/*.md`.
+- Caveman is communication compression only. It does not store facts or replace Project Brain.
 
 ## Consumer Repo Layout
 

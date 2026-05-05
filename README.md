@@ -78,6 +78,30 @@ Do not commit:
 Use the project-brain skill. Audit this repository, ingest the master plan if present, update context_index, infer modules/features, and mark uncertain facts as Needs Review.
 ```
 
+## Token-Saving Mode
+
+Project Brain is designed to pair with the external Caveman skill for low-token agent communication.
+
+Install Caveman once per developer machine:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash
+```
+
+Manual Codex install:
+
+```bash
+npx skills add JuliusBrussee/caveman -a codex
+```
+
+Recommended team policy:
+
+- Internal agent progress, handoffs, reviews, and investigation notes: use `$caveman ultra`.
+- User-facing summaries: stay concise and readable; use normal wording when compression would hide risk or ordering.
+- Stop compression for destructive action confirmations, security warnings, or ambiguous multi-step instructions.
+
+Project Brain still keeps durable facts in `.project-brain/*.md`; Caveman only changes how agents communicate.
+
 ## Common commands
 
 ```bash
@@ -88,6 +112,8 @@ npm run brain:search -- "auth checkout module"
 npm run brain:search -- "auth checkout module" --summary-only
 npm run brain:pack -- "auth checkout module" --max-tokens 3000
 npm run brain:session -- start
+npm run brain:graph -- --format json
+npm run brain:eval
 npm run brain:sync
 npm run brain:guard
 npm run brain:health
@@ -96,10 +122,42 @@ npm run brain:health
 Useful retrieval env vars:
 
 ```bash
-BRAIN_STORE=auto|json|lance
+BRAIN_STORE=auto|json|lance|qdrant
+BRAIN_QDRANT_URL=http://localhost:6333
+BRAIN_QDRANT_COLLECTION=project_brain
+BRAIN_QDRANT_API_KEY=
 BRAIN_EMBED_PROVIDER=local|openai
+BRAIN_OPENAI_EMBED_MODEL=text-embedding-3-small
+OPENAI_API_KEY=
 BRAIN_HYBRID_ALPHA=0.7
+BRAIN_CONTEXT_FILES=app/page.tsx,lib/auth.ts
+BRAIN_CHANGED_FILE_BOOST=0.12
 BRAIN_SESSION_TTL_HOURS=72
+```
+
+## API Keys
+
+Default setup needs no API keys:
+
+| Capability | Default / free path | Paid / hosted path | Env vars |
+|---|---|---|---|
+| Embeddings | Local `Xenova/all-MiniLM-L6-v2` via `BRAIN_EMBED_PROVIDER=local` | OpenAI embeddings | `OPENAI_API_KEY`, `BRAIN_OPENAI_EMBED_MODEL` |
+| Vector store | JSON cache, or local LanceDB files | Hosted/local Qdrant | `BRAIN_STORE`, `BRAIN_QDRANT_URL`, `BRAIN_QDRANT_COLLECTION`, `BRAIN_QDRANT_API_KEY` |
+| Token saving | Caveman skill, local install | None required | none |
+| Session memory | `.project-brain/sessions/` local Markdown + local index | None required | `BRAIN_SESSION_TTL_HOURS` |
+
+Free defaults:
+
+```bash
+BRAIN_EMBED_PROVIDER=local
+BRAIN_STORE=auto
+```
+
+Free Qdrant alternative:
+
+```bash
+docker run -p 6333:6333 qdrant/qdrant
+BRAIN_STORE=qdrant BRAIN_QDRANT_URL=http://localhost:6333 npm run brain:index
 ```
 
 ## How it works
@@ -108,7 +166,11 @@ BRAIN_SESSION_TTL_HOURS=72
 - `.project-brain/context_index.md` is the compressed low-token map agents load first.
 - `.project-brain/master_plan.md` stores the full plan.
 - The semantic index is rebuilt locally from committed files and selected source files.
-- Retrieval uses LanceDB when `@lancedb/lancedb` is available, with the atomic JSON cache as the default-compatible fallback.
+- Retrieval uses LanceDB when `@lancedb/lancedb` is available, Qdrant when `BRAIN_STORE=qdrant`, with the atomic JSON cache as the default-compatible fallback.
+- TypeScript/JavaScript files use AST-aware chunking when the optional `typescript` package is installed, with regex fallback.
+- Search combines dense vector similarity, keyword relevance, metadata filters, and current branch/diff boosts.
+- `brain:graph` exports file/module/feature/decision/symbol/import links for inspection.
+- `brain:eval` runs retrieval relevance checks against `.project-brain/eval.json` or built-in smoke cases.
 - The pre-commit hook runs guard checks and syncs the index.
 - The post-merge and post-checkout hooks run `brain:update-skill` to fast-forward the canonical skill checkout.
 
@@ -136,11 +198,13 @@ flowchart TD
   Need -- "no" --> Work["Implement / review / plan"]
 
   Query --> Embed["Embed query<br/>local MiniLM or OpenAI"]
-  Embed --> Store["Vector store adapter<br/>BRAIN_STORE=auto|json|lance"]
+  Embed --> Store["Vector store adapter<br/>BRAIN_STORE=auto|json|lance|qdrant"]
   Store --> Json["JSON cache<br/>.project-brain/search_index.json"]
   Store --> Lance["LanceDB table<br/>.project-brain/vector-db/"]
+  Store --> Qdrant["Qdrant collection<br/>BRAIN_QDRANT_URL"]
   Json --> Rank["Hybrid ranking<br/>dense + keyword"]
   Lance --> Rank
+  Qdrant --> Rank
   Rank --> Pack["Relevant chunks<br/>summaries, modules, code, docs"]
   Pack --> Work
 
