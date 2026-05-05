@@ -68,7 +68,7 @@ export async function listIndexableFiles() {
     '.project-brain/**/*.md',
     'README.md',
     'docs/**/*.md',
-    'scripts/**/*.{mjs,js}',
+    'scripts/**/*.{mjs,js,ts,tsx}',
     'app/**/*.{ts,tsx,js,jsx,md,mdx}',
     'pages/**/*.{ts,tsx,js,jsx,md,mdx}',
     'components/**/*.{ts,tsx,js,jsx,md,mdx}',

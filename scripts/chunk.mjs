@@ -21,18 +21,30 @@ export function chunkMarkdown(text, opts = {}) {
 
 export async function chunkCode(text, filePath, opts = {}) {
   const maxChars = opts.maxChars || DEFAULT_MAX_CHARS;
+  const tsSemantics = opts.tsSemantics || null;
   const symbols = await findSymbols(text, filePath);
   const imports = findImports(text);
   const importedNames = findImportedNames(text);
   if (!symbols.length) {
-    return chunkText(text, maxChars, opts.overlap || 250).map(part => ({
-      text: part,
-      heading: path.basename(filePath),
-      embeddingText: `${filePath}\n${part}`,
-      symbols: [],
-      imports,
-      references: findReferences(part, importedNames)
-    }));
+    return chunkText(text, maxChars, opts.overlap || 250).map((part) => {
+      const chunk = {
+        text: part,
+        heading: path.basename(filePath),
+        embeddingText: `${filePath}\n${part}`,
+        symbols: [],
+        symbolKinds: [],
+        exportedSymbols: [],
+        lineStart: 1,
+        lineEnd: lineNumberAt(part, part.length),
+        imports,
+        references: findReferences(part, importedNames)
+      };
+      if (!tsSemantics?.resolvedImports?.length) return chunk;
+      return {
+        ...chunk,
+        imports: uniqueStrings([...(chunk.imports || []), ...tsSemantics.resolvedImports]).slice(0, 48)
+      };
+    });
   }
 
   const chunks = [];
@@ -46,7 +58,7 @@ export async function chunkCode(text, filePath, opts = {}) {
     const lineStart = lineNumberAt(text, start);
     const lineEnd = lineStart + body.split('\n').length - 1;
     if (currentLen && currentLen + body.length > maxChars) {
-      chunks.push(codeChunk(filePath, current, imports, importedNames));
+      chunks.push(codeChunk(filePath, current, imports, importedNames, text, tsSemantics));
       current = [];
       currentLen = 0;
     }
@@ -60,24 +72,30 @@ export async function chunkCode(text, filePath, opts = {}) {
     });
     currentLen += body.length;
   }
-  if (current.length) chunks.push(codeChunk(filePath, current, imports, importedNames));
+  if (current.length) chunks.push(codeChunk(filePath, current, imports, importedNames, text, tsSemantics));
   return chunks;
 }
 
-export function chunkSummary(text, filePath, docData = {}) {
+export function chunkSummary(text, filePath, docData = {}, tsSemantics = null) {
   const ext = path.extname(filePath);
   const title = docData.title || path.basename(filePath);
   if (isCodeExt(ext)) {
     const symbols = findSymbolsRegex(text).map(symbol => symbol.name).slice(0, 40);
     const imports = findImports(text).slice(0, 40);
     const comment = (text.match(/\/\*\*([\s\S]*?)\*\//) || [])[1]?.replace(/^\s*\*\s?/gm, '').trim() || '';
+    const resolved = tsSemantics?.resolvedImports?.length
+      ? `Resolved modules: ${tsSemantics.resolvedImports.slice(0, 32).join(', ')}`
+      : '';
+    const cross = tsSemantics?.crossFileRefs?.size
+      ? `Cross-file refs: ${[...tsSemantics.crossFileRefs].slice(0, 40).join(', ')}`
+      : '';
     return {
-      text: [`# ${title}`, `File: ${filePath}`, comment, symbols.length ? `Exports/symbols: ${symbols.join(', ')}` : 'No exported symbols detected.', imports.length ? `Imports: ${imports.join(', ')}` : ''].filter(Boolean).join('\n'),
+      text: [`# ${title}`, `File: ${filePath}`, comment, symbols.length ? `Exports/symbols: ${symbols.join(', ')}` : 'No exported symbols detected.', imports.length ? `Imports: ${imports.join(', ')}` : '', resolved, cross].filter(Boolean).join('\n'),
       heading: title,
       isSummary: true,
       symbols,
-      imports,
-      references: []
+      imports: uniqueStrings([...imports, ...(tsSemantics?.resolvedImports || [])]).slice(0, 48),
+      references: tsSemantics?.crossFileRefs?.size ? [...tsSemantics.crossFileRefs].slice(0, 48) : []
     };
   }
   const headings = [...text.matchAll(/^#{1,3}\s+(.+)$/gm)].map(match => match[1].trim()).slice(0, 40);
@@ -90,9 +108,10 @@ export function chunkSummary(text, filePath, docData = {}) {
 }
 
 export async function dispatchChunker(filePath, text, docData = {}, opts = {}) {
-  const summary = chunkSummary(text, filePath, docData);
+  const tsSemantics = opts.tsContext?.get?.(filePath) || null;
+  const summary = chunkSummary(text, filePath, docData, tsSemantics);
   const chunks = isCodeExt(path.extname(filePath))
-    ? await chunkCode(text, filePath, opts)
+    ? await chunkCode(text, filePath, { ...opts, tsSemantics })
     : chunkMarkdown(text, opts);
   return [
     { ...summary, chunk: -1, embeddingText: `${filePath}\n${summary.text}` },
@@ -125,7 +144,8 @@ async function findSymbols(text, filePath) {
 async function findSymbolsAst(text, filePath) {
   let ts;
   try {
-    ts = await import('typescript');
+    const mod = await import('typescript');
+    ts = mod.default ?? mod;
   } catch {
     return [];
   }
@@ -207,24 +227,59 @@ function findReferences(text, candidateSymbols = []) {
   return [...refs];
 }
 
-function codeChunk(filePath, parts, imports = [], importedNames = []) {
+function codeChunk(filePath, parts, imports = [], importedNames = [], fullFileText = '', tsSemantics = null) {
   const heading = parts.map(part => part.name).join(', ');
   const text = parts.map(part => part.body).join('\n\n');
   const symbols = parts.map(part => part.name);
   const symbolKinds = parts.map(part => part.kind || '').filter(Boolean);
   const exportedSymbols = parts.filter(part => part.exported).map(part => part.name);
-  return {
+  const lineStart = Math.min(...parts.map(part => part.lineStart || 1));
+  const lineEnd = Math.max(...parts.map(part => part.lineEnd || 1));
+  const base = {
     text,
     heading,
     embeddingText: `${filePath}\n${heading}\n${text}`,
     symbols,
     symbolKinds,
     exportedSymbols,
-    lineStart: Math.min(...parts.map(part => part.lineStart || 1)),
-    lineEnd: Math.max(...parts.map(part => part.lineEnd || 1)),
+    lineStart,
+    lineEnd,
     imports,
     references: findReferences(text, [...importedNames, ...symbols])
   };
+  return mergeSemanticsChunk(base, fullFileText, tsSemantics);
+}
+
+function mergeSemanticsChunk(chunk, fullFileText, tsSemantics) {
+  if (!tsSemantics || !fullFileText) return chunk;
+  const { start, end } = lineRangeToOffsets(fullFileText, chunk.lineStart || 1, chunk.lineEnd || 1);
+  const fromTs = [];
+  for (const span of tsSemantics.spans || []) {
+    if (span.end < start || span.start > end) continue;
+    fromTs.push(span.name);
+  }
+  const mergedImports = uniqueStrings([...(chunk.imports || []), ...(tsSemantics.resolvedImports || [])]).slice(0, 48);
+  const mergedRefs = uniqueStrings([...(chunk.references || []), ...fromTs]).slice(0, 64);
+  return { ...chunk, imports: mergedImports, references: mergedRefs };
+}
+
+function uniqueStrings(list) {
+  return [...new Set(list.map(String).filter(Boolean))];
+}
+
+function lineRangeToOffsets(text, lineStart, lineEnd) {
+  const lines = text.split('\n');
+  if (!lines.length) return { start: 0, end: 0 };
+  const startIdx = Math.min(Math.max(lineStart, 1), lines.length);
+  const endIdx = Math.min(Math.max(lineEnd, startIdx), lines.length);
+  let start = 0;
+  for (let ln = 1; ln < startIdx; ln++) start += lines[ln - 1].length + 1;
+  let end = start;
+  for (let ln = startIdx; ln <= endIdx; ln++) {
+    end += lines[ln - 1].length;
+    if (ln < endIdx) end += 1;
+  }
+  return { start: Math.min(start, text.length), end: Math.min(Math.max(end, start), text.length) };
 }
 
 function escapeRegExp(value) {

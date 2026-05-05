@@ -5,6 +5,9 @@ import { JSON_INDEX, LANCE_DIR, atomicWrite, ensureDir, read } from './common.mj
 
 export const TABLE_NAME = 'brain_records';
 
+/** Lance/Arrow cannot merge or infer list<string> columns from empty arrays; pad on write, strip on read. */
+const LANCE_LIST_PLACEHOLDER = '\uE000';
+
 export class BrainStore {
   async upsert() { throw new Error('BrainStore.upsert is not implemented'); }
   async delete() { throw new Error('BrainStore.delete is not implemented'); }
@@ -90,7 +93,8 @@ export class LanceStore extends BrainStore {
     } catch {
       const seed = this.mirror.readRecords();
       if (!seed.length) return null;
-      this.table = await this.db.createTable(TABLE_NAME, seed, { mode: 'overwrite' });
+      const padded = seed.map((record) => padLanceListColumns(normalizeRecord(record)));
+      this.table = await this.db.createTable(TABLE_NAME, padded, { mode: 'overwrite' });
     }
     return this.table;
   }
@@ -100,18 +104,19 @@ export class LanceStore extends BrainStore {
     if (!normalized.length) return;
     await this.mirror.upsert(normalized);
     await this.open();
+    const forLance = normalized.map(padLanceListColumns);
     let table;
     try {
       table = await this.db.openTable(TABLE_NAME);
     } catch {
-      this.table = await this.db.createTable(TABLE_NAME, normalized, { mode: 'overwrite' });
+      this.table = await this.db.createTable(TABLE_NAME, forLance, { mode: 'overwrite' });
       return;
     }
     this.table = table;
     if (typeof table.mergeInsert === 'function') {
-      await table.mergeInsert('id').whenMatchedUpdateAll().whenNotMatchedInsertAll().execute(normalized);
+      await table.mergeInsert('id').whenMatchedUpdateAll().whenNotMatchedInsertAll().execute(forLance);
     } else {
-      await table.add(normalized);
+      await table.add(forLance);
     }
   }
 
@@ -282,13 +287,13 @@ export function normalizeRecord(record) {
     sourceKind: record.sourceKind || '',
     mtime: record.mtime || '',
     hash: record.hash || '',
-    symbols: normalizeList(record.symbols),
-    symbolKinds: normalizeList(record.symbolKinds),
-    exportedSymbols: normalizeList(record.exportedSymbols),
+    symbols: stripLanceSentinel(normalizeList(record.symbols)),
+    symbolKinds: stripLanceSentinel(normalizeList(record.symbolKinds)),
+    exportedSymbols: stripLanceSentinel(normalizeList(record.exportedSymbols)),
     lineStart: Number(record.lineStart || 0),
     lineEnd: Number(record.lineEnd || 0),
-    imports: normalizeList(record.imports),
-    references: normalizeList(record.references),
+    imports: stripLanceSentinel(normalizeList(record.imports)),
+    references: stripLanceSentinel(normalizeList(record.references)),
     vector: Array.from(record.vector || [])
   };
 }
@@ -305,6 +310,22 @@ function normalizeList(value) {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
   if (!value) return [];
   return String(value).split(/[,\n]/).map(item => item.trim()).filter(Boolean);
+}
+
+function stripLanceSentinel(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((item) => item !== LANCE_LIST_PLACEHOLDER);
+}
+
+function padLanceListColumns(record) {
+  const out = { ...record };
+  for (const key of ['symbols', 'symbolKinds', 'exportedSymbols', 'imports', 'references']) {
+    const arr = out[key];
+    if (!Array.isArray(arr) || arr.length === 0) {
+      out[key] = [LANCE_LIST_PLACEHOLDER];
+    }
+  }
+  return out;
 }
 
 function inferModule(file) {
