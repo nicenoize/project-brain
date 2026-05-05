@@ -9,6 +9,7 @@ export async function retrieve(query, store, embedder, opts = {}) {
   const all = (await store.getAll()).filter(record => recordMatches(record, filter));
   const denseScores = new Map(dense.map(record => [record.id, record.score]));
   const keyword = tfidfScore(query, all);
+  const symbol = symbolScore(query, all, opts);
   const maxKeyword = Math.max(1, ...keyword.values());
   const context = retrievalContext(opts);
   const alpha = Number(opts.alpha || process.env.BRAIN_HYBRID_ALPHA || 0.7);
@@ -17,13 +18,15 @@ export async function retrieve(query, store, embedder, opts = {}) {
     .map(record => {
       const denseScore = denseScores.get(record.id) || 0;
       const keywordScore = (keyword.get(record.id) || 0) / maxKeyword;
+      const symbolMatchScore = symbol.get(record.id) || 0;
       const metadataScore = metadataBoost(record, context);
       return {
         ...record,
         denseScore,
         keywordScore,
+        symbolScore: symbolMatchScore,
         metadataScore,
-        score: hybridScore(denseScore, keywordScore, metadataScore, alpha)
+        score: hybridScore(denseScore, keywordScore, symbolMatchScore, metadataScore, alpha)
       };
     })
     .sort((a, b) => b.score - a.score)
@@ -50,8 +53,26 @@ export function tfidfScore(query, records) {
   return scores;
 }
 
-export function hybridScore(dense, keyword, metadata, alpha) {
-  return alpha * dense + (1 - alpha) * keyword + metadata;
+export function symbolScore(query, records, opts = {}) {
+  const expected = new Set(splitList(opts.symbol || opts.expectedSymbol || '').map(normalizeSymbol));
+  const queryTokens = new Set(tokenize(query).map(normalizeSymbol));
+  const scores = new Map();
+  for (const record of records) {
+    const symbols = [...(record.symbols || []), ...(record.exportedSymbols || [])].map(normalizeSymbol);
+    let score = 0;
+    for (const symbol of symbols) {
+      if (expected.has(symbol)) score = Math.max(score, 1);
+      else if (queryTokens.has(symbol)) score = Math.max(score, 0.85);
+      else if ([...queryTokens].some(token => token && symbol.includes(token))) score = Math.max(score, 0.45);
+    }
+    if (score) scores.set(record.id, score);
+  }
+  return scores;
+}
+
+export function hybridScore(dense, keyword, symbol, metadata, alpha) {
+  const symbolWeight = Number(process.env.BRAIN_SYMBOL_WEIGHT || 0.6);
+  return alpha * dense + (1 - alpha) * keyword + symbolWeight * symbol + metadata;
 }
 
 export function tokenize(text) {
@@ -62,7 +83,8 @@ export function retrievalContext(opts = {}) {
   const changed = new Set(splitList(process.env.BRAIN_CONTEXT_FILES || opts.contextFiles || '').concat(gitChangedFiles()));
   return {
     branch: opts.branch || process.env.BRAIN_BRANCH || gitBranch(),
-    changed
+    changed,
+    symbolMode: Boolean(opts.symbol || opts.expectedSymbol)
   };
 }
 
@@ -71,6 +93,10 @@ function metadataBoost(record, context) {
   if (context.changed.has(record.file)) boost += Number(process.env.BRAIN_CHANGED_FILE_BOOST || 0.12);
   if (record.branch && context.branch && record.branch === context.branch) boost += Number(process.env.BRAIN_BRANCH_BOOST || 0.08);
   if (record.isModuleSummary) boost += Number(process.env.BRAIN_MODULE_SUMMARY_BOOST || 0.03);
+  if (record.lineStart && record.lineEnd) {
+    const defaultBoost = context.symbolMode ? 0.2 : 0.04;
+    boost += Number(process.env.BRAIN_CODE_BODY_BOOST || defaultBoost);
+  }
   return boost;
 }
 
@@ -92,9 +118,15 @@ function recordText(record) {
     record.feature,
     record.decision,
     ...(record.symbols || []),
+    ...(record.exportedSymbols || []),
+    ...(record.symbolKinds || []),
     ...(record.imports || []),
     record.text
   ].filter(Boolean).join(' ');
+}
+
+function normalizeSymbol(value) {
+  return String(value).toLowerCase().replace(/[^a-z0-9_$]/g, '');
 }
 
 function splitList(value) {

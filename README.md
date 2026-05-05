@@ -110,6 +110,7 @@ npm run brain:update-skill
 npm run brain:index
 npm run brain:search -- "auth checkout module"
 npm run brain:search -- "auth checkout module" --summary-only
+npm run brain:symbol -- QdrantStore QdrantStore
 npm run brain:pack -- "auth checkout module" --max-tokens 3000
 npm run brain:session -- start
 npm run brain:graph -- --format json
@@ -168,7 +169,8 @@ BRAIN_STORE=qdrant BRAIN_QDRANT_URL=http://localhost:6333 npm run brain:index
 - The semantic index is rebuilt locally from committed files and selected source files.
 - Retrieval uses LanceDB when `@lancedb/lancedb` is available, Qdrant when `BRAIN_STORE=qdrant`, with the atomic JSON cache as the default-compatible fallback.
 - TypeScript/JavaScript files use AST-aware chunking when the optional `typescript` package is installed, with regex fallback.
-- Search combines dense vector similarity, keyword relevance, metadata filters, and current branch/diff boosts.
+- Search combines dense vector similarity, keyword relevance, exact symbol matching, metadata filters, and current branch/diff boosts.
+- Code records include symbols, exported symbols, symbol kinds, and line ranges for measurable retrieval quality.
 - `brain:graph` exports file/module/feature/decision/symbol/import links for inspection.
 - `brain:eval` runs retrieval relevance checks against `.project-brain/eval.json` or built-in smoke cases.
 - The pre-commit hook runs guard checks and syncs the index.

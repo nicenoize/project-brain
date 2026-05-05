@@ -30,6 +30,10 @@ export function buildGraph(records) {
       addNode(nodes, `symbol:${record.file}:${symbol}`, 'symbol', symbol);
       addEdge(edges, `file:${record.file}`, `symbol:${record.file}:${symbol}`, 'defines');
     }
+    for (const symbol of record.exportedSymbols || []) {
+      addNode(nodes, `symbol:${record.file}:${symbol}`, 'symbol', symbol);
+      addEdge(edges, `symbol:${record.file}:${symbol}`, `file:${record.file}`, 'exported_by');
+    }
     for (const specifier of record.imports || []) {
       addNode(nodes, `import:${specifier}`, 'import', specifier);
       addEdge(edges, `file:${record.file}`, `import:${specifier}`, 'imports');

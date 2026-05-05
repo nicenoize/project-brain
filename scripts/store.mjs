@@ -283,6 +283,10 @@ export function normalizeRecord(record) {
     mtime: record.mtime || '',
     hash: record.hash || '',
     symbols: normalizeList(record.symbols),
+    symbolKinds: normalizeList(record.symbolKinds),
+    exportedSymbols: normalizeList(record.exportedSymbols),
+    lineStart: Number(record.lineStart || 0),
+    lineEnd: Number(record.lineEnd || 0),
     imports: normalizeList(record.imports),
     vector: Array.from(record.vector || [])
   };

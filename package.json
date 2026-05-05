@@ -13,6 +13,7 @@
     "brain:health": "node scripts/brain-health.mjs",
     "brain:session": "node scripts/brain-session.mjs",
     "brain:pack": "node scripts/brain-pack.mjs",
+    "brain:symbol": "node scripts/brain-search.mjs --type code --symbol",
     "brain:graph": "node scripts/brain-graph.mjs",
     "brain:eval": "node scripts/brain-eval.mjs",
     "brain:install-hooks": "bash bin/install-hooks.sh",
