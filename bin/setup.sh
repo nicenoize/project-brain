@@ -6,7 +6,7 @@ cd "$ROOT"
 
 if [ ! -d "skills/project-brain" ]; then
   echo "ERROR: expected skill at skills/project-brain"
-  echo "Copy the project-brain folder into skills/project-brain first."
+  echo "Copy, symlink, mount, or checkout the project-brain package at skills/project-brain first."
   exit 1
 fi
 
@@ -19,5 +19,5 @@ npm run brain:health
 
 echo ""
 echo "Project Brain setup complete."
-echo "Next Claude command:"
+echo "Next agent command:"
 echo "Use the project-brain skill. Audit this repository, ingest the master plan if present, update context_index, infer modules/features, and mark uncertain facts as Needs Review."
