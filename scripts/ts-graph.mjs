@@ -5,34 +5,43 @@ const MAX_IMPORT_STRINGS = 120;
 const MAX_RESOLVED_IMPORTS = 80;
 
 /**
- * Build a TypeScript Program over the repo and collect per-file:
- * - resolved internal import targets (posix paths relative to root)
- * - raw import specifiers
- * - identifier spans that resolve to symbols declared in another project file (cross-file refs)
- *
+ * TypeScript program + checker for the repo (tsconfig or loose).
  * Opt out: BRAIN_TS_GRAPH=0. Requires optional `typescript` dependency.
  */
 
-export async function loadTsSemanticContext(root, indexableFiles) {
+export async function loadTypeScriptModule() {
   if (process.env.BRAIN_TS_GRAPH === '0') return null;
-  let ts;
   try {
     const mod = await import('typescript');
-    ts = mod.default ?? mod;
+    return mod.default ?? mod;
   } catch {
+    console.warn(
+      'Project Brain: optional package `typescript` is not installed; compiler-backed graph and `brain:impact` TS references are disabled. Add it with: npm i -D typescript'
+    );
     return null;
   }
+}
 
+/**
+ * @returns {Promise<{ ts: any, program: import('typescript').Program, checker: import('typescript').TypeChecker, rootNorm: string, rootAbsPaths: string[], compilerOptions: import('typescript').CompilerOptions, indexable: Set<string> } | null>}
+ */
+export async function createBrainProgram(root, indexableFiles) {
+  const ts = await loadTypeScriptModule();
+  if (!ts) return null;
   const indexable = indexableFiles instanceof Set ? indexableFiles : new Set(indexableFiles);
   const rootNorm = path.resolve(root);
-
   const { compilerOptions, rootAbsPaths } = buildProgramInputs(rootNorm, indexable, ts);
   if (!rootAbsPaths?.length) return null;
-
   const host = ts.createCompilerHost(compilerOptions, true);
   const program = ts.createProgram(rootAbsPaths, compilerOptions, host);
   const checker = program.getTypeChecker();
+  return { ts, program, checker, rootNorm, rootAbsPaths, compilerOptions, indexable };
+}
 
+export async function loadTsSemanticContext(root, indexableFiles) {
+  const core = await createBrainProgram(root, indexableFiles);
+  if (!core) return null;
+  const { ts, program, checker, rootNorm, indexable } = core;
   const byRel = new Map();
   for (const sf of program.getSourceFiles()) {
     if (sf.fileName.includes(`${path.sep}node_modules${path.sep}`)) continue;
@@ -44,13 +53,129 @@ export async function loadTsSemanticContext(root, indexableFiles) {
       console.warn(`Project Brain: TS graph skipped for ${rel}: ${error.message || error}`);
     }
   }
-
   return {
-    /** @param {string} relPath */
     get(relPath) {
       return byRel.get(relPath) || null;
     }
   };
+}
+
+/**
+ * Workspace-accurate find-all-references for a symbol name (LanguageService).
+ * @returns {Promise<{ definitions: Array<{ file: string, line: number, column: number }>, usages: Array<{ file: string, line: number, column: number }> } | null>}
+ */
+export async function findTsWorkspaceReferences(root, indexableFiles, symbolName) {
+  const core = await createBrainProgram(root, indexableFiles);
+  if (!core) return null;
+  const { ts, program, checker, rootNorm, rootAbsPaths, compilerOptions } = core;
+  const service = createBrainLanguageService(ts, rootNorm, compilerOptions, rootAbsPaths);
+  const seeds = collectDefinitionSeeds(ts, program, checker, symbolName);
+  if (!seeds.length) return { definitions: [], usages: [] };
+
+  const definitions = new Map();
+  const usages = new Map();
+
+  const addUsage = (fileName, pos) => {
+    if (!isProjectSource(rootNorm, fileName)) return;
+    const rel = posixPath(path.relative(rootNorm, fileName));
+    const sf = program.getSourceFile(fileName);
+    if (!sf) return;
+    const { line, character } = ts.getLineAndCharacterOfPosition(sf, pos);
+    const key = `${rel}:${line + 1}:${character + 1}`;
+    usages.set(key, { file: rel, line: line + 1, column: character + 1 });
+  };
+
+  for (const { fileName, pos } of seeds) {
+    const sf = program.getSourceFile(fileName);
+    if (!sf) continue;
+    const { line, character } = ts.getLineAndCharacterOfPosition(sf, pos);
+    const rel = posixPath(path.relative(rootNorm, fileName));
+    definitions.set(`${rel}:${line + 1}:${character + 1}`, {
+      file: rel,
+      line: line + 1,
+      column: character + 1
+    });
+
+    const refs = service.findReferences(fileName, pos);
+    if (!refs) continue;
+    for (const group of refs) {
+      for (const ref of group.references || []) {
+        if (!ref.isDefinition) addUsage(ref.fileName, ref.textSpan.start);
+      }
+    }
+  }
+
+  const defList = [...definitions.values()].sort(compareLocation);
+  const defKeys = new Set(defList.map((d) => `${d.file}:${d.line}:${d.column}`));
+  const usageList = [...usages.values()]
+    .filter((u) => !defKeys.has(`${u.file}:${u.line}:${u.column}`))
+    .sort(compareLocation);
+  return { definitions: defList, usages: usageList };
+}
+
+function compareLocation(a, b) {
+  if (a.file !== b.file) return a.file.localeCompare(b.file);
+  if (a.line !== b.line) return a.line - b.line;
+  return a.column - b.column;
+}
+
+function createBrainLanguageService(ts, rootNorm, compilerOptions, rootAbsPaths) {
+  const servicesHost = {
+    getScriptFileNames: () => [...rootAbsPaths],
+    getScriptVersion: () => '0',
+    getScriptSnapshot: (fileName) => {
+      if (!ts.sys.fileExists(fileName)) return undefined;
+      return ts.ScriptSnapshot.fromString(ts.sys.readFile(fileName));
+    },
+    getCurrentDirectory: () => rootNorm,
+    getCompilationSettings: () => compilerOptions,
+    getDefaultLibFileName: (opts) =>
+      (typeof ts.getDefaultLibFilePath === 'function' ? ts.getDefaultLibFilePath(opts) : ts.getDefaultLibFileName(opts)),
+    fileExists: ts.sys.fileExists,
+    readFile: ts.sys.readFile,
+    readDirectory: ts.sys.readDirectory,
+    directoryExists: ts.sys.directoryExists,
+    useCaseSensitiveFileNames: () => ts.sys.useCaseSensitiveFileNames,
+    getProjectVersion: () => '0'
+  };
+  const registry = ts.createDocumentRegistry(ts.sys.useCaseSensitiveFileNames, rootNorm);
+  return ts.createLanguageService(servicesHost, registry);
+}
+
+function collectDefinitionSeeds(ts, program, checker, symbolName) {
+  const seeds = [];
+  const seen = new Set();
+  for (const sourceFile of program.getSourceFiles()) {
+    if (sourceFile.fileName.includes(`${path.sep}node_modules${path.sep}`)) continue;
+    function visit(node) {
+      if (ts.isIdentifier(node) && node.text === symbolName) {
+        const skipImportName =
+          ts.isImportSpecifier(node.parent) || (ts.isImportClause(node.parent) && node.parent.name === node);
+        if (!skipImportName) {
+          const sym = checker.getSymbolAtLocation(node) || checker.getShorthandAssignmentValueSymbol(node);
+          if (sym) {
+            const decl = sym.valueDeclaration || sym.declarations?.[0];
+            if (decl && decl.name === node && !ts.isImportSpecifier(decl)) {
+              const key = `${sourceFile.fileName}:${node.getStart(sourceFile)}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                seeds.push({ fileName: sourceFile.fileName, pos: node.getStart(sourceFile) });
+              }
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(sourceFile);
+  }
+  return seeds;
+}
+
+function isProjectSource(rootNorm, fileName) {
+  const norm = path.normalize(fileName);
+  const root = path.normalize(rootNorm + path.sep);
+  return norm.startsWith(root) && !norm.includes(`${path.sep}node_modules${path.sep}`);
 }
 
 function buildProgramInputs(rootNorm, indexable, ts) {

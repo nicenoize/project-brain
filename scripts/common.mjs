@@ -75,9 +75,29 @@ export async function listIndexableFiles() {
     'lib/**/*.{ts,tsx,js,jsx,md,mdx}',
     'src/**/*.{ts,tsx,js,jsx,md,mdx}',
     'server/**/*.{ts,tsx,js,jsx,md,mdx}',
-    'actions/**/*.{ts,tsx,js,jsx,md,mdx}'
+    'actions/**/*.{ts,tsx,js,jsx,md,mdx}',
+    'packages/**/*.{ts,tsx,js,jsx,md,mdx}',
+    'apps/**/*.{ts,tsx,js,jsx,md,mdx}',
+    'hooks/**/*.{ts,tsx,js,jsx}',
+    'workers/**/*.{ts,tsx,js,jsx}',
+    'api/**/*.{ts,tsx,js,jsx}',
+    'tests/**/*.{ts,tsx,js,jsx,md,mdx}',
+    'test/**/*.{ts,tsx,js,jsx,md,mdx}',
+    'e2e/**/*.{ts,tsx,js,jsx,md,mdx}',
+    '__tests__/**/*.{ts,tsx,js,jsx}',
+    'shared/**/*.{ts,tsx,js,jsx,md,mdx}',
+    'internal/**/*.{ts,tsx,js,jsx,md,mdx}',
+    'modules/**/*.{ts,tsx,js,jsx,md,mdx}',
+    'features/**/*.{ts,tsx,js,jsx,md,mdx}',
+    'types/**/*.{ts,tsx,md,mdx}',
+    'tooling/**/*.{mjs,js,ts,tsx}',
+    'config/**/*.{mjs,js,ts,tsx,md,mdx}'
   ];
-  return fg(patterns, {
+  const extra = (process.env.BRAIN_INDEX_EXTRA_GLOBS || '')
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return fg([...patterns, ...extra], {
     cwd: ROOT,
     dot: true,
     onlyFiles: true,

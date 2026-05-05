@@ -1,6 +1,8 @@
+import { ROOT, listIndexableFiles } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
+import { findTsWorkspaceReferences } from './ts-graph.mjs';
 
 const GLOBAL_REFS = new Set(['JSON', 'String', 'Number', 'Boolean', 'Array', 'Object', 'Map', 'Set', 'Math', 'Date', 'Error', 'Promise']);
 const args = process.argv.slice(2);
@@ -14,13 +16,14 @@ if (!symbol) {
 const embedder = openEmbedder();
 const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
 const records = await store.getAll();
-const impact = await buildImpact(symbol, records, store, embedder);
+const indexable = await listIndexableFiles();
+const impact = await buildImpact(symbol, records, store, embedder, { root: ROOT, indexable });
 await store.close();
 
 if (json) console.log(JSON.stringify(impact, null, 2));
 else printImpact(impact);
 
-export async function buildImpact(symbol, records, store, embedder) {
+export async function buildImpact(symbol, records, store, embedder, options = {}) {
   const codeRecords = records.filter(record => record.type === 'code' && !record.isSummary);
   const definitionRecords = codeRecords.filter(record => has(record.symbols, symbol) || has(record.exportedSymbols, symbol));
   const definitionFiles = unique(definitionRecords.map(record => record.file));
@@ -34,6 +37,7 @@ export async function buildImpact(symbol, records, store, embedder) {
     symbol,
     filter: {}
   });
+  const typescript = await resolveTypeScriptImpact(symbol, options);
   return {
     symbol,
     definitions: summarizeRecords(definitionRecords),
@@ -41,7 +45,28 @@ export async function buildImpact(symbol, records, store, embedder) {
     callees: summarizeRecords(callees),
     tests: summarizeRecords(tests),
     decisions: summarizeRecords(decisions),
-    related: summarizeRecords(related)
+    related: summarizeRecords(related),
+    typescript
+  };
+}
+
+async function resolveTypeScriptImpact(symbol, options) {
+  if (process.env.BRAIN_TS_GRAPH === '0' || process.env.BRAIN_IMPACT_TS === '0') {
+    return { enabled: false, reason: 'disabled_via_env' };
+  }
+  const root = options.root || ROOT;
+  const paths = options.indexable;
+  if (!paths?.length) {
+    return { enabled: false, reason: 'no_indexable_paths' };
+  }
+  const refs = await findTsWorkspaceReferences(root, new Set(paths), symbol);
+  if (refs === null) {
+    return { enabled: false, reason: 'no_ts_program' };
+  }
+  return {
+    enabled: true,
+    definitions: refs.definitions,
+    usages: refs.usages
   };
 }
 
@@ -86,9 +111,32 @@ function printImpact(impact) {
   printGroup('Definitions', impact.definitions);
   printGroup('Direct callers', impact.callers);
   printGroup('Direct callees', impact.callees);
+  printTypeScriptSection(impact.typescript);
   printGroup('Tests', impact.tests);
   printGroup('Decisions', impact.decisions);
   printGroup('Related retrieval', impact.related);
+}
+
+function printTypeScriptSection(ts) {
+  console.log('\n## TypeScript (compiler find-references)');
+  if (!ts?.enabled) {
+    const reason = ts?.reason || 'unavailable';
+    console.log(`- Skipped (${reason}). Install \`typescript\`, widen index globs (\`BRAIN_INDEX_EXTRA_GLOBS\`), or unset BRAIN_TS_GRAPH=0 / BRAIN_IMPACT_TS=0.`);
+    return;
+  }
+  if (!ts.definitions?.length && !ts.usages?.length) {
+    console.log('- No workspace declaration matched this exact symbol name (declarations drive find-references).');
+    return;
+  }
+  if (ts.definitions?.length) {
+    console.log('### Declarations');
+    for (const row of ts.definitions) console.log(`- ${row.file}:${row.line}:${row.column}`);
+  }
+  if (ts.usages?.length) {
+    console.log('### Usages');
+    for (const row of ts.usages.slice(0, 200)) console.log(`- ${row.file}:${row.line}:${row.column}`);
+    if (ts.usages.length > 200) console.log(`- … and ${ts.usages.length - 200} more`);
+  }
 }
 
 function printGroup(title, records) {
