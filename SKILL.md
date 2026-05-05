@@ -7,7 +7,7 @@ description: Shared semantic project brain for web app development. Maintains a 
 
 Use this skill when working inside a software repository that contains `skills/project-brain/` and `.project-brain/`.
 
-The goal is to keep Claude aligned with the complete product and technical plan while using as few tokens as possible.
+The goal is to keep agents aligned with the complete product and technical plan while using as few tokens as possible.
 
 ## Core principle
 
@@ -63,6 +63,12 @@ When asked to sync:
 npm run brain:sync
 ```
 
+When asked to update the reusable skill:
+
+```bash
+npm run brain:update-skill
+```
+
 When asked to guard/check:
 
 ```bash
@@ -103,10 +109,12 @@ When starting feature work:
 2. Semantic search for the feature name, related modules, related decisions, and nearby code.
 3. Load only relevant feature/module/decision files.
 4. Check whether another developer is working on overlapping files/modules.
-5. Create or update the feature page.
-6. Suggest a branch name using `type/kebab-case-description` or `type/issue-number-kebab-case-description` if an issue exists.
-7. Define scope boundaries and out-of-scope items.
-8. Update `active_state.md`.
+5. Search GitHub issues for existing matching work.
+6. If no suitable issue exists and the work is non-trivial, create a GitHub issue with scope, acceptance criteria, and Project Brain references.
+7. Create or update the feature page.
+8. Create or switch to a branch from `develop` named `type/issue-number-kebab-description` for issue-linked work.
+9. Define scope boundaries and out-of-scope items.
+10. Update `active_state.md` with issue, branch, owner, overlap risks, and current status.
 
 ### During implementation
 
@@ -127,7 +135,10 @@ When preparing a PR:
 3. Update feature/module/decision pages.
 4. Update `context_index.md` if the plan or architecture changed.
 5. Generate PR body from `.github/PULL_REQUEST_TEMPLATE.md`.
-6. Include brain impact and test evidence.
+6. Create a draft PR targeting `develop` by default.
+7. Include `Closes #issue` or `Fixes #issue` so GitHub closes the issue on merge.
+8. Include brain impact and test evidence.
+9. Only target `main` for release or hotfix PRs.
 
 ### Daily/team sync
 
@@ -155,11 +166,13 @@ Default to modern web-app conventions unless repo_context overrides them:
 
 ## Git conventions
 
-Default branch model:
+Default branch model is GitFlow:
 
-- `main` — production/release branch.
-- `develop` — optional integration branch if the repo uses it.
-- `feature/*`, `fix/*`, `refactor/*`, `chore/*`, `docs/*`, `test/*` — work branches.
+- `main` — protected production/release branch.
+- `develop` — protected integration branch; default base and PR target for feature/fix/refactor/chore/docs/test work.
+- `feature/<issue>-slug`, `fix/<issue>-slug`, `refactor/<issue>-slug`, `chore/<issue>-slug`, `docs/<issue>-slug`, `test/<issue>-slug` — issue-linked work branches.
+- `release/<version-or-date>` — release stabilization branch targeting `main`.
+- `hotfix/<issue>-slug` — urgent production fix from `main`; merge back to both `main` and `develop`.
 
 Commit format:
 
@@ -183,6 +196,15 @@ Rules:
 - subject <= 72 chars.
 - body explains why if needed.
 - no direct commits to protected branches unless explicitly requested by the user.
+- non-trivial work must have a GitHub issue before PR.
+- PRs close issues through GitHub keywords (`Closes #123`, `Fixes #123`) rather than manual closure.
+
+## Team memory conventions
+
+- Project Brain Markdown is the shared Git-tracked source of truth.
+- Cavemem may be used by each team member as local personal/session memory.
+- Cavemem output is never authoritative until promoted into `.project-brain/*.md`.
+- Do not store secrets, `.env*`, private customer data, dependency folders, build output, or generated Project Brain indexes in Cavemem.
 
 ## Collaboration rules
 
