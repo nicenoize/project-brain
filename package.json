@@ -13,6 +13,8 @@
     "brain:health": "node scripts/brain-health.mjs",
     "brain:session": "node scripts/brain-session.mjs",
     "brain:pack": "node scripts/brain-pack.mjs",
+    "brain:graph": "node scripts/brain-graph.mjs",
+    "brain:eval": "node scripts/brain-eval.mjs",
     "brain:install-hooks": "bash bin/install-hooks.sh",
     "brain:update-skill": "bash bin/update.sh"
   },
@@ -21,7 +23,8 @@
     "fast-glob": "^3.3.2"
   },
   "optionalDependencies": {
-    "@lancedb/lancedb": "^0.9.0"
+    "@lancedb/lancedb": "^0.9.0",
+    "typescript": "^5.6.0"
   },
   "devDependencies": {}
 }

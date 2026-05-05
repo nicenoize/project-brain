@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { BRAIN_DIR, read } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
+import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
 
 const args = process.argv.slice(2);
@@ -16,19 +17,11 @@ if (!query && import.meta.url === `file://${process.argv[1]}`) {
 export async function packPrompt(query, opts = {}) {
   const budget = Number(opts.maxTokens || maxTokens);
   const embedder = openEmbedder(opts);
-  const store = await openStore({ model: embedder.modelName });
-  const qv = await embedder.embed(query);
-  const dense = await store.search(qv, Number(process.env.BRAIN_PACK_CANDIDATES || 32));
-  const all = await store.getAll();
-  const keyword = tfidfScore(query, all);
-  const alpha = Number(process.env.BRAIN_HYBRID_ALPHA || 0.7);
-  const maxKeyword = Math.max(1, ...keyword.values());
-  const ranked = dense
-    .map(record => ({
-      ...record,
-      score: alpha * record.score + (1 - alpha) * ((keyword.get(record.id) || 0) / maxKeyword)
-    }))
-    .sort((a, b) => b.score - a.score);
+  const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
+  const ranked = await retrieve(query, store, embedder, {
+    topK: Number(process.env.BRAIN_PACK_CANDIDATES || 32),
+    candidates: Number(process.env.BRAIN_PACK_CANDIDATES || 64)
+  });
 
   const sources = [];
   const parts = [];
@@ -82,27 +75,4 @@ function takeOption(args, name) {
   const value = args[index + 1] || '';
   args.splice(index, 2);
   return value;
-}
-
-function tfidfScore(query, records) {
-  const queryTokens = tokenize(query);
-  const df = new Map();
-  const docs = records.map(record => new Set(tokenize(`${record.file} ${record.heading} ${record.title} ${record.text}`)));
-  for (const doc of docs) for (const token of doc) df.set(token, (df.get(token) || 0) + 1);
-  const scores = new Map();
-  for (let i = 0; i < records.length; i++) {
-    let score = 0;
-    const textTokens = tokenize(`${records[i].file} ${records[i].heading} ${records[i].title} ${records[i].text}`);
-    for (const token of queryTokens) {
-      const tf = textTokens.filter(t => t === token).length;
-      if (!tf) continue;
-      score += tf * (Math.log((records.length + 1) / ((df.get(token) || 0) + 1)) + 1);
-    }
-    scores.set(records[i].id, score);
-  }
-  return scores;
-}
-
-function tokenize(text) {
-  return String(text).toLowerCase().split(/[^a-z0-9_/-]+/).filter(token => token.length > 1);
 }

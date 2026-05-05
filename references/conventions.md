@@ -70,3 +70,9 @@ Allowed commit types:
 - Cavemem is optional local/session memory for each developer.
 - Durable facts discovered via Cavemem must be promoted into `.project-brain/*.md`.
 - Do not store secrets, `.env*`, private customer data, generated indexes, build output, or dependencies in Cavemem.
+
+## Token Budget
+
+- Use Caveman `$caveman ultra` for internal agent progress, handoffs, investigation notes, and review notes when available.
+- Keep user-facing summaries concise but clear enough to preserve order, risk, and decisions.
+- Disable compression for destructive confirmations, security warnings, or places where terse wording becomes ambiguous.

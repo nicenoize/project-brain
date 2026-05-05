@@ -19,14 +19,17 @@ export function chunkMarkdown(text, opts = {}) {
   return chunks.filter(chunk => chunk.text.trim());
 }
 
-export function chunkCode(text, filePath, opts = {}) {
+export async function chunkCode(text, filePath, opts = {}) {
   const maxChars = opts.maxChars || DEFAULT_MAX_CHARS;
-  const symbols = findSymbols(text);
+  const symbols = await findSymbols(text, filePath);
+  const imports = findImports(text);
   if (!symbols.length) {
     return chunkText(text, maxChars, opts.overlap || 250).map(part => ({
       text: part,
       heading: path.basename(filePath),
-      embeddingText: `${filePath}\n${part}`
+      embeddingText: `${filePath}\n${part}`,
+      symbols: [],
+      imports
     }));
   }
 
@@ -38,14 +41,14 @@ export function chunkCode(text, filePath, opts = {}) {
     const end = symbols[i + 1]?.index || text.length;
     const body = text.slice(start, end).trim();
     if (currentLen && currentLen + body.length > maxChars) {
-      chunks.push(codeChunk(filePath, current));
+      chunks.push(codeChunk(filePath, current, imports));
       current = [];
       currentLen = 0;
     }
-    current.push({ name: symbols[i].name, body });
+    current.push({ name: symbols[i].name, kind: symbols[i].kind, body });
     currentLen += body.length;
   }
-  if (current.length) chunks.push(codeChunk(filePath, current));
+  if (current.length) chunks.push(codeChunk(filePath, current, imports));
   return chunks;
 }
 
@@ -53,12 +56,15 @@ export function chunkSummary(text, filePath, docData = {}) {
   const ext = path.extname(filePath);
   const title = docData.title || path.basename(filePath);
   if (isCodeExt(ext)) {
-    const symbols = findSymbols(text).map(symbol => symbol.name).slice(0, 40);
+    const symbols = findSymbolsRegex(text).map(symbol => symbol.name).slice(0, 40);
+    const imports = findImports(text).slice(0, 40);
     const comment = (text.match(/\/\*\*([\s\S]*?)\*\//) || [])[1]?.replace(/^\s*\*\s?/gm, '').trim() || '';
     return {
-      text: [`# ${title}`, `File: ${filePath}`, comment, symbols.length ? `Exports/symbols: ${symbols.join(', ')}` : 'No exported symbols detected.'].filter(Boolean).join('\n'),
+      text: [`# ${title}`, `File: ${filePath}`, comment, symbols.length ? `Exports/symbols: ${symbols.join(', ')}` : 'No exported symbols detected.', imports.length ? `Imports: ${imports.join(', ')}` : ''].filter(Boolean).join('\n'),
       heading: title,
-      isSummary: true
+      isSummary: true,
+      symbols,
+      imports
     };
   }
   const headings = [...text.matchAll(/^#{1,3}\s+(.+)$/gm)].map(match => match[1].trim()).slice(0, 40);
@@ -70,10 +76,10 @@ export function chunkSummary(text, filePath, docData = {}) {
   };
 }
 
-export function dispatchChunker(filePath, text, docData = {}, opts = {}) {
+export async function dispatchChunker(filePath, text, docData = {}, opts = {}) {
   const summary = chunkSummary(text, filePath, docData);
   const chunks = isCodeExt(path.extname(filePath))
-    ? chunkCode(text, filePath, opts)
+    ? await chunkCode(text, filePath, opts)
     : chunkMarkdown(text, opts);
   return [
     { ...summary, chunk: -1, embeddingText: `${filePath}\n${summary.text}` },
@@ -98,18 +104,70 @@ function splitMarkdownSections(text) {
   return sections.filter(section => section.text);
 }
 
-function findSymbols(text) {
-  const pattern = /^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
-  return [...text.matchAll(pattern)].map(match => ({ name: match[1], index: match.index || 0 }));
+async function findSymbols(text, filePath) {
+  const ast = await findSymbolsAst(text, filePath);
+  return ast.length ? ast : findSymbolsRegex(text);
 }
 
-function codeChunk(filePath, parts) {
+async function findSymbolsAst(text, filePath) {
+  let ts;
+  try {
+    ts = await import('typescript');
+  } catch {
+    return [];
+  }
+  const scriptKind = filePath.endsWith('.tsx') ? ts.ScriptKind.TSX
+    : filePath.endsWith('.jsx') ? ts.ScriptKind.JSX
+      : filePath.endsWith('.js') || filePath.endsWith('.mjs') ? ts.ScriptKind.JS
+        : ts.ScriptKind.TS;
+  const source = ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, true, scriptKind);
+  const symbols = [];
+  visit(source);
+  return symbols.sort((a, b) => a.index - b.index);
+
+  function visit(node) {
+    const name = node.parent === source ? symbolName(node) : '';
+    if (name) {
+      symbols.push({ name, kind: ts.SyntaxKind[node.kind], index: node.getStart(source) });
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  function symbolName(node) {
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node)) && node.name) {
+      return node.name.text;
+    }
+    if (ts.isVariableStatement(node)) {
+      const declaration = node.declarationList.declarations[0];
+      if (declaration?.name && ts.isIdentifier(declaration.name)) return declaration.name.text;
+    }
+    return '';
+  }
+}
+
+function findSymbolsRegex(text) {
+  const pattern = /^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
+  return [...text.matchAll(pattern)].map(match => ({ name: match[1], kind: 'regex', index: match.index || 0 }));
+}
+
+function findImports(text) {
+  const imports = new Set();
+  for (const match of text.matchAll(/^\s*import(?:\s+type)?[\s\S]*?\sfrom\s+['"]([^'"]+)['"]/gm)) imports.add(match[1]);
+  for (const match of text.matchAll(/^\s*import\s*\(\s*['"]([^'"]+)['"]\s*\)/gm)) imports.add(match[1]);
+  for (const match of text.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/gm)) imports.add(match[1]);
+  return [...imports];
+}
+
+function codeChunk(filePath, parts, imports = []) {
   const heading = parts.map(part => part.name).join(', ');
   const text = parts.map(part => part.body).join('\n\n');
+  const symbols = parts.map(part => part.name);
   return {
     text,
     heading,
-    embeddingText: `${filePath}\n${heading}\n${text}`
+    embeddingText: `${filePath}\n${heading}\n${text}`,
+    symbols,
+    imports
   };
 }
 

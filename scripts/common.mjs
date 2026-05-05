@@ -34,6 +34,8 @@ export function mergePackageScripts(pkg) {
     'brain:health': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-health.mjs',
     'brain:session': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-session.mjs',
     'brain:pack': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-pack.mjs',
+    'brain:graph': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-graph.mjs',
+    'brain:eval': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-eval.mjs',
     'brain:install-hooks': 'bash skills/project-brain/bin/install-hooks.sh',
     'brain:update-skill': 'bash skills/project-brain/bin/update.sh'
   };
@@ -54,6 +56,7 @@ export function mergePackageDeps(pkg) {
   }
   pkg.optionalDependencies ||= {};
   if (!pkg.optionalDependencies['@lancedb/lancedb']) pkg.optionalDependencies['@lancedb/lancedb'] = '^0.9.0';
+  if (!pkg.optionalDependencies.typescript) pkg.optionalDependencies.typescript = '^5.6.0';
   return pkg;
 }
 
@@ -63,6 +66,7 @@ export async function listIndexableFiles() {
     '.project-brain/**/*.md',
     'README.md',
     'docs/**/*.md',
+    'scripts/**/*.{mjs,js}',
     'app/**/*.{ts,tsx,js,jsx,md,mdx}',
     'pages/**/*.{ts,tsx,js,jsx,md,mdx}',
     'components/**/*.{ts,tsx,js,jsx,md,mdx}',
