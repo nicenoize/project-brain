@@ -4,6 +4,7 @@ import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexabl
 import { dispatchChunker } from './chunk.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
+import { loadTsSemanticContext } from './ts-graph.mjs';
 
 const force = process.argv.includes('--force');
 const changedEnv = splitEnv('BRAIN_CHANGED_FILES');
@@ -28,6 +29,14 @@ if (oldManifest.model && oldManifest.model !== embedder.modelName) {
 
 const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
 const files = await listIndexableFiles();
+const indexableSet = new Set(files);
+let tsContext = null;
+try {
+  tsContext = await loadTsSemanticContext(ROOT, indexableSet);
+  if (tsContext) console.log('Project Brain: TypeScript semantic graph enabled for indexing.');
+} catch (error) {
+  console.warn(`Project Brain: TS graph disabled (${error.message || error}).`);
+}
 const fileSet = new Set(files);
 const currentHashes = new Map();
 for (const file of files) currentHashes.set(file, sha256(read(path.join(ROOT, file))));
@@ -56,7 +65,7 @@ for (const file of changedFiles) {
   const hash = currentHashes.get(file);
   const stat = fs.statSync(path.join(ROOT, file));
   const doc = parseDoc(file, content);
-  const chunks = await dispatchChunker(file, doc.body, doc.data);
+  const chunks = await dispatchChunker(file, doc.body, doc.data, { tsContext });
   const vectors = await embedder.embedBatch(chunks.map(chunk => chunk.embeddingText || `${file}\n${chunk.text}`));
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
