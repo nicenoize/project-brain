@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if command -v npm >/dev/null 2>&1; then
-  npm run brain:guard
-  npm run brain:sync || true
+if ! command -v npm >/dev/null 2>&1; then
+  exit 0
 fi
+
+# Guard checks always run; they're cheap.
+npm run brain:guard
+
+# Sync defers to the smart router. BRAIN_BACKGROUND=1 lets the script
+# self-decide foreground vs detached background. BRAIN_FAST=1 skips
+# entirely (use for fast iteration loops).
+BRAIN_BACKGROUND=1 npm run brain:sync || true
