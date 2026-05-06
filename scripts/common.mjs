@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execSync } from 'node:child_process';
 
 export const ROOT = process.cwd();
 export const BRAIN_DIR = path.join(ROOT, '.project-brain');
@@ -9,6 +10,8 @@ export const VECTOR_DIR = path.join(BRAIN_DIR, 'vector-db');
 export const LANCE_DIR = VECTOR_DIR;
 export const JSON_INDEX = path.join(BRAIN_DIR, 'search_index.json');
 export const MANIFEST = path.join(BRAIN_DIR, 'index_manifest.json');
+export const SYNC_STATE = path.join(BRAIN_DIR, '.sync-state.json');
+export const SYNC_BG_LOG = path.join(BRAIN_DIR, '.sync-bg.log');
 
 export function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); }
 export function exists(p) { return fs.existsSync(p); }
@@ -23,12 +26,52 @@ export function atomicWrite(p, data) {
 export function sha256(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
 export function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'untitled'; }
 
+export function isFastMode() {
+  return process.env.BRAIN_FAST === '1';
+}
+
+export function classifyChange(file) {
+  if (!file) return 'ignored';
+  if (file.startsWith('.project-brain/sessions/')) return 'ignored';
+  if (file.startsWith('.project-brain/.sync-')) return 'ignored';
+  if (file.startsWith('.project-brain/') && /\.md$/i.test(file)) return 'brain-relevant';
+  return 'code-relevant';
+}
+
+export function classifyChanges(files) {
+  const counts = { brain: 0, code: 0, ignored: 0, total: files.length };
+  for (const file of files) {
+    const kind = classifyChange(file);
+    if (kind === 'brain-relevant') counts.brain++;
+    else if (kind === 'code-relevant') counts.code++;
+    else counts.ignored++;
+  }
+  return counts;
+}
+
+export function readSyncState() {
+  if (!exists(SYNC_STATE)) return null;
+  try { return JSON.parse(read(SYNC_STATE)); } catch { return null; }
+}
+
+export function writeSyncState(state) {
+  ensureDir(BRAIN_DIR);
+  atomicWrite(SYNC_STATE, JSON.stringify({ ts: new Date().toISOString(), ...state }, null, 2));
+}
+
+export function gitBranchSafe() {
+  try {
+    return execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return ''; }
+}
+
 export function mergePackageScripts(pkg) {
   pkg.scripts ||= {};
   const scripts = {
     'brain:init': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-init.mjs',
     'brain:index': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-index.mjs',
     'brain:search': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-search.mjs',
+    'brain:ask': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-ask.mjs',
     'brain:sync': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-sync.mjs',
     'brain:guard': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-guard.mjs',
     'brain:health': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-health.mjs',
@@ -104,6 +147,7 @@ export async function listIndexableFiles() {
     ignore: [
       '**/node_modules/**', '**/.next/**', '**/dist/**', '**/build/**', '**/coverage/**',
       '.project-brain/vector-db/**', '.project-brain/search_index.json', '.project-brain/index_manifest.json',
+      '.project-brain/.sync-state.json', '.project-brain/.sync-bg.log',
       '**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock'
     ]
   });

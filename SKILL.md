@@ -64,7 +64,15 @@ npm run brain:index
 npm run brain:health
 ```
 
-When asked to search context:
+When asked to search context, default to the smart router which picks the cheapest correct retrieval automatically:
+
+```bash
+npm run brain:ask -- "query text"
+npm run brain:ask -- "query text" --pack --max-tokens 3000
+npm run brain:ask -- "query text" --explain          # show route decision without running
+```
+
+The router decides between direct file read, symbol search, doc summary, module summary, vector search, or budgeted pack. Only fall back to the lower-level commands when the router result is insufficient:
 
 ```bash
 npm run brain:search -- "query text"
@@ -78,6 +86,11 @@ npm run brain:eval
 ```
 
 Retrieval ranks with dense vector similarity, keyword relevance, exact symbol matches, metadata, and current branch/diff boosts. Set `BRAIN_CONTEXT_FILES` to comma-separated files when the current task should favor a specific diff or changed-file set.
+
+### Performance modes
+
+- `BRAIN_FAST=1` — fast iteration mode. Sync hooks become no-ops, retrieval uses the JSON store with summary-only results, and module/feature/project summaries are not rebuilt during indexing. Recommended local default during heavy edit loops; CI keeps it off so retrieval quality stays high.
+- `BRAIN_BACKGROUND=1` — pre-commit hook sets this so `brain:sync` self-decides foreground vs detached background indexing instead of blocking the commit. Manual `npm run brain:sync` runs foreground by default.
 
 When asked to sync:
 

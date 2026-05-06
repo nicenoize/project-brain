@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexableFiles, parseDoc } from './common.mjs';
+import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexableFiles, parseDoc, isFastMode } from './common.mjs';
 import { dispatchChunker } from './chunk.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
@@ -100,7 +100,11 @@ for (const file of changedFiles) {
 }
 
 if (records.length) await store.upsert(records);
-await rebuildModuleSummaries(store, embedder);
+if (isFastMode()) {
+  console.log('Project Brain: fast mode — skipping module/feature/project summary rebuilds.');
+} else {
+  await rebuildModuleSummaries(store, embedder);
+}
 
 const allRecords = await store.getAll();
 const idsByFile = new Map();
