@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { JSON_INDEX, LANCE_DIR, atomicWrite, ensureDir, read } from './common.mjs';
+import { JSON_INDEX, LANCE_DIR, ensureDir, read } from './common.mjs';
 
 export const TABLE_NAME = 'brain_records';
 
@@ -32,12 +32,33 @@ export class JsonStore extends BrainStore {
   }
 
   persist() {
-    atomicWrite(this.path, JSON.stringify({
-      version: 2,
-      backend: 'json',
-      model: this.model,
-      records: this.records.map(normalizeRecord)
-    }, null, 2));
+    // Stream JSON to disk to avoid creating one giant in-memory string.
+    ensureDir(path.dirname(this.path));
+    const tmpPath = `${this.path}.tmp`;
+    let fd;
+    try {
+      fd = fs.openSync(tmpPath, 'w');
+      fs.writeSync(fd, '{\n');
+      fs.writeSync(fd, '  "version": 2,\n');
+      fs.writeSync(fd, '  "backend": "json",\n');
+      fs.writeSync(fd, `  "model": ${JSON.stringify(this.model ?? null)},\n`);
+      fs.writeSync(fd, '  "records": [\n');
+      for (let i = 0; i < this.records.length; i++) {
+        const record = normalizeRecord(this.records[i]);
+        fs.writeSync(fd, `    ${JSON.stringify(record)}${i < this.records.length - 1 ? ',' : ''}\n`);
+      }
+      fs.writeSync(fd, '  ]\n');
+      fs.writeSync(fd, '}\n');
+      fs.closeSync(fd);
+      fd = undefined;
+      fs.renameSync(tmpPath, this.path);
+    } catch (error) {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      try { fs.unlinkSync(tmpPath); } catch {}
+      throw error;
+    }
   }
 
   async upsert(records) {
@@ -75,6 +96,8 @@ export class LanceStore extends BrainStore {
     this.dir = options.dir || LANCE_DIR;
     this.model = options.model || null;
     this.mirror = new JsonStore(options);
+    this.mirrorEnabled = options.mirror !== false && process.env.BRAIN_JSON_MIRROR !== '0';
+    this.mirrorStrict = process.env.BRAIN_JSON_MIRROR_STRICT === '1';
     this.db = null;
     this.table = null;
   }
@@ -102,7 +125,7 @@ export class LanceStore extends BrainStore {
   async upsert(records) {
     const normalized = records.map(normalizeRecord);
     if (!normalized.length) return;
-    await this.mirror.upsert(normalized);
+    await this.maybeMirrorUpsert(normalized);
     await this.open();
     const forLance = normalized.map(padLanceListColumns);
     let table;
@@ -122,7 +145,7 @@ export class LanceStore extends BrainStore {
 
   async delete(ids) {
     if (!ids.length) return;
-    await this.mirror.delete(ids);
+    await this.maybeMirrorDelete(ids);
     const table = await this.openTable();
     if (!table) return;
     const quoted = ids.map(id => `'${String(id).replace(/'/g, "''")}'`).join(', ');
@@ -147,6 +170,28 @@ export class LanceStore extends BrainStore {
     const rows = await table.query().limit(100000).toArray();
     return rows.map(normalizeRecord);
   }
+
+  async maybeMirrorUpsert(records) {
+    if (!this.mirrorEnabled) return;
+    try {
+      await this.mirror.upsert(records);
+    } catch (error) {
+      if (this.mirrorStrict) throw error;
+      console.warn(`Project Brain mirror warning (lance upsert): ${error.message || error}`);
+      console.warn('Continuing with Lance as source of truth. Set BRAIN_JSON_MIRROR=0 to disable mirror writes.');
+    }
+  }
+
+  async maybeMirrorDelete(ids) {
+    if (!this.mirrorEnabled) return;
+    try {
+      await this.mirror.delete(ids);
+    } catch (error) {
+      if (this.mirrorStrict) throw error;
+      console.warn(`Project Brain mirror warning (lance delete): ${error.message || error}`);
+      console.warn('Continuing with Lance as source of truth. Set BRAIN_JSON_MIRROR=0 to disable mirror writes.');
+    }
+  }
 }
 
 export class QdrantStore extends BrainStore {
@@ -158,13 +203,15 @@ export class QdrantStore extends BrainStore {
     this.model = options.model || null;
     this.dims = Number(options.dims || process.env.BRAIN_VECTOR_DIMS || 384);
     this.mirror = new JsonStore(options);
+    this.mirrorEnabled = options.mirror !== false && process.env.BRAIN_JSON_MIRROR !== '0';
+    this.mirrorStrict = process.env.BRAIN_JSON_MIRROR_STRICT === '1';
   }
 
   async upsert(records) {
     const normalized = records.map(normalizeRecord);
     if (!normalized.length) return;
     await this.ensureCollection(normalized[0].vector.length || this.dims);
-    await this.mirror.upsert(normalized);
+    await this.maybeMirrorUpsert(normalized);
     await this.request(`/collections/${this.collection}/points?wait=true`, {
       method: 'PUT',
       body: {
@@ -179,7 +226,7 @@ export class QdrantStore extends BrainStore {
 
   async delete(ids) {
     if (!ids.length) return;
-    await this.mirror.delete(ids);
+    await this.maybeMirrorDelete(ids);
     await this.ensureCollection(this.dims);
     await this.request(`/collections/${this.collection}/points/delete?wait=true`, {
       method: 'POST',
@@ -237,6 +284,28 @@ export class QdrantStore extends BrainStore {
     });
     if (!response.ok) throw new Error(`Qdrant request failed (${response.status}): ${await response.text()}`);
     return response.json();
+  }
+
+  async maybeMirrorUpsert(records) {
+    if (!this.mirrorEnabled) return;
+    try {
+      await this.mirror.upsert(records);
+    } catch (error) {
+      if (this.mirrorStrict) throw error;
+      console.warn(`Project Brain mirror warning (qdrant upsert): ${error.message || error}`);
+      console.warn('Continuing with Qdrant as source of truth. Set BRAIN_JSON_MIRROR=0 to disable mirror writes.');
+    }
+  }
+
+  async maybeMirrorDelete(ids) {
+    if (!this.mirrorEnabled) return;
+    try {
+      await this.mirror.delete(ids);
+    } catch (error) {
+      if (this.mirrorStrict) throw error;
+      console.warn(`Project Brain mirror warning (qdrant delete): ${error.message || error}`);
+      console.warn('Continuing with Qdrant as source of truth. Set BRAIN_JSON_MIRROR=0 to disable mirror writes.');
+    }
   }
 }
 
