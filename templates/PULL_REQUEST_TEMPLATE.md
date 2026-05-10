@@ -18,6 +18,7 @@
 - Decision recorded: yes/no/not applicable
 - `context_index.md` updated: yes/no/not applicable
 - `active_state.md` updated: yes/no/not applicable
+- Session handoff (`.project-brain/sessions/…`) if multi-agent / interrupted work: yes/no/not applicable
 
 ## Scope
 

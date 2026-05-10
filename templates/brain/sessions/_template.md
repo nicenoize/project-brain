@@ -1,21 +1,38 @@
 ---
 type: session
- date: Needs Review
- developer: Needs Review
- related_features: []
- related_modules: []
+task_id: ""
+branch: ""
+actor: ""
+tool: ""
+parent_run: ""
 ---
 
-# Session Handoff
+# Session handoff
 
-## Worked On
+## Workstream
+
+- **task_id**: (stable id shared with humans and other agents — e.g. `issue-142-auth` or `cursor-pack-2026-05-10`)
+- **branch**:
+- **actor**: (GitHub handle, human name, or agent label, e.g. `cursor-subagent-billing`)
+- **tool**: `cursor` | `claude` | `gemini` | `human` | `other`
+- **parent_run**: (orchestrator / parent agent id if this is a sub-agent)
+
+## Changed files (at start)
+
+- None
+
+## Worked on
+
 - Needs Review
 
-## Changed
+## Notes for the next actor
+
 - Needs Review
 
-## Next Steps
+## Next steps
+
 - Needs Review
 
 ## Blockers
+
 - None recorded

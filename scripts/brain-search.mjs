@@ -10,9 +10,11 @@ const modulesOnly = takeFlag(args, '--modules-only');
 const json = takeFlag(args, '--json');
 const type = takeOption(args, '--type');
 const symbol = takeOption(args, '--symbol');
+const taskOpt = takeOption(args, '--task');
+const actorOpt = takeOption(args, '--actor');
 const query = args.join(' ').trim();
 if (!query) {
-  console.error('Usage: npm run brain:search -- "query" [--summary-only] [--modules-only] [--type doc] [--symbol SymbolName] [--json]');
+  console.error('Usage: npm run brain:search -- "query" [--summary-only] [--modules-only] [--type doc] [--symbol SymbolName] [--task <id>] [--actor <label>] [--json]');
   process.exit(1);
 }
 if (!fs.existsSync(JSON_INDEX) && !fs.existsSync(MANIFEST)) {
@@ -27,10 +29,14 @@ if (manifest.model && manifest.model !== embedder.modelName) {
 }
 
 const store = await openStore({ model: manifest.model || embedder.modelName, dims: manifest.dims || embedder.dims });
+const taskId = String(taskOpt || process.env.BRAIN_TASK || '').trim();
+const actor = String(actorOpt || process.env.BRAIN_ACTOR || '').trim();
 const results = await retrieve(query, store, embedder, {
   topK: Number(process.env.BRAIN_TOP_K || 8),
   symbol,
-  filter: { summaryOnly, modulesOnly, type }
+  filter: { summaryOnly, modulesOnly, type },
+  taskId,
+  actor
 });
 await store.close();
 
@@ -52,6 +58,10 @@ function toJsonResult(record) {
     chunk: record.chunk,
     title: record.title,
     type: record.type,
+    taskId: record.taskId,
+    actor: record.actor,
+    tool: record.tool,
+    parentRun: record.parentRun,
     heading: record.heading,
     score: record.score,
     denseScore: record.denseScore,

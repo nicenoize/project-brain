@@ -113,7 +113,8 @@ npm run brain:search -- "auth checkout module" --summary-only
 npm run brain:symbol -- QdrantStore QdrantStore
 npm run brain:impact -- QdrantStore
 npm run brain:pack -- "auth checkout module" --max-tokens 3000
-npm run brain:session -- start
+npm run brain:session -- start --task issue-123-slug --actor alice --tool human
+npm run brain:session -- end --task issue-123-slug
 npm run brain:graph -- --format json
 npm run brain:eval
 npm run brain:sync
@@ -135,7 +136,15 @@ BRAIN_HYBRID_ALPHA=0.7
 BRAIN_CONTEXT_FILES=app/page.tsx,lib/auth.ts
 BRAIN_CHANGED_FILE_BOOST=0.12
 BRAIN_SESSION_TTL_HOURS=72
+BRAIN_TASK=issue-123-slug
+BRAIN_ACTOR=cursor-worker-b
+BRAIN_TASK_BOOST=0.14
+BRAIN_ACTOR_BOOST=0.06
 ```
+
+`BRAIN_TASK` / `BRAIN_ACTOR` (or `brain:search|pack|ask --task … --actor …`) add a metadata boost so session handoffs and chunks tagged with the same `task_id` / `actor` in frontmatter rank higher—useful when Cursor, Claude, Gemini, or multiple humans work in parallel on one repo.
+
+**LanceDB upgrade:** if commands fail with Lance “schema” / “fields did not match” errors after pulling a newer Project Brain, delete the local table and rebuild: `rm -rf .project-brain/vector-db && npm run brain:index -- --force`.
 
 ## API Keys
 
@@ -216,7 +225,7 @@ flowchart TD
   Chunk --> Index["brain:index / brain:sync<br/>incremental upsert/delete"]
   Index --> Store
 
-  Session["brain:session<br/>start/end/list/clean"] --> Store
+  Session["brain:session<br/>start/end/list/clean<br/>+ --task --actor --tool"] --> Store
   Work --> Update["Update Markdown brain<br/>when durable facts change"]
   Update --> Source
 ```
