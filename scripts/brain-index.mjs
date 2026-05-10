@@ -69,6 +69,7 @@ for (const file of changedFiles) {
   const vectors = await embedder.embedBatch(chunks.map(chunk => chunk.embeddingText || `${file}\n${chunk.text}`));
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
+    const sessionCoord = sessionCoordFields(file, doc.data);
     records.push({
       id: sha256(`${file}:${chunk.chunk}:${hash}`),
       file,
@@ -94,7 +95,8 @@ for (const file of changedFiles) {
       lineEnd: chunk.lineEnd || 0,
       imports: chunk.imports || [],
       references: chunk.references || [],
-      vector: vectors[i]
+      vector: vectors[i],
+      ...sessionCoord
     });
   }
 }
@@ -223,6 +225,20 @@ async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords)
 
 function splitEnv(name) {
   return (process.env[name] || '').split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+}
+
+function sessionCoordFields(file, data) {
+  if (!file.includes('/sessions/')) return {};
+  const taskId = String(data.task_id || data.taskId || '').trim();
+  const actor = String(data.actor || '').trim();
+  const tool = String(data.tool || '').trim();
+  const parentRun = String(data.parent_run || data.parentRun || '').trim();
+  const out = {};
+  if (taskId) out.taskId = taskId;
+  if (actor) out.actor = actor;
+  if (tool) out.tool = tool;
+  if (parentRun) out.parentRun = parentRun;
+  return out;
 }
 
 function inferType(file) {

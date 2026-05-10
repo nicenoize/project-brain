@@ -7,10 +7,13 @@ import { openStore } from './store.mjs';
 const args = process.argv.slice(2);
 const maxTokens = Number(takeOption(args, '--max-tokens') || 3000);
 const format = takeOption(args, '--format') || 'text';
+const taskOpt = takeOption(args, '--task');
+const actorOpt = takeOption(args, '--actor');
 const query = args.join(' ').trim();
 
 if (!query && import.meta.url === `file://${process.argv[1]}`) {
-  console.error('Usage: npm run brain:pack -- "query" [--max-tokens 3000] [--format json|text]');
+  console.error('Usage: npm run brain:pack -- "query" [--max-tokens 3000] [--format json|text] [--task <workstream-id>] [--actor <label>]');
+  console.error('Env: BRAIN_TASK, BRAIN_ACTOR (same semantics as flags).');
   process.exit(1);
 }
 
@@ -18,9 +21,13 @@ export async function packPrompt(query, opts = {}) {
   const budget = Number(opts.maxTokens || maxTokens);
   const embedder = openEmbedder(opts);
   const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
+  const taskId = trimStr(opts.taskId || taskOpt || process.env.BRAIN_TASK);
+  const actor = trimStr(opts.actor || actorOpt || process.env.BRAIN_ACTOR);
   const ranked = await retrieve(query, store, embedder, {
     topK: Number(process.env.BRAIN_PACK_CANDIDATES || 32),
-    candidates: Number(process.env.BRAIN_PACK_CANDIDATES || 64)
+    candidates: Number(process.env.BRAIN_PACK_CANDIDATES || 64),
+    taskId,
+    actor
   });
 
   const sources = [];
@@ -67,6 +74,10 @@ function coreFiles() {
 
 function estimateTokens(text) {
   return Math.ceil(String(text).length / 4);
+}
+
+function trimStr(v) {
+  return String(v ?? '').trim();
 }
 
 function takeOption(args, name) {

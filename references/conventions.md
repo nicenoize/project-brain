@@ -71,6 +71,13 @@ Allowed commit types:
 - Durable facts discovered via Cavemem must be promoted into `.project-brain/*.md`.
 - Do not store secrets, `.env*`, private customer data, generated indexes, build output, or dependencies in Cavemem.
 
+## Multi-tool and multi-agent coordination
+
+- Use a stable **task id** per parallel workstream (issue slug, feature name, or orchestrator run id).
+- Start session handoffs with `brain:session -- start --task … --actor … --tool …` so Cursor, Claude, Gemini, and humans can each have a distinct session file on the same branch.
+- Prefer **one merge point** for `active_state.md`; use the leases / workstreams tables and `.project-brain/sessions/` for concurrent edits.
+- When packing context for a specific stream, set `BRAIN_TASK` / `BRAIN_ACTOR` or pass `--task` / `--actor` to `brain:pack` / `brain:ask` / `brain:search`.
+
 ## Token Budget
 
 - Use Caveman `$caveman ultra` for internal agent progress, handoffs, investigation notes, and review notes when available.

@@ -84,7 +84,9 @@ export function retrievalContext(opts = {}) {
   return {
     branch: opts.branch || process.env.BRAIN_BRANCH || gitBranch(),
     changed,
-    symbolMode: Boolean(opts.symbol || opts.expectedSymbol)
+    symbolMode: Boolean(opts.symbol || opts.expectedSymbol),
+    taskId: trimStr(opts.taskId ?? process.env.BRAIN_TASK),
+    actor: trimStr(opts.actor ?? process.env.BRAIN_ACTOR)
   };
 }
 
@@ -97,7 +99,17 @@ function metadataBoost(record, context) {
     const defaultBoost = context.symbolMode ? 0.2 : 0.04;
     boost += Number(process.env.BRAIN_CODE_BODY_BOOST || defaultBoost);
   }
+  if (context.taskId && record.taskId && record.taskId === context.taskId) {
+    boost += Number(process.env.BRAIN_TASK_BOOST || 0.14);
+  }
+  if (context.actor && record.actor && record.actor === context.actor) {
+    boost += Number(process.env.BRAIN_ACTOR_BOOST || 0.06);
+  }
   return boost;
+}
+
+function trimStr(v) {
+  return String(v ?? '').trim();
 }
 
 function recordMatches(record, filter) {

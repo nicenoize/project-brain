@@ -9,6 +9,8 @@ const flags = new Set();
 let maxTokens = '';
 let scope = '';
 let topK = '';
+let brainTask = '';
+let brainActor = '';
 const positional = [];
 
 for (let i = 0; i < argv.length; i++) {
@@ -21,6 +23,10 @@ for (let i = 0; i < argv.length; i++) {
     scope = argv[++i] || '';
   } else if (a === '--top-k') {
     topK = argv[++i] || '';
+  } else if (a === '--task') {
+    brainTask = argv[++i] || '';
+  } else if (a === '--actor') {
+    brainActor = argv[++i] || '';
   } else {
     positional.push(a);
   }
@@ -28,7 +34,7 @@ for (let i = 0; i < argv.length; i++) {
 
 const query = positional.join(' ').trim();
 if (!query) {
-  console.error('Usage: npm run brain:ask -- "<query>" [--max-tokens N] [--top-k N] [--scope module] [--pack] [--no-pack] [--force-vector] [--explain] [--json]');
+  console.error('Usage: npm run brain:ask -- "<query>" [--max-tokens N] [--top-k N] [--scope module] [--task <id>] [--actor <label>] [--pack] [--no-pack] [--force-vector] [--explain] [--json]');
   process.exit(1);
 }
 
@@ -41,7 +47,7 @@ if (flags.has('--explain')) {
 
 console.log(`brain:ask route=${decision.route}${decision.detail ? ' (' + decision.detail + ')' : ''}${isFastMode() ? ' [fast]' : ''}`);
 
-const childEnv = isFastMode() ? { ...process.env, BRAIN_STORE: 'json' } : process.env;
+const childEnv = withBrainCoord(isFastMode() ? { ...process.env, BRAIN_STORE: 'json' } : process.env);
 const searchScript = new URL('./brain-search.mjs', import.meta.url).pathname;
 const packScript = new URL('./brain-pack.mjs', import.meta.url).pathname;
 
@@ -60,11 +66,13 @@ if (decision.route === 'file') {
 if (decision.route === 'symbol') {
   const a = [searchScript, '--type', 'code', '--symbol', decision.target];
   if (flags.has('--json')) a.push('--json');
+  if (brainTask) a.push('--task', brainTask);
+  if (brainActor) a.push('--actor', brainActor);
   if (topK) { /* search uses BRAIN_TOP_K env */ }
   a.push(decision.target);
   const result = spawnSync(process.execPath, a, {
     stdio: 'inherit',
-    env: topK ? { ...childEnv, BRAIN_TOP_K: topK } : childEnv
+    env: withTopK(childEnv)
   });
   process.exit(result.status || 0);
 }
@@ -72,10 +80,12 @@ if (decision.route === 'symbol') {
 if (decision.route === 'doc') {
   const a = [searchScript, '--summary-only'];
   if (flags.has('--json')) a.push('--json');
+  if (brainTask) a.push('--task', brainTask);
+  if (brainActor) a.push('--actor', brainActor);
   a.push(query);
   const result = spawnSync(process.execPath, a, {
     stdio: 'inherit',
-    env: topK ? { ...childEnv, BRAIN_TOP_K: topK } : childEnv
+    env: withTopK(childEnv)
   });
   process.exit(result.status || 0);
 }
@@ -83,10 +93,12 @@ if (decision.route === 'doc') {
 if (decision.route === 'module') {
   const a = [searchScript, '--modules-only'];
   if (flags.has('--json')) a.push('--json');
+  if (brainTask) a.push('--task', brainTask);
+  if (brainActor) a.push('--actor', brainActor);
   a.push(query);
   const result = spawnSync(process.execPath, a, {
     stdio: 'inherit',
-    env: topK ? { ...childEnv, BRAIN_TOP_K: topK } : childEnv
+    env: withTopK(childEnv)
   });
   process.exit(result.status || 0);
 }
@@ -99,19 +111,34 @@ if (wantsPack) {
   const a = [packScript, query];
   if (maxTokens) a.push('--max-tokens', maxTokens);
   if (flags.has('--json')) a.push('--format', 'json');
-  const result = spawnSync(process.execPath, a, { stdio: 'inherit', env: childEnv });
+  if (brainTask) a.push('--task', brainTask);
+  if (brainActor) a.push('--actor', brainActor);
+  const result = spawnSync(process.execPath, a, { stdio: 'inherit', env: withTopK(childEnv) });
   process.exit(result.status || 0);
 }
 
 const searchArgs = [searchScript];
 if (isFastMode()) searchArgs.push('--summary-only');
 if (flags.has('--json')) searchArgs.push('--json');
+if (brainTask) searchArgs.push('--task', brainTask);
+if (brainActor) searchArgs.push('--actor', brainActor);
 searchArgs.push(query);
 const result = spawnSync(process.execPath, searchArgs, {
   stdio: 'inherit',
-  env: topK ? { ...childEnv, BRAIN_TOP_K: topK } : childEnv
+  env: withTopK(childEnv)
 });
 process.exit(result.status || 0);
+
+function withBrainCoord(env) {
+  const out = { ...env };
+  if (brainTask) out.BRAIN_TASK = brainTask;
+  if (brainActor) out.BRAIN_ACTOR = brainActor;
+  return out;
+}
+
+function withTopK(env) {
+  return topK ? { ...env, BRAIN_TOP_K: topK } : env;
+}
 
 function classify(q, opts = {}) {
   const cleaned = q.trim();

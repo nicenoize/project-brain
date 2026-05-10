@@ -1,6 +1,6 @@
 ---
 name: project-brain
-description: Shared semantic project brain for web app development. Maintains a compressed project plan, feature/module memory, team active state, semantic search index, Git workflow hygiene, and clean-code guardrails.
+description: Shared semantic project brain for web app development. Maintains a compressed project plan, feature/module memory, team active state (including multi-actor leases and workstreams), semantic search index, Git workflow hygiene, and clean-code guardrails.
 ---
 
 # Project Brain Skill
@@ -69,6 +69,7 @@ When asked to search context, default to the smart router which picks the cheape
 ```bash
 npm run brain:ask -- "query text"
 npm run brain:ask -- "query text" --pack --max-tokens 3000
+npm run brain:ask -- "query text" --task issue-99-slug --actor cursor-worker-a --pack --max-tokens 3000
 npm run brain:ask -- "query text" --explain          # show route decision without running
 ```
 
@@ -81,11 +82,12 @@ npm run brain:search -- "query text" --modules-only
 npm run brain:symbol -- SymbolName SymbolName
 npm run brain:impact -- SymbolName
 npm run brain:pack -- "query text" --max-tokens 3000
+npm run brain:pack -- "query text" --task issue-99-slug --actor cursor-worker-a
 npm run brain:graph -- --format json
 npm run brain:eval
 ```
 
-Retrieval ranks with dense vector similarity, keyword relevance, exact symbol matches, metadata, and current branch/diff boosts. Set `BRAIN_CONTEXT_FILES` to comma-separated files when the current task should favor a specific diff or changed-file set.
+Retrieval ranks with dense vector similarity, keyword relevance, exact symbol matches, metadata, and current branch/diff boosts. Set `BRAIN_CONTEXT_FILES` to comma-separated files when the current task should favor a specific diff or changed-file set. Set `BRAIN_TASK` and/or `BRAIN_ACTOR` (or use `--task` / `--actor` on `brain:search`, `brain:pack`, `brain:ask`) to boost session handoffs and chunks whose frontmatter matches that workstream.
 
 ### Performance modes
 
@@ -110,14 +112,16 @@ When asked to guard/check:
 npm run brain:guard
 ```
 
-When asked to track short-lived work context:
+When asked to track short-lived work context (branch-scoped; use flags when several agents or humans share one branch):
 
 ```bash
-npm run brain:session -- start
-npm run brain:session -- end
-npm run brain:session -- list
+npm run brain:session -- start [--task <workstream-id>] [--actor <label>] [--tool cursor|claude|gemini|human|other] [--parent <orchestrator-id>]
+npm run brain:session -- end [--task <workstream-id>]
+npm run brain:session -- list [--json]
 npm run brain:session -- clean
 ```
+
+For retrieval that prefers the current workstream’s session chunks, set `BRAIN_TASK` / `BRAIN_ACTOR` or pass `--task` / `--actor` to `brain:search`, `brain:pack`, or `brain:ask`.
 
 ## Operating modes
 
@@ -251,11 +255,13 @@ Rules:
 - Do not store secrets, `.env*`, private customer data, dependency folders, build output, or generated Project Brain indexes in Cavemem.
 - Caveman may be used for low-token communication; it is not memory and does not replace Project Brain or Cavemem.
 
-## Collaboration rules
+## Collaboration rules (humans + Cursor + Claude + Gemini)
 
-- `active_state.md` must reflect who is working on what.
-- If two developers touch the same module/feature, flag overlap before implementing.
-- Capture handoffs in `.project-brain/sessions/` when work is interrupted.
+- `active_state.md` is the team radar: workstreams, leases, overlaps. Prefer **one person or lead agent** merging it to reduce git conflicts.
+- If two actors touch the same module/feature, record overlap risk in `active_state.md` before implementing.
+- **Parallel agents / split tools**: assign a stable `task_id` per stream. Each stream runs `brain:session -- start --task … --actor … --tool …` and ends with `brain:session -- end --task …`. Sub-agents may set `--parent` to the orchestrator run id.
+- **Orchestrator pattern** (e.g. Cursor parent + workers, or any multi-step automation): parent runs `brain:pack` once with `BRAIN_TASK` / `BRAIN_ACTOR` (or flags) and passes the same blob to children; children write notes under `.project-brain/sessions/`; one actor merges durable facts into features/modules/decisions and updates `active_state.md`.
+- Capture handoffs in `.project-brain/sessions/` when work is interrupted or handed off between tools or people.
 - Update the brain before opening a PR.
 
 ## Response behavior

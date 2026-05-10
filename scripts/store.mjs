@@ -137,7 +137,16 @@ export class LanceStore extends BrainStore {
     }
     this.table = table;
     if (typeof table.mergeInsert === 'function') {
-      await table.mergeInsert('id').whenMatchedUpdateAll().whenNotMatchedInsertAll().execute(forLance);
+      try {
+        await table.mergeInsert('id').whenMatchedUpdateAll().whenNotMatchedInsertAll().execute(forLance);
+      } catch (error) {
+        const msg = String(error?.message || error);
+        if (/schema|fields did not match|unexpected=/i.test(msg)) {
+          console.error('Project Brain: Lance table schema is older than this package (new coordination fields on records).');
+          console.error('Fix: rm -rf .project-brain/vector-db && npm run brain:index -- --force');
+        }
+        throw error;
+      }
     } else {
       await table.add(forLance);
     }
@@ -350,6 +359,10 @@ export function normalizeRecord(record) {
     isProjectSummary: Boolean(record.isProjectSummary),
     branch: record.branch || '',
     expiresAt: record.expiresAt || '',
+    taskId: record.taskId || '',
+    actor: record.actor || '',
+    tool: record.tool || '',
+    parentRun: record.parentRun || '',
     module: record.module || inferModule(record.file || ''),
     feature: record.feature || inferFeature(record.file || ''),
     decision: record.decision || inferDecision(record.file || ''),
@@ -363,6 +376,7 @@ export function normalizeRecord(record) {
     lineEnd: Number(record.lineEnd || 0),
     imports: stripLanceSentinel(normalizeList(record.imports)),
     references: stripLanceSentinel(normalizeList(record.references)),
+    changedFiles: stripLanceSentinel(normalizeList(record.changedFiles)),
     vector: Array.from(record.vector || [])
   };
 }
@@ -388,7 +402,7 @@ function stripLanceSentinel(list) {
 
 function padLanceListColumns(record) {
   const out = { ...record };
-  for (const key of ['symbols', 'symbolKinds', 'exportedSymbols', 'imports', 'references']) {
+  for (const key of ['symbols', 'symbolKinds', 'exportedSymbols', 'imports', 'references', 'changedFiles']) {
     const arr = out[key];
     if (!Array.isArray(arr) || arr.length === 0) {
       out[key] = [LANCE_LIST_PLACEHOLDER];
