@@ -3,3 +3,4 @@ node_modules/
 .project-brain/vector-db/
 .project-brain/index_manifest.json
 .project-brain/search_index.json
+.worktrees/

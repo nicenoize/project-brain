@@ -12,6 +12,7 @@
     "brain:guard": "node scripts/brain-guard.mjs",
     "brain:health": "node scripts/brain-health.mjs",
     "brain:session": "node scripts/brain-session.mjs",
+    "brain:worktree": "node scripts/brain-worktree.mjs",
     "brain:pack": "node scripts/brain-pack.mjs",
     "brain:symbol": "node scripts/brain-search.mjs --type code --symbol",
     "brain:impact": "node scripts/brain-impact.mjs",

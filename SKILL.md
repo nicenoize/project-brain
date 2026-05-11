@@ -106,6 +106,8 @@ When asked to update the reusable skill:
 npm run brain:update-skill
 ```
 
+Without a configured upstream branch (`git branch -u …`), this fast-forwards from **https://github.com/nicenoize/project-brain** via a Git remote named `project-brain-upstream` (set `PROJECT_BRAIN_UPSTREAM_URL` or `PROJECT_BRAIN_UPSTREAM_REMOTE` to override, or set `PROJECT_BRAIN_REMOTE` to use an existing remote such as `origin`).
+
 When asked to guard/check:
 
 ```bash
@@ -115,13 +117,24 @@ npm run brain:guard
 When asked to track short-lived work context (branch-scoped; use flags when several agents or humans share one branch):
 
 ```bash
-npm run brain:session -- start [--task <workstream-id>] [--actor <label>] [--tool cursor|claude|gemini|human|other] [--parent <orchestrator-id>]
+npm run brain:session -- start [--task <workstream-id>] [--actor <label>] [--tool cursor|claude|gemini|codex|human|other] [--parent <orchestrator-id>]
 npm run brain:session -- end [--task <workstream-id>]
 npm run brain:session -- list [--json]
 npm run brain:session -- clean
 ```
 
 For retrieval that prefers the current workstream’s session chunks, set `BRAIN_TASK` / `BRAIN_ACTOR` or pass `--task` / `--actor` to `brain:search`, `brain:pack`, or `brain:ask`.
+
+When asked for **parallel Claude Code / Cursor workers** on **separate branches** (Git worktrees: isolated directories, no stash dance):
+
+```bash
+npm run brain:worktree -- spawn --count 3 --base develop --type feature --issue 456 --slug checkout-hardening [--tool cursor|claude|gemini|codex|human|other] [--parent <orchestrator-id>]
+npm run brain:worktree -- list
+npm run brain:worktree -- remove <path-from-list>
+npm run brain:worktree -- prune
+```
+
+Each worktree is a normal checkout: use one terminal or IDE window per tree, `cd` into its path, run `npm run brain:session -- start …` there with the printed `--task` / `--actor` / `--tool`, and keep `BRAIN_TASK` / `BRAIN_ACTOR` aligned when calling `brain:pack` / `brain:ask`. Default worktree parent is `<repo>/.worktrees/` (gitignored via setup); override with `--dir` or `BRAIN_WORKTREE_DIR`. Prefer `develop` as `--base` for GitFlow work branches. **`--tool`** (or env **`BRAIN_WORKTREE_TOOL`**) sets the session tool label and the `<tool>-worker-N` actor prefix for Cursor, Claude Code, Codex CLI, Gemini, etc. (defaults to `claude`). Aliases: `claude-code` → `claude`; `openai`, `gpt`, `codex-cli` → `codex`.
 
 ## Operating modes
 
@@ -260,6 +273,7 @@ Rules:
 - `active_state.md` is the team radar: workstreams, leases, overlaps. Prefer **one person or lead agent** merging it to reduce git conflicts.
 - If two actors touch the same module/feature, record overlap risk in `active_state.md` before implementing.
 - **Parallel agents / split tools**: assign a stable `task_id` per stream. Each stream runs `brain:session -- start --task … --actor … --tool …` and ends with `brain:session -- end --task …`. Sub-agents may set `--parent` to the orchestrator run id.
+- **Parallel branches (Cursor, Claude Code, Codex, Gemini, humans)**: use `npm run brain:worktree -- spawn --count N … [--tool …]` so each worker gets its own directory and GitFlow branch off `develop` (or `--base`). Match the printed `<tool>-worker-N` actor and `--tool` per session; merge brain Markdown through normal PRs and still prefer **one merge point** for `active_state.md`.
 - **Orchestrator pattern** (e.g. Cursor parent + workers, or any multi-step automation): parent runs `brain:pack` once with `BRAIN_TASK` / `BRAIN_ACTOR` (or flags) and passes the same blob to children; children write notes under `.project-brain/sessions/`; one actor merges durable facts into features/modules/decisions and updates `active_state.md`.
 - Capture handoffs in `.project-brain/sessions/` when work is interrupted or handed off between tools or people.
 - Update the brain before opening a PR.

@@ -94,7 +94,7 @@ export function buildSessionMarkdown({ branch, taskId, actor, tool, parentRun, c
     `- **task_id**: ${taskId || '(none — pass --task <id> when multiple agents or humans share one branch)'}`,
     `- **branch**: ${branch}`,
     `- **actor**: ${actor || '(github handle, agent name, or Cursor sub-agent label)'}`,
-    `- **tool**: ${tool || '(cursor|claude|gemini|human|other)'}`,
+    `- **tool**: ${tool || '(cursor|claude|gemini|codex|human|other)'}`,
     `- **parent_run**: ${parentRun || '(orchestrator / parent agent id if applicable)'}`,
     '',
     '## Changed files (at start)',

@@ -33,6 +33,10 @@ ln -sfn ../project-brain skills/project-brain
 bash skills/project-brain/bin/setup.sh
 ```
 
+## Updating from upstream
+
+From an app repo: `npm run brain:update-skill` (runs `skills/project-brain/bin/update.sh`). If the skill checkout has no tracking branch, it fetches **https://github.com/nicenoize/project-brain** and fast-forwards `main` (override with `PROJECT_BRAIN_UPSTREAM_URL`, or set `PROJECT_BRAIN_REMOTE=origin` to keep the old “named remote only” behavior).
+
 ## What to commit in an application repo
 
 Commit:
@@ -59,6 +63,7 @@ Do not commit:
 .project-brain/vector-db/
 .project-brain/index_manifest.json
 .project-brain/search_index.json
+.worktrees/
 ~/.cavemem/
 ```
 
@@ -115,6 +120,8 @@ npm run brain:impact -- QdrantStore
 npm run brain:pack -- "auth checkout module" --max-tokens 3000
 npm run brain:session -- start --task issue-123-slug --actor alice --tool human
 npm run brain:session -- end --task issue-123-slug
+npm run brain:worktree -- spawn --count 3 --base develop --type feature --issue 456 --slug parallel-audit --tool codex
+npm run brain:worktree -- list
 npm run brain:graph -- --format json
 npm run brain:eval
 npm run brain:sync
@@ -140,9 +147,13 @@ BRAIN_TASK=issue-123-slug
 BRAIN_ACTOR=cursor-worker-b
 BRAIN_TASK_BOOST=0.14
 BRAIN_ACTOR_BOOST=0.06
+# Optional default for brain:worktree spawn (--tool overrides): cursor | claude | gemini | codex | …
+# BRAIN_WORKTREE_TOOL=cursor
 ```
 
 `BRAIN_TASK` / `BRAIN_ACTOR` (or `brain:search|pack|ask --task … --actor …`) add a metadata boost so session handoffs and chunks tagged with the same `task_id` / `actor` in frontmatter rank higher—useful when Cursor, Claude, Gemini, or multiple humans work in parallel on one repo.
+
+**Parallel branches (multiple agent sessions):** run `npm run brain:worktree -- spawn --count N [--tool cursor|claude|gemini|codex|…] …` from the app repo root. Open each printed directory in its own session (Cursor, Claude Code, Codex CLI, Gemini, etc.), run `brain:session -- start` there with the suggested `--task`, `<tool>-worker-N` actor, and `--tool`, and use matching `BRAIN_TASK` / `BRAIN_ACTOR` for `brain:pack` / `brain:ask`. Default tool is `claude`; set **`BRAIN_WORKTREE_TOOL`** or **`--tool`** for other stacks. Worktrees default to `<repo>/.worktrees/` (ignored by setup); set `BRAIN_WORKTREE_DIR` or pass `--dir` to place them elsewhere. Run `npm run brain:index` (or `brain:sync`) per worktree if retrieval should reflect that checkout’s files.
 
 **LanceDB upgrade:** if commands fail with Lance “schema” / “fields did not match” errors after pulling a newer Project Brain, delete the local table and rebuild: `rm -rf .project-brain/vector-db && npm run brain:index -- --force`.
 

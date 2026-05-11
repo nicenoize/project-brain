@@ -41,8 +41,21 @@ if [ -n "$upstream" ]; then
   target="$upstream"
   git -C "$SKILL_DIR" fetch "$remote" --prune
 else
-  remote="${PROJECT_BRAIN_REMOTE:-origin}"
   branch="${PROJECT_BRAIN_BRANCH:-main}"
+  # Default: pull from canonical public repo (not whatever happens to be named "origin").
+  # Override URL: PROJECT_BRAIN_UPSTREAM_URL. Override remote name: PROJECT_BRAIN_UPSTREAM_REMOTE.
+  # Legacy: set PROJECT_BRAIN_REMOTE (e.g. origin) to fetch/merge from a specific remote by name only.
+  if [ -n "${PROJECT_BRAIN_REMOTE:-}" ]; then
+    remote="$PROJECT_BRAIN_REMOTE"
+  else
+    canonical_url="${PROJECT_BRAIN_UPSTREAM_URL:-https://github.com/nicenoize/project-brain.git}"
+    remote="${PROJECT_BRAIN_UPSTREAM_REMOTE:-project-brain-upstream}"
+    if git -C "$SKILL_DIR" remote get-url "$remote" >/dev/null 2>&1; then
+      git -C "$SKILL_DIR" remote set-url "$remote" "$canonical_url"
+    else
+      git -C "$SKILL_DIR" remote add "$remote" "$canonical_url"
+    fi
+  fi
   target="$remote/$branch"
   git -C "$SKILL_DIR" fetch "$remote" "$branch" --prune
 fi
