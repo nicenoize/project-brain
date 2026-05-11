@@ -75,6 +75,7 @@ Allowed commit types:
 
 - Use a stable **task id** per parallel workstream (issue slug, feature name, or orchestrator run id).
 - Start session handoffs with `brain:session -- start --task … --actor … --tool …` so Cursor, Claude, Gemini, and humans can each have a distinct session file on the same branch.
+- For **parallel work on different branches** (e.g. multiple Cursor windows, Claude Code, Codex, or Gemini sessions), use `npm run brain:worktree -- spawn --count N [--tool …] …` so each worker gets its own checkout and branch; run `brain:session` **inside** that worktree with the suggested per-worker `--task`, `<tool>-worker-N` actor, and matching `--tool` (see **`BRAIN_WORKTREE_TOOL`** for a default).
 - Prefer **one merge point** for `active_state.md`; use the leases / workstreams tables and `.project-brain/sessions/` for concurrent edits.
 - When packing context for a specific stream, set `BRAIN_TASK` / `BRAIN_ACTOR` or pass `--task` / `--actor` to `brain:pack` / `brain:ask` / `brain:search`.
 

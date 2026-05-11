@@ -64,9 +64,12 @@ The same Markdown brain is shared by **humans**, **Cursor agents**, **Claude**, 
 | Mechanism | Role |
 |-----------|------|
 | `active_state.md` | Team radar: workstreams table, optional **file leases**, blockers, overlaps. Prefer a **single merge point** (one human or lead agent) to avoid constant conflicts. |
-| `.project-brain/sessions/*.md` | Short-lived handoffs. Start with `npm run brain:session -- start --task <id> --actor <label> --tool cursor\|claude\|gemini\|human\|other`; end with `end --task <id>`. Filenames include branch + task + timestamp so parallel streams on one branch do not clobber each other. |
+| `.project-brain/sessions/*.md` | Short-lived handoffs. Start with `npm run brain:session -- start --task <id> --actor <label> --tool cursor\|claude\|gemini\|codex\|human\|other`; end with `end --task <id>`. Filenames include branch + task + timestamp so parallel streams on one branch do not clobber each other. |
 | Frontmatter on sessions | `task_id`, `actor`, `tool`, `parent_run` are indexed on chunk records for **task/actor boosts** in hybrid search. |
 | `BRAIN_TASK` / `BRAIN_ACTOR` or CLI flags | Passed into `brain:search`, `brain:pack`, and `brain:ask` so packing for a sub-agent favors its own session text. |
+| `npm run brain:worktree` | Spawns Git worktrees with GitFlow branch names (`spawn --count N`, optional `--base`, `--issue`, `--slug`, `--tool` or `BRAIN_WORKTREE_TOOL`). Each worker should use one checkout only; run `brain:session` in that directory with the suggested `--task`, `<tool>-worker-N` actor, and `--tool` (Cursor, Claude, Codex, Gemini, …). |
+
+**Parallel directories:** Git worktrees isolate working files per branch; brain Markdown still merges through Git. Rebuild the local semantic index in each worktree (`npm run brain:index` or `brain:sync`) if retrieval must reflect that tree’s files.
 
 **Orchestrator pattern:** a parent agent runs `brain:pack` once (with task/actor set), distributes the blob to workers, collects edits, and one actor merges durable updates into features/modules/decisions plus `active_state.md`.
 

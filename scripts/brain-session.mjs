@@ -28,7 +28,7 @@ else if (command === 'end') await endSession(flags);
 else if (command === 'list') await listSessions(subArgs.includes('--json'));
 else if (command === 'clean') await cleanSessions();
 else {
-  console.error('Usage: npm run brain:session -- start|end|list|clean [--task <id>] [--actor <label>] [--tool cursor|claude|gemini|human|other] [--parent <run-id>]');
+  console.error('Usage: npm run brain:session -- start|end|list|clean [--task <id>] [--actor <label>] [--tool cursor|claude|gemini|codex|human|other] [--parent <run-id>]');
   console.error('       npm run brain:session -- list [--json]');
   process.exit(1);
 }

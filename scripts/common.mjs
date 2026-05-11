@@ -76,6 +76,7 @@ export function mergePackageScripts(pkg) {
     'brain:guard': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-guard.mjs',
     'brain:health': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-health.mjs',
     'brain:session': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-session.mjs',
+    'brain:worktree': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-worktree.mjs',
     'brain:pack': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-pack.mjs',
     'brain:symbol': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-search.mjs --type code --symbol',
     'brain:impact': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-impact.mjs',
