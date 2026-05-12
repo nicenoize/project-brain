@@ -51,6 +51,7 @@ Commit:
 .project-brain/modules/
 .project-brain/decisions/
 .project-brain/work-packages/
+.project-brain/orchestration/
 .project-brain/sessions/
 .project-brain/eval.json
 .github/PULL_REQUEST_TEMPLATE.md
@@ -65,6 +66,7 @@ Do not commit:
 .project-brain/vector-db/
 .project-brain/index_manifest.json
 .project-brain/search_index.json
+.project-brain/runner-logs/
 .worktrees/
 ~/.cavemem/
 ```
@@ -132,6 +134,7 @@ npm run brain:pack -- "resume current work" --mode resume --max-tokens 1200
 npm run brain:pack -- "architecture map" --mode minimal --max-tokens 800
 npm run brain:ticket -- "large auth hardening task" --packages 4 --write
 npm run brain:ticket -- create "large auth hardening task" --packages 4 --github
+npm run brain:orchestrate -- --limit 6 --concurrency 3 --write
 npm run brain:work -- start --issue 123 --slug auth-hardening --actor codex --tool codex --files lib/auth.ts
 npm run brain:lease -- add "lib/auth.ts" --task issue-123-auth-hardening --actor codex
 npm run brain:pr -- prepare --write .project-brain/pr-body.md
@@ -175,6 +178,21 @@ For oversized or multi-agent work, split before coding:
 npm run brain:ticket -- "auth billing migration" --packages 4 --files lib/auth.ts,lib/billing.ts --modules auth,billing --write
 npm run brain:worktree -- spawn --count 3 --base develop --type feature --issue 123 --slug auth-billing --tool codex
 ```
+
+For backlog orchestration from GitHub issues:
+
+```bash
+npm run brain:orchestrate -- --limit 8 --concurrency 3 --label agent-ready --write --write-packages
+npm run brain:orchestrate -- --refill --limit 8 --concurrency 3 --label agent-ready --write
+npm run brain:orchestrate -- --watch --interval 120 --concurrency 3 --label agent-ready --write
+# optional: add --spawn-worktrees after reviewing the plan
+# optional: add --launch-runners with an explicit runner command template
+npm run brain:orchestrate -- --refill --concurrency 3 --label agent-ready --spawn-worktrees --launch-runners --runner-cmd 'codex exec {prompt}'
+```
+
+`--refill` counts active workstreams in `.project-brain/active_state.md` and only assigns open worker slots. `--watch` keeps polling/refilling until stopped, so finishing a package with `brain:work -- end --task ...` frees a slot for the next issue on the next cycle.
+
+`--launch-runners` starts one detached runner process per spawned worktree. Runner command placeholders are shell-quoted: `{prompt}`, `{task}`, `{actor}`, `{tool}`, `{branch}`, `{issue}`, `{title}`, `{cwd}`. The runner also receives `BRAIN_TASK`, `BRAIN_ACTOR`, `BRAIN_TOOL`, `BRAIN_ISSUE`, `BRAIN_BRANCH`, and `BRAIN_RUNNER_PROMPT` in its environment. Logs default to `.project-brain/runner-logs/`.
 
 Use `brain:lease -- list` before assigning workers and `brain:lease -- add ...` before editing shared files.
 

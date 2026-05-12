@@ -17,6 +17,7 @@
     "brain:work": "node scripts/brain-work.mjs",
     "brain:pr": "node scripts/brain-pr.mjs",
     "brain:ticket": "node scripts/brain-ticket.mjs",
+    "brain:orchestrate": "node scripts/brain-orchestrate.mjs",
     "brain:worktree": "node scripts/brain-worktree.mjs",
     "brain:pack": "node scripts/brain-pack.mjs",
     "brain:symbol": "node scripts/brain-search.mjs --type code --symbol",

@@ -102,6 +102,7 @@ export function mergePackageScripts(pkg) {
     'brain:work': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-work.mjs',
     'brain:pr': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-pr.mjs',
     'brain:ticket': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-ticket.mjs',
+    'brain:orchestrate': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-orchestrate.mjs',
     'brain:worktree': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-worktree.mjs',
     'brain:pack': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-pack.mjs',
     'brain:symbol': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-search.mjs --type code --symbol',

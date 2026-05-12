@@ -12,7 +12,7 @@ pkg = mergePackageScripts(mergePackageDeps(pkg));
 write(packagePath, JSON.stringify(pkg, null, 2) + '\n');
 
 let ignore = read('.gitignore', '');
-const entries = ['.project-brain/vector-db/', '.project-brain/index_manifest.json', '.project-brain/search_index.json', '.worktrees/'];
+const entries = ['.project-brain/vector-db/', '.project-brain/index_manifest.json', '.project-brain/search_index.json', '.project-brain/runner-logs/', '.worktrees/'];
 for (const entry of entries) {
   if (!ignore.includes(entry)) ignore += `${ignore.endsWith('\n') || ignore === '' ? '' : '\n'}${entry}\n`;
 }
