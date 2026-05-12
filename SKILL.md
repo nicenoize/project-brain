@@ -32,6 +32,7 @@ Choose the smallest workflow command that matches the user's intent:
 | Start non-trivial implementation | Prefer `npm run brain:work -- start ...` so branch, session, workstream, leases, and initial pack stay aligned. |
 | Task looks too large, vague, cross-module, or likely to overwhelm one agent | Run `npm run brain:ticket -- "task title" --packages N --write` before coding. Use its size score and package split. |
 | User asks to create GitHub tickets/issues | Run `brain:ticket -- create ... --github` only when `gh` is installed/authenticated or the GitHub connector is available. Otherwise write the package plan locally. |
+| User asks to pull issues/backlog and distribute work across agents | Run `npm run brain:orchestrate -- --limit N --concurrency M --write` first. Use `--refill` or `--watch` to keep worker slots full as tasks finish. Review the plan before `--spawn-worktrees` or `--launch-runners`. |
 | Multiple agents/humans may edit overlapping files | Use `brain:lease -- add ...` before editing and `brain:lease -- list` before assigning work. |
 | Parallel work on separate branches | Use `brain:ticket` first, then `brain:worktree -- spawn --count N ...`; each worker starts a session with the printed task/actor/tool. |
 | Long session, compaction, or handoff | Run `npm run brain:compact` with `BRAIN_TASK`, `BRAIN_ACTOR`, and `BRAIN_TOOL` set. |
@@ -53,6 +54,7 @@ Heuristic for splitting work: if a task touches more than 5 files, more than 1 m
 - `.project-brain/modules/*.md` — architecture/module specs.
 - `.project-brain/decisions/*.md` — durable decisions and rationale.
 - `.project-brain/work-packages/*.md` — agent-ready ticket splits for large work.
+- `.project-brain/orchestration/*.md` — backlog-to-worker orchestration plans.
 - `.project-brain/sessions/*.md` — optional session handoffs.
 
 ## Generated files
@@ -124,6 +126,11 @@ npm run brain:pack -- "architecture map" --mode minimal --max-tokens 800
 npm run brain:pack -- "query text" --task issue-99-slug --actor cursor-worker-a
 npm run brain:ticket -- "large task title" --packages 4 --write
 npm run brain:ticket -- create "large task title" --packages 4 --github
+npm run brain:orchestrate -- --limit 6 --concurrency 3 --write
+npm run brain:orchestrate -- --limit 6 --concurrency 3 --write --write-packages
+npm run brain:orchestrate -- --refill --limit 6 --concurrency 3 --write
+npm run brain:orchestrate -- --watch --interval 120 --concurrency 3 --write
+npm run brain:orchestrate -- --refill --concurrency 3 --spawn-worktrees --launch-runners --runner-cmd 'codex exec {prompt}'
 npm run brain:work -- start --issue 99 --slug checkout-hardening --actor codex --tool codex --files lib/auth.ts
 npm run brain:lease -- add "lib/auth.ts" --task issue-99-checkout-hardening --actor codex
 npm run brain:pr -- prepare --write .project-brain/pr-body.md
@@ -268,6 +275,24 @@ When a task is too large for one agent or spans multiple modules:
 7. One orchestrator or merge actor owns `active_state.md`, dependency reconciliation, and final PR preparation.
 
 Do not parallelize tightly coupled edits just because several packages exist. Discovery or integration packages should run serially when they define or reconcile dependencies.
+
+### Orchestrate issue backlog
+
+When the user wants Project Brain to pull GitHub issues and distribute work across several agents:
+
+1. Run `npm run brain:orchestrate -- --limit N --concurrency M --write` to fetch open issues with `gh issue list`, score them, split them into packages, and assign the first runnable package to each worker slot.
+2. Use labels/search to control the queue, for example `--label agent-ready` or `--search "milestone:v1"`.
+3. Review `.project-brain/orchestration/*.md` before spawning workers. The plan states which packages are runnable, serial, or blocked by discovery/integration.
+4. Add `--write-packages` when each issue should also get a durable `.project-brain/work-packages/*.md` plan.
+5. Use `--refill` to count active workstreams in `.project-brain/active_state.md` and assign only open slots.
+6. Use `--watch --interval 120` when you want a local queue runner that keeps polling and refilling slots after workers call `brain:work -- end --task ...`.
+7. Add `--spawn-worktrees` only after reviewing the plan; it creates worktrees for the current runnable worker slots.
+8. Add `--launch-runners --runner-cmd '...'` only when the user explicitly wants runner processes started. Runner command placeholders are shell-quoted: `{prompt}`, `{task}`, `{actor}`, `{tool}`, `{branch}`, `{issue}`, `{title}`, `{cwd}`.
+9. Runner processes receive `BRAIN_TASK`, `BRAIN_ACTOR`, `BRAIN_TOOL`, `BRAIN_ISSUE`, `BRAIN_BRANCH`, and `BRAIN_RUNNER_PROMPT`; logs default to `.project-brain/runner-logs/`.
+10. Keep `--concurrency` at the number of tickets/packages the team can actively review, not the maximum number of agents available.
+11. After workers finish, either let `--watch` refill automatically or run `brain:orchestrate -- --refill` again.
+
+The orchestrator plans and assigns work; it does not replace review, integration, or final PR ownership. It can spawn worktrees and launch configured CLI runner processes, but one merge actor should still reconcile `active_state.md`, package dependencies, and final PRs.
 
 ### Coordinate parallel edits
 

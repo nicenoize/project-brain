@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BRAIN_DIR, ensureDir, exists, write } from './common.mjs';
 
-const dirs = ['features', 'modules', 'decisions', 'sessions', 'work-packages', 'vector-db'].map(d => path.join(BRAIN_DIR, d));
+const dirs = ['features', 'modules', 'decisions', 'sessions', 'work-packages', 'orchestration', 'vector-db'].map(d => path.join(BRAIN_DIR, d));
 dirs.forEach(ensureDir);
 
 const evalTemplateCandidates = [
