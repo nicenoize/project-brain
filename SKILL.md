@@ -45,6 +45,8 @@ Heuristic for splitting work: if a task touches more than 5 files, more than 1 m
 
 ## Source of truth files
 
+**Hierarchy (trust order):** (1) Git-tracked `.project-brain/` root maps and plans — `context_index.md`, `active_state.md`, `product_plan.md`, `repo_context.md`, `master_plan.md`, optional hand-maintained `MODULE_MAP.md`; (2) structured subtrees — `decisions/`, `modules/`, `features/`, `work-packages/`, `orchestration/` (use frontmatter `status: canonical|draft|deprecated` and `layer: architecture|decision|session|generated` where helpful); (3) `sessions/` — ephemeral handoffs and auto-compact slices, **not** canonical until promoted. See `templates/brain/DECISIONS.md` for ADR discipline.
+
 - `.project-brain/context_index.md` — compact low-token map of the whole project.
 - `.project-brain/master_plan.md` — full imported project plan, if present.
 - `.project-brain/product_plan.md` — structured product/roadmap summary.
@@ -52,7 +54,8 @@ Heuristic for splitting work: if a task touches more than 5 files, more than 1 m
 - `.project-brain/active_state.md` — who is working on what.
 - `.project-brain/features/*.md` — feature specs and progress.
 - `.project-brain/modules/*.md` — architecture/module specs.
-- `.project-brain/decisions/*.md` — durable decisions and rationale.
+- `.project-brain/decisions/*.md` — durable decisions and rationale. Discipline: `templates/brain/DECISIONS.md` (copied to `.project-brain/DECISIONS.md` on `brain:init` when missing). New ADR file: `npm run brain:adr -- "short title"`.
+- `.project-brain/MODULE_MAP.md` — optional **hand-maintained** map of services/packages/deps (seed from `templates/brain/MODULE_MAP.md` on init); link it from `context_index.md` when you use it. Not auto-generated.
 - `.project-brain/work-packages/*.md` — agent-ready ticket splits for large work.
 - `.project-brain/orchestration/*.md` — backlog-to-worker orchestration plans.
 - `.project-brain/sessions/*.md` — optional session handoffs.
@@ -101,6 +104,7 @@ When asked to initialize:
 npm run brain:init
 npm run brain:index
 npm run brain:health
+npm run brain:adr -- "short decision title"
 ```
 
 When asked to search context, default to the smart router which picks the cheapest correct retrieval automatically:
@@ -121,6 +125,7 @@ npm run brain:search -- "query text" --modules-only
 npm run brain:symbol -- SymbolName SymbolName
 npm run brain:impact -- SymbolName
 npm run brain:pack -- "query text" --max-tokens 3000
+npm run brain:pack -- "query text" --print-budget
 npm run brain:pack -- "resume current work" --mode resume --max-tokens 1200
 npm run brain:pack -- "architecture map" --mode minimal --max-tokens 800
 npm run brain:pack -- "query text" --task issue-99-slug --actor cursor-worker-a

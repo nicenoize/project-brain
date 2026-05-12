@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { execSync } from 'node:child_process';
 
 export async function retrieve(query, store, embedder, opts = {}) {
@@ -11,13 +12,14 @@ export async function retrieve(query, store, embedder, opts = {}) {
   const keyword = tfidfScore(query, all);
   const symbol = symbolScore(query, all, opts);
   const maxKeyword = Math.max(1, ...keyword.values());
-  const context = retrievalContext(opts);
+  const context = retrievalContext({ ...opts, query });
   const alpha = Number(opts.alpha || process.env.BRAIN_HYBRID_ALPHA || 0.7);
+  const keywordScale = keywordScaleForContext(context);
 
   return all
     .map(record => {
       const denseScore = denseScores.get(record.id) || 0;
-      const keywordScore = (keyword.get(record.id) || 0) / maxKeyword;
+      const keywordScore = ((keyword.get(record.id) || 0) / maxKeyword) * keywordScale;
       const symbolMatchScore = symbol.get(record.id) || 0;
       const metadataScore = metadataBoost(record, context);
       return {
@@ -81,13 +83,27 @@ export function tokenize(text) {
 
 export function retrievalContext(opts = {}) {
   const changed = new Set(splitList(process.env.BRAIN_CONTEXT_FILES || opts.contextFiles || '').concat(gitChangedFiles()));
+  const query = trimStr(opts.query ?? '');
   return {
     branch: opts.branch || process.env.BRAIN_BRANCH || gitBranch(),
     changed,
     symbolMode: Boolean(opts.symbol || opts.expectedSymbol),
     taskId: trimStr(opts.taskId ?? process.env.BRAIN_TASK),
-    actor: trimStr(opts.actor ?? process.env.BRAIN_ACTOR)
+    actor: trimStr(opts.actor ?? process.env.BRAIN_ACTOR),
+    query,
+    architectural: looksArchitecturalQuery(query),
+    mentionsTest: /\b(test|tests|spec|jest|vitest|e2e|cypress|playwright|mock|fixture)\b/i.test(query)
   };
+}
+
+/** Heuristic for doc-style / architecture questions; shared with brain:ask routing. */
+export function looksArchitecturalQuery(q) {
+  const s = String(q || '').trim();
+  if (!s) return false;
+  return (
+    /^(how|why|where|when|which|what|who)\b/i.test(s) ||
+    /\b(decision|policy|architecture|architectural|plan|convention|workflow|gitflow|roadmap|vision|adr\b|rfc\b|design doc|blueprint|non-goal|requirements)\b/i.test(s)
+  );
 }
 
 function metadataBoost(record, context) {
@@ -105,7 +121,108 @@ function metadataBoost(record, context) {
   if (context.actor && record.actor && record.actor === context.actor) {
     boost += Number(process.env.BRAIN_ACTOR_BOOST || 0.06);
   }
+  boost += pathHeuristicAdjust(record, context);
+  boost += recencyBoost(record);
+  boost += canonicalBrainBoost(record, context);
+  boost += shallowBrainPathBoost(record);
+  boost += slopPenalty(record, context);
   return boost;
+}
+
+function keywordScaleForContext(context) {
+  const base = Number(process.env.BRAIN_KEYWORD_SCALE || 1);
+  if (context.architectural) return base * Number(process.env.BRAIN_ARCH_KEYWORD_SCALE || 1.15);
+  return base;
+}
+
+function recencyBoost(record) {
+  const iso = String(record.mtime || '').trim();
+  if (!iso) return 0;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 0;
+  const days = (Date.now() - t) / (86400 * 1000);
+  const max = Number(process.env.BRAIN_RECENCY_MAX_BOOST || 0.06);
+  const halfLife = Number(process.env.BRAIN_RECENCY_HALF_LIFE_DAYS || 21);
+  if (days <= 0) return max;
+  const w = Math.exp(-Math.log(2) * (days / halfLife));
+  return max * w;
+}
+
+const CANONICAL_ROOT_NAMES = new Set(['context_index.md', 'master_plan.md', 'repo_context.md', 'product_plan.md', 'active_state.md']);
+
+function canonicalBrainBoost(record, context) {
+  const file = String(record.file || '');
+  if (!file.startsWith('.project-brain/')) return 0;
+  const base = Number(process.env.BRAIN_CANONICAL_ROOT_BOOST || 0.05);
+  let b = 0;
+  const baseName = file.split('/').pop() || '';
+  if (CANONICAL_ROOT_NAMES.has(baseName)) b += base * 1.6;
+  if (context.architectural && /\/(decisions|modules|features)\//.test(file)) b += base * 1.1;
+  const layer = String(record.layer || '').toLowerCase();
+  const status = String(record.docStatus || '').toLowerCase();
+  if (context.architectural && (layer === 'architecture' || layer === 'decision')) b += base * 0.9;
+  if (status === 'canonical') b += base * 0.8;
+  if (status === 'deprecated') b -= base * 1.2;
+  return b;
+}
+
+function shallowBrainPathBoost(record) {
+  const file = String(record.file || '');
+  if (!file.startsWith('.project-brain/')) return 0;
+  const depth = file.split('/').length - 1;
+  if (depth <= 1) return Number(process.env.BRAIN_BRAIN_ROOT_BOOST || 0.03);
+  if (depth >= 5) return -Number(process.env.BRAIN_DEEP_PATH_PENALTY || 0.02);
+  return 0;
+}
+
+function slopPenalty(record, context) {
+  let pen = 0;
+  const file = String(record.file || '');
+  const base = Number(process.env.BRAIN_SLOP_PENALTY || 0.12);
+  const prov = String(record.provenance || '').toLowerCase();
+  const syn = Boolean(record.synthetic);
+  const noix = Boolean(record.noindex);
+  const isSessionPath = file.includes('/sessions/');
+  const baseFile = path.basename(file);
+  const autoName = /__auto-compact__|\.auto/i.test(baseFile) || String(record.type || '').toLowerCase() === 'auto-compact';
+
+  if (noix) pen += base * 2.2;
+  if (prov === 'generated' || syn) pen += base * 1.4;
+  if (autoName) pen += base * 1.8;
+  if (isSessionPath && !autoName) pen += base * 0.55;
+  if (isSessionPath && context.architectural && !(context.taskId && record.taskId === context.taskId)) {
+    pen += base * 0.85;
+  }
+  if (context.taskId && record.taskId === context.taskId && isSessionPath) pen -= base * 0.5;
+  return -pen;
+}
+
+/** Down-rank test-only paths when the query is not test-focused; up-rank canonical brain docs for architectural queries. */
+function pathHeuristicAdjust(record, context) {
+  let adj = 0;
+  const file = String(record.file || '');
+  if (context.architectural && file.startsWith('.project-brain/')) {
+    const canonical =
+      /\/(decisions|modules|features)\//.test(file) ||
+      /(product_plan|context_index|repo_context|master_plan)\.md$/.test(file);
+    if (canonical || record.type === 'decision' || record.type === 'module' || record.type === 'feature') {
+      adj += Number(process.env.BRAIN_ARCH_DOC_BOOST || 0.12);
+    } else if (record.isSummary && !file.includes('/sessions/')) {
+      adj += Number(process.env.BRAIN_ARCH_SUMMARY_BOOST || 0.04);
+    }
+  }
+  if (!context.symbolMode && isTestLikePath(file) && !context.mentionsTest) {
+    adj -= Number(process.env.BRAIN_TEST_PATH_PENALTY || 0.08);
+  }
+  return adj;
+}
+
+function isTestLikePath(file) {
+  if (!file) return false;
+  return (
+    /(\/__tests__\/|\/tests?\/|\/test\/|\/e2e\/|\/spec\/|\.(test|spec)\.[cm]?[jt]sx?$)/i.test(file) ||
+    /\.(test|spec)\.[cm]?js$/i.test(file)
+  );
 }
 
 function trimStr(v) {
@@ -126,6 +243,9 @@ function recordText(record) {
     record.heading,
     record.title,
     record.type,
+    record.layer,
+    record.docStatus,
+    record.provenance,
     record.module,
     record.feature,
     record.decision,

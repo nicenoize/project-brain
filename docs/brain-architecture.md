@@ -70,7 +70,9 @@ app-repo/
 | `.project-brain/vector-db/` | LanceDB table when `BRAIN_STORE` resolves to `lance` (gitignored). |
 | `.project-brain/search_index.json` | JSON mirror of rows for health checks and `BRAIN_STORE=json` fallback (gitignored). |
 
-**Sync:** `npm run brain:sync` compares the manifest to the working tree and runs `brain-index` with incremental `BRAIN_CHANGED_FILES` / `BRAIN_DELETED_FILES`. **`npm run brain:sync -- --force`** always invokes `brain-index --force` even when the manifest matches disk (full rebuild path).
+**Sync:** `npm run brain:sync` compares each indexable file’s content hash to `index_manifest.json` and runs `brain-index` with **`BRAIN_CHANGED_FILES` / `BRAIN_DELETED_FILES`** so only changed or removed paths are re-embedded (incremental by default). **`npm run brain:sync -- --force`** always invokes `brain-index --force` for a full rebuild. There is no separate `BRAIN_INDEX_INCREMENTAL` flag: a second sync-state format would duplicate the manifest without adding safety.
+
+**Deferred / risky:** “Incremental” modes that skip manifest comparison or omit deletes can leave ghost rows; teams should rely on the manifest + sync pipeline above until a spec-backed design exists.
 
 **Deletes:** Index rows whose `file` no longer appears in the indexable glob set are removed even when that path was omitted from the manifest (for example, removed session markdown that never had stable manifest ids).
 

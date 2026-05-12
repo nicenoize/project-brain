@@ -5,7 +5,7 @@ import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
 
 const file = takeOption(process.argv, '--file') || `${BRAIN_DIR}/eval.json`;
-const topK = Number(takeOption(process.argv, '--top-k') || process.env.BRAIN_EVAL_TOP_K || 5);
+const topK = Number(takeOption(process.argv, '--top-k') || process.env.BRAIN_EVAL_TOP_K || 8);
 const cases = loadCases(file);
 if (!cases.length) {
   console.error(`No eval cases found. Create ${file} with [{"query":"...","expectedFiles":["..."]}].`);

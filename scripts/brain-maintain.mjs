@@ -49,10 +49,18 @@ function main() {
   let state = readIndexState();
   if (state.parseError) say('index parse failed; re-sync', '毳');
 
+  if (exists(path.join(BRAIN_DIR, 'active_state.md'))) {
+    const active = read(path.join(BRAIN_DIR, 'active_state.md'));
+    if (/^<<<<<<<|^=======|^>>>>>>>/m.test(active)) {
+      say('active_state.md still has merge markers — resolve tables before parallel work', '爭');
+    }
+  }
+
   if (!noSync && (state.needsSync || !state.hasIndex || forceSync)) {
     if (!state.hasIndex) say('cold index → sync', '寒譜');
     else if (state.deleted.length || state.changed.length) {
-      say(`ghost paths ${state.deleted.length}, hash drift ${state.changed.length}`, '故');
+      const sample = [...state.deleted, ...state.changed].slice(0, 3).join(', ');
+      say(`ghost paths ${state.deleted.length}, hash drift ${state.changed.length} (e.g. ${sample})`, '故');
     } else if (forceSync) say('force reindex', '強');
     const code = npmRun('brain:sync', forceSync ? ['--force'] : []);
     if (code !== 0) {
@@ -77,7 +85,8 @@ function main() {
     return hook ? 0 : 1;
   }
 
-  const healthCode = npmRun('brain:health', strict ? ['--strict-stale'] : []);
+  const healthArgs = strict ? ['--strict-stale', '--check-brain-refs'] : [];
+  const healthCode = npmRun('brain:health', healthArgs);
   if (healthCode !== 0) return hook ? 0 : healthCode;
   say('health OK', '康');
 

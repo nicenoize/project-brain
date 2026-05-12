@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 
 export const ROOT = process.cwd();
 export const BRAIN_DIR = path.join(ROOT, '.project-brain');
@@ -111,6 +111,7 @@ export function mergePackageScripts(pkg) {
     'brain:eval': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-eval.mjs',
     'brain:maintain': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-maintain.mjs',
     'brain:compact': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-compact.mjs',
+    'brain:adr': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-adr.mjs',
     'brain:install-cursor-hooks': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/install-cursor-hooks.mjs',
     'brain:install-hooks': 'bash skills/project-brain/bin/install-hooks.sh',
     'brain:update-skill': 'bash skills/project-brain/bin/update.sh'
@@ -179,7 +180,10 @@ export async function listIndexableFiles() {
       '**/node_modules/**', '**/.next/**', '**/dist/**', '**/build/**', '**/coverage/**',
       '.project-brain/vector-db/**', '.project-brain/search_index.json', '.project-brain/index_manifest.json',
       '.project-brain/.sync-state.json', '.project-brain/.sync-bg.log',
-      '**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock'
+      '**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock',
+      ...(process.env.BRAIN_INDEX_AUTO_COMPACT === '0'
+        ? []
+        : ['.project-brain/sessions/**/*__auto-compact__*.md'])
     ]
   });
 }
@@ -209,6 +213,32 @@ export function parseDoc(file, content) {
     if (match) data[match[1]] = match[2].replace(/^["']|["']$/g, '');
   }
   return { file, data, body: frontmatter[2] || '' };
+}
+
+/** Coerce common YAML/frontmatter boolean strings to boolean; unknown stays falsy for flags. */
+export function truthyFrontmatter(value) {
+  const s = String(value ?? '').trim().toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes' || s === 'on';
+}
+
+/**
+ * Drop paths ignored by Git (uses repo .gitignore / exclude). Opt-in: BRAIN_INDEX_GITIGNORE=1.
+ * Cheap batch: `git check-ignore -z --stdin`.
+ */
+export function filterGitignoredRelativePaths(paths) {
+  if (process.env.BRAIN_INDEX_GITIGNORE !== '1' || !paths.length) return paths;
+  const input = Buffer.from(paths.join('\0') + '\0', 'utf8');
+  const r = spawnSync('git', ['check-ignore', '-z', '--stdin'], {
+    cwd: ROOT,
+    input,
+    encoding: 'utf8',
+    maxBuffer: Math.max(8 * 1024 * 1024, paths.length * 256)
+  });
+  if (r.error || (r.status != null && r.status !== 0 && r.status !== 1)) return paths;
+  const ignored = new Set();
+  const outStr = r.stdout || '';
+  if (outStr) for (const p of outStr.split('\0')) if (p) ignored.add(p);
+  return paths.filter((p) => !ignored.has(p));
 }
 
 export function cosine(a, b) {

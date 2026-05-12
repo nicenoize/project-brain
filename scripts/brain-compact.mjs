@@ -62,6 +62,7 @@ function normalizeTool(s) {
 }
 
 async function indexSessionFile(filePath, expiresAt) {
+  if (process.env.BRAIN_COMPACT_EMBED_INDEX !== '1') return;
   const embedder = openEmbedder();
   const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
   const relative = path.relative(ROOT, filePath);
@@ -69,13 +70,14 @@ async function indexSessionFile(filePath, expiresAt) {
   const meta = readSessionMeta(filePath, path.basename(filePath));
   const branch = sh('git rev-parse --abbrev-ref HEAD') || 'unknown';
   const vector = await embedder.embed(`${relative}\n${text}`);
+  const stat = fs.statSync(filePath);
   await store.upsert([
     {
       id: `session:${sha256(relative)}`,
       file: relative,
       chunk: -1,
       title: `Auto-compact ${branch}${meta.taskId ? ` · ${meta.taskId}` : ''}`,
-      type: 'session',
+      type: 'auto-compact',
       heading: branch,
       text,
       embeddingText: `${relative}\n${text}`,
@@ -89,6 +91,12 @@ async function indexSessionFile(filePath, expiresAt) {
       actor: meta.actor || '',
       tool: meta.tool || '',
       parentRun: meta.parentRun || '',
+      provenance: 'generated',
+      layer: 'session',
+      docStatus: 'draft',
+      synthetic: true,
+      noindex: true,
+      mtime: stat.mtime.toISOString(),
       vector
     }
   ]);
@@ -157,6 +165,9 @@ async function main() {
   const body = [
     '---',
     'type: auto-compact',
+    'provenance: generated',
+    'noindex: true',
+    'layer: session',
     `task_id: ${JSON.stringify(taskId)}`,
     `branch: ${JSON.stringify(branch)}`,
     `actor: ${JSON.stringify(actor)}`,

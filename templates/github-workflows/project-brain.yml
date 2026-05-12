@@ -17,6 +17,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm install
+      # Strict CI: stale index, merge markers in active_state, broken .project-brain markdown links, optional eval.
+      # Optional: AGENTS.md or references/conventions.md — brain:guard warns on large TS batches if present and unstaged.
       - run: npm run brain:maintain -- --ci
       - env:
           GITHUB_HEAD_REF: ${{ github.head_ref }}

@@ -10,6 +10,11 @@ This repository is the **global Project Brain package**. It owns shared scripts,
 - Application repo (`.project-brain/`): project-specific product plan, architecture context, features, modules, decisions, active state, and handoffs.
 - Cavemem: optional local personal/session memory. It is not authoritative until promoted into `.project-brain/*.md`.
 
+### Git-native source of truth
+
+- **Canonical facts** live in **Git-tracked** Markdown under `.project-brain/` (root maps, `features/`, `modules/`, `decisions/`, …). **PR review** should treat brain updates like code: missing or misleading context is a defect.
+- **Semantic indexes** (JSON mirror, LanceDB, Qdrant) are **local derived caches** from those files plus selected source paths. They speed retrieval; they are not authoritative. After substantive edits, run `npm run brain:sync` (or `brain:maintain`) before trusting search-only answers.
+
 ## One-line setup after adding this folder
 
 Place or link this repository at:
@@ -54,6 +59,8 @@ Commit:
 .project-brain/orchestration/
 .project-brain/sessions/
 .project-brain/eval.json
+.project-brain/DECISIONS.md
+.project-brain/MODULE_MAP.md
 .github/PULL_REQUEST_TEMPLATE.md
 .github/workflows/project-brain.yml
 ```
@@ -111,9 +118,13 @@ Recommended team policy:
 
 Project Brain still keeps durable facts in `.project-brain/*.md`; Caveman only changes how agents communicate.
 
+`npm run brain:guard` warns when `context_index.md` exceeds `BRAIN_CONTEXT_INDEX_WARN_TOKENS` (default 700 estimated tokens). Use `npm run brain:guard -- --strict-context-index` to fail the hook on oversize indexes. `npm run brain:health -- --check-brain-refs` scans `.project-brain/**/*.md` for broken relative links; strict CI runs this via `brain:maintain -- --ci`. `brain:health` also prints **root brain doc ages** (git last commit, else mtime) for `context_index`, `repo_context`, `master_plan`, and `active_state`, warns when `repo_context.md` is older than `package.json` (mtime), and honors **`BRAIN_STALE_DOC_DAYS`** (set to a positive number to warn when any of those files exceed that age).
+
 ## Auto-compact (Cursor + terminal agents)
 
-- **`npm run brain:compact`** — writes a bounded resume slice (`brain:pack` budget, default 1200 tokens) to `.project-brain/sessions/…__auto-compact__….md` and indexes it. Set `BRAIN_TASK`, `BRAIN_ACTOR`, and `BRAIN_TOOL` (`cursor`, `claude`, `gemini`, `codex`, …) when multiple streams share one branch.
+- **`npm run brain:compact`** — writes a bounded resume slice (`brain:pack` budget, default 1200 tokens) to `.project-brain/sessions/…__auto-compact__….md`. Set `BRAIN_TASK`, `BRAIN_ACTOR`, and `BRAIN_TOOL` (`cursor`, `claude`, `gemini`, `codex`, …) when multiple streams share one branch.
+- **Vector index:** auto-compact Markdown is **excluded from `brain:index` globbing** by default (`*__auto-compact__*.md`). Embedding the compact into the local vector store is **opt-in**: set `BRAIN_COMPACT_EMBED_INDEX=1` when you explicitly want those rows in semantic search (otherwise rely on the on-disk file + `brain:pack`). Session handoffs from `brain:session` still embed as usual.
+- **Retrieval policy:** session paths, `provenance: generated`, `synthetic: true`, and `noindex: true` records are **strongly down-ranked** in hybrid scoring so architecture questions stay anchored on durable brain docs unless `BRAIN_TASK` matches a session chunk.
 - **Compact anti-recursion:** `brain:compact` uses resume packing and excludes prior auto-compact snapshots by default, so compact files do not quote older compact files forever. Set `BRAIN_PACK_INCLUDE_AUTO_COMPACT=1` only when you explicitly need old compact text.
 - **`npm run brain:install-cursor-hooks`** — installs `.cursor/hooks.json` entries for **`preCompact`** and **`stop`** so compaction runs without manual steps. Re-run after updating the skill; merges with existing hooks when possible.
 - **Claude / Codex / Gemini** — run the same `npm run brain:compact` from the repo root before thread reset or long sessions; see `skills/project-brain/templates/agents/COMPACT_INSTRUCTIONS.md`.
@@ -130,6 +141,7 @@ npm run brain:search -- "auth checkout module" --summary-only
 npm run brain:symbol -- QdrantStore QdrantStore
 npm run brain:impact -- QdrantStore
 npm run brain:pack -- "auth checkout module" --max-tokens 3000
+npm run brain:pack -- "auth checkout module" --tight-budget
 npm run brain:pack -- "resume current work" --mode resume --max-tokens 1200
 npm run brain:pack -- "architecture map" --mode minimal --max-tokens 800
 npm run brain:ticket -- "large auth hardening task" --packages 4 --write
@@ -152,6 +164,7 @@ npm run brain:install-cursor-hooks
 npm run brain:sync
 npm run brain:guard
 npm run brain:health
+npm run brain:adr -- "short decision title"
 ```
 
 ## Agent-ready workflow
@@ -209,13 +222,31 @@ OPENAI_API_KEY=
 BRAIN_HYBRID_ALPHA=0.7
 BRAIN_CONTEXT_FILES=app/page.tsx,lib/auth.ts
 BRAIN_CHANGED_FILE_BOOST=0.12
+BRAIN_ARCH_DOC_BOOST=0.1
+BRAIN_TEST_PATH_PENALTY=0.08
+BRAIN_CONTEXT_INDEX_WARN_TOKENS=700
+BRAIN_PACK_MAX_TOKENS=2600
 BRAIN_SESSION_TTL_HOURS=72
 BRAIN_TASK=issue-123-slug
 BRAIN_ACTOR=cursor-worker-b
 BRAIN_TASK_BOOST=0.14
 BRAIN_ACTOR_BOOST=0.06
+# Optional: exclude auto-compact paths from brain:index (default on); set to 0 to index them
+# BRAIN_INDEX_AUTO_COMPACT=0
+# Optional: vector-upsert after brain:compact (default off)
+# BRAIN_COMPACT_EMBED_INDEX=1
+# Optional: filter indexer list with git check-ignore (opt-in)
+# BRAIN_INDEX_GITIGNORE=1
+# Retrieval tuning (see scripts/retrieval.mjs)
+# BRAIN_SLOP_PENALTY=0.12
+# BRAIN_ARCH_KEYWORD_SCALE=1.15
+# BRAIN_RECENCY_MAX_BOOST=0.06
 # Optional default for brain:worktree spawn (--tool overrides): cursor | claude | gemini | codex | …
 # BRAIN_WORKTREE_TOOL=cursor
+# Warn when key brain root files exceed N days since last git commit (or mtime if untracked)
+# BRAIN_STALE_DOC_DAYS=21
+# Log brain:pack token usage to stderr (same as --print-budget)
+# BRAIN_PACK_PRINT_BUDGET=1
 ```
 
 `BRAIN_TASK` / `BRAIN_ACTOR` (or `brain:search|pack|ask --task … --actor …`) add a metadata boost so session handoffs and chunks tagged with the same `task_id` / `actor` in frontmatter rank higher—useful when Cursor, Claude, Gemini, or multiple humans work in parallel on one repo.
@@ -254,10 +285,10 @@ BRAIN_STORE=qdrant BRAIN_QDRANT_URL=http://localhost:6333 npm run brain:index
 - `.project-brain/*.md` files are the source of truth.
 - `.project-brain/context_index.md` is the compressed low-token map agents load first.
 - `.project-brain/master_plan.md` stores the full plan.
-- The semantic index is rebuilt locally from committed files and selected source files.
+- `npm run brain:sync` keeps the semantic index aligned incrementally: it diffs indexable files against `index_manifest.json` and re-embeds only changed or deleted paths (use `--force` for a full rebuild).
 - Retrieval uses LanceDB when `@lancedb/lancedb` is available, Qdrant when `BRAIN_STORE=qdrant`, with the atomic JSON cache as the default-compatible fallback.
 - TypeScript/JavaScript files use AST-aware chunking when the optional `typescript` package is installed, with regex fallback.
-- Search combines dense vector similarity, keyword relevance, exact symbol matching, metadata filters, and current branch/diff boosts.
+- Search combines dense vector similarity, keyword relevance (TF–IDF-style, boosted for architectural queries), exact symbol matching, metadata filters, recency (mtime), shallow-path heuristics for `.project-brain/`, and branch/diff boosts. Session and generated content are down-ranked unless task-scoped boosts apply.
 - Code records include symbols, exported symbols, symbol kinds, and line ranges for measurable retrieval quality.
 - `brain:impact` retrieves definitions, direct callers, callees, tests, decisions, and related chunks for a symbol.
 - `brain:graph` exports file/module/feature/decision/symbol/import links for inspection.
@@ -267,7 +298,7 @@ BRAIN_STORE=qdrant BRAIN_QDRANT_URL=http://localhost:6333 npm run brain:index
 
 ## Visualization
 
-See [docs/brain-architecture.md](docs/brain-architecture.md) for the source-of-truth layers, update flow, and CI layout.
+See [docs/brain-architecture.md](docs/brain-architecture.md) for the source-of-truth layers, update flow, and CI layout. For a **hand-maintained** service or package map, seed `.project-brain/MODULE_MAP.md` from `templates/brain/MODULE_MAP.md` (`brain:init` copies it when missing). Symbol-index roadmap (tree-sitter, etc.): [docs/roadmap-symbol-index.md](docs/roadmap-symbol-index.md).
 
 ```mermaid
 flowchart LR

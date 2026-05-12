@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexableFiles, parseDoc, isFastMode } from './common.mjs';
+import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexableFiles, parseDoc, isFastMode, truthyFrontmatter, filterGitignoredRelativePaths } from './common.mjs';
 import { dispatchChunker } from './chunk.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
@@ -28,7 +28,7 @@ if (oldManifest.model && oldManifest.model !== embedder.modelName) {
 }
 
 const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
-const files = await listIndexableFiles();
+const files = filterGitignoredRelativePaths(await listIndexableFiles());
 const indexableSet = new Set(files);
 let tsContext = null;
 try {
@@ -81,11 +81,13 @@ for (const file of changedFiles) {
   const hash = currentHashes.get(file);
   const stat = fs.statSync(path.join(ROOT, file));
   const doc = parseDoc(file, content);
+  if (truthyFrontmatter(doc.data.noindex)) continue;
   const chunks = await dispatchChunker(file, doc.body, doc.data, { tsContext });
   const vectors = await embedder.embedBatch(chunks.map(chunk => chunk.embeddingText || `${file}\n${chunk.text}`));
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     const sessionCoord = sessionCoordFields(file, doc.data);
+    const meta = brainDocMeta(file, doc.data);
     records.push({
       id: sha256(`${file}:${chunk.chunk}:${hash}`),
       file,
@@ -102,6 +104,7 @@ for (const file of changedFiles) {
       feature: inferFeature(file, doc.data),
       decision: inferDecision(file, doc.data),
       sourceKind: inferSourceKind(file),
+      ...meta,
       mtime: stat.mtime.toISOString(),
       hash,
       symbols: chunk.symbols || [],
@@ -156,7 +159,7 @@ async function rebuildModuleSummaries(store, embedder) {
 
   const groups = new Map();
   for (const record of all) {
-    if (!record.isSummary || record.type === 'session' || record.isModuleSummary) continue;
+    if (!record.isSummary || record.type === 'session' || record.type === 'auto-compact' || record.isModuleSummary) continue;
     const dir = path.dirname(record.file);
     if (!groups.has(dir)) groups.set(dir, []);
     groups.get(dir).push(record);
@@ -189,7 +192,7 @@ async function rebuildModuleSummaries(store, embedder) {
 
 async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords) {
   const all = await store.getAll();
-  const summaries = all.filter(record => record.isSummary && !record.isModuleSummary && !record.isProjectSummary && record.type !== 'session');
+  const summaries = all.filter(record => record.isSummary && !record.isModuleSummary && !record.isProjectSummary && record.type !== 'session' && record.type !== 'auto-compact');
   const featureGroups = new Map();
   for (const record of summaries) {
     if (!record.feature) continue;
@@ -289,4 +292,21 @@ function inferSourceKind(file) {
   if (/\.[cm]?[jt]sx?$/.test(file)) return 'code';
   if (/\.mdx?$/.test(file)) return 'doc';
   return 'other';
+}
+
+function brainDocMeta(file, data = {}) {
+  const provenance = String(data.provenance || '').trim() || inferProvenance(file, data);
+  const docStatus = String(data.status || '').trim();
+  const layer = String(data.layer || '').trim();
+  const synthetic = truthyFrontmatter(data.synthetic);
+  const noindex = truthyFrontmatter(data.noindex);
+  return { provenance, docStatus, layer, synthetic, noindex };
+}
+
+function inferProvenance(file, data = {}) {
+  const t = String(data.type || '').toLowerCase();
+  if (t === 'auto-compact') return 'generated';
+  if (file.includes('/sessions/') && file.includes('__auto-compact__')) return 'generated';
+  if (file.includes('/sessions/')) return 'human';
+  return 'human';
 }
