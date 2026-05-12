@@ -190,7 +190,7 @@ npm run brain:orchestrate -- --watch --interval 120 --concurrency 3 --label agen
 npm run brain:orchestrate -- --refill --concurrency 3 --label agent-ready --spawn-worktrees --launch-runners --runner-cmd 'codex exec {prompt}'
 ```
 
-`--refill` counts active workstreams in `.project-brain/active_state.md` and only assigns open worker slots. `--watch` keeps polling/refilling until stopped, so finishing a package with `brain:work -- end --task ...` frees a slot for the next issue on the next cycle.
+`--refill` counts active workstreams in `.project-brain/active_state.md` and only assigns open worker slots. `--watch` keeps polling/refilling until stopped, so finishing a package with `brain:work -- end --task ...` frees a slot for the next issue on the next cycle. When worktrees are spawned, the orchestrator records those assignments in `active_state.md` immediately so the next refill does not duplicate runners before they start their own sessions.
 
 `--launch-runners` starts one detached runner process per spawned worktree. Runner command placeholders are shell-quoted: `{prompt}`, `{task}`, `{actor}`, `{tool}`, `{branch}`, `{issue}`, `{title}`, `{cwd}`. The runner also receives `BRAIN_TASK`, `BRAIN_ACTOR`, `BRAIN_TOOL`, `BRAIN_ISSUE`, `BRAIN_BRANCH`, and `BRAIN_RUNNER_PROMPT` in its environment. Logs default to `.project-brain/runner-logs/`.
 
