@@ -151,6 +151,7 @@ export async function listIndexableFiles() {
     'server/**/*.{ts,tsx,js,jsx,md,mdx}',
     'actions/**/*.{ts,tsx,js,jsx,md,mdx}',
     'packages/**/*.{ts,tsx,js,jsx,md,mdx}',
+    'pkg/**/*.{ts,tsx,js,jsx,md,mdx}',
     'apps/**/*.{ts,tsx,js,jsx,md,mdx}',
     'hooks/**/*.{ts,tsx,js,jsx}',
     'workers/**/*.{ts,tsx,js,jsx}',
