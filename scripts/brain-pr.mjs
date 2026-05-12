@@ -98,7 +98,18 @@ function changedFiles(base) {
   const out = sh(`git diff --name-only ${q(base)}...HEAD`);
   const tracked = out ? out.split('\n').filter(Boolean) : sh('git diff --name-only HEAD').split('\n').filter(Boolean);
   const untracked = sh('git ls-files --others --exclude-standard').split('\n').filter(Boolean);
-  return [...new Set([...tracked, ...untracked])];
+  return [...new Set([...tracked, ...untracked])].filter(isReviewablePath);
+}
+
+function isReviewablePath(file) {
+  return ![
+    /^\.project-brain\/\.sync-state\.json$/,
+    /^\.project-brain\/runner-logs\//,
+    /^\.project-brain\/sessions\//,
+    /^\.project-brain\/search_index\.json$/,
+    /^\.project-brain\/index_manifest\.json$/,
+    /^\.project-brain\/vector-db\//
+  ].some(pattern => pattern.test(file));
 }
 
 function touchedModules(files) {

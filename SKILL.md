@@ -286,7 +286,7 @@ When the user wants Project Brain to pull GitHub issues and distribute work acro
 4. Add `--write-packages` when each issue should also get a durable `.project-brain/work-packages/*.md` plan.
 5. Use `--refill` to count active workstreams in `.project-brain/active_state.md` and assign only open slots.
 6. Use `--watch --interval 120` when you want a local queue runner that keeps polling and refilling slots after workers call `brain:work -- end --task ...`.
-7. Add `--spawn-worktrees` only after reviewing the plan; it creates worktrees for the current runnable worker slots.
+7. Add `--spawn-worktrees` only after reviewing the plan; it creates worktrees for the current runnable worker slots and records those assignments in `active_state.md` immediately.
 8. Add `--launch-runners --runner-cmd '...'` only when the user explicitly wants runner processes started. Runner command placeholders are shell-quoted: `{prompt}`, `{task}`, `{actor}`, `{tool}`, `{branch}`, `{issue}`, `{title}`, `{cwd}`.
 9. Runner processes receive `BRAIN_TASK`, `BRAIN_ACTOR`, `BRAIN_TOOL`, `BRAIN_ISSUE`, `BRAIN_BRANCH`, and `BRAIN_RUNNER_PROMPT`; logs default to `.project-brain/runner-logs/`.
 10. Keep `--concurrency` at the number of tickets/packages the team can actively review, not the maximum number of agents available.

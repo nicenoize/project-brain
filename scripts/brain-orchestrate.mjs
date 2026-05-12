@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { BRAIN_DIR, ROOT, ensureDir, slugify, write } from './common.mjs';
-import { activeStateJson } from './active-state.mjs';
+import { activeStateJson, addWorkstream } from './active-state.mjs';
 
 const args = process.argv.slice(2);
 const opts = parseArgs(args);
@@ -13,7 +13,7 @@ if (opts.help) {
   npm run brain:orchestrate -- --refill --limit 6 --concurrency 3 --write
   npm run brain:orchestrate -- --watch --interval 120 --concurrency 3 --label agent-ready --write
   npm run brain:orchestrate -- --label agent-ready --concurrency 4 --spawn-worktrees
-  npm run brain:orchestrate -- --label agent-ready --concurrency 4 --spawn-worktrees --launch-runners --runner-cmd 'codex exec "{prompt}"'
+  npm run brain:orchestrate -- --label agent-ready --concurrency 4 --spawn-worktrees --launch-runners --runner-cmd 'codex exec {prompt}'
   npm run brain:orchestrate -- --from-file issues.json --concurrency 2 --json
 
 Options:
@@ -78,8 +78,10 @@ function runOnce(extra = {}) {
   const issues = opts.fromFile ? readIssues(opts.fromFile).slice(0, issueLimit) : fetchGithubIssues({ ...opts, limit: issueLimit }).slice(0, issueLimit);
   const plan = buildOrchestration({ issues, concurrency, tool, base, openSlots, active, state, extra });
   if (opts.spawnWorktrees && plan.workerSlots.length) {
+    if (opts.launchRunners) ensureRunnerCommand(opts);
     const spawned = spawnWorktrees(plan, opts);
     plan.spawnedWorktrees = spawned;
+    recordSpawnedWorkstreams(spawned);
     if (opts.launchRunners) launchRunners(plan, spawned, opts);
   }
   if (opts.write || opts.writePackages) writePlan(plan, opts);
@@ -90,6 +92,7 @@ function buildOrchestration({ issues, concurrency, tool, base, openSlots = concu
   const normalized = issues.map(normalizeIssue);
   const activeIssueNumbers = new Set(active.map(w => issueNumberFromText(`${w.taskId} ${w.branch} ${w.scope}`)).filter(Boolean));
   const activeTasks = new Set(active.map(w => w.taskId).filter(Boolean));
+  const usedWorkerNumbers = workerNumbers(active, tool);
   const planned = normalized.map(issue => {
     const size = scoreIssue(issue);
     const packages = packageCountFor(size);
@@ -109,15 +112,19 @@ function buildOrchestration({ issues, concurrency, tool, base, openSlots = concu
     if (first && activeTasks.has(first.taskId)) continue;
     if (first) runnable.push({ issueNumber: issue.number, issueTitle: issue.title, ...first });
   }
-  const workerSlots = runnable.slice(0, openSlots).map((pkg, i) => ({
-    slot: i + 1,
-    actor: `${tool}-worker-${i + 1}`,
-    tool,
-    assignment: pkg,
-    sessionStart: `npm run brain:session -- start --task ${pkg.taskId} --actor ${tool}-worker-${i + 1} --tool ${tool}`,
-    pack: `BRAIN_TASK=${pkg.taskId} BRAIN_ACTOR=${tool}-worker-${i + 1} npm run brain:pack -- "${pkg.issueTitle}" --mode resume --max-tokens 1200`,
-    runnerPrompt: runnerPrompt(pkg, `${tool}-worker-${i + 1}`, tool)
-  }));
+  const workerSlots = runnable.slice(0, openSlots).map(pkg => {
+    const slot = nextWorkerNumber(usedWorkerNumbers);
+    const actor = `${tool}-worker-${slot}`;
+    return {
+      slot,
+      actor,
+      tool,
+      assignment: pkg,
+      sessionStart: `npm run brain:session -- start --task ${pkg.taskId} --actor ${actor} --tool ${tool}`,
+      pack: `BRAIN_TASK=${pkg.taskId} BRAIN_ACTOR=${actor} npm run brain:pack -- "${pkg.issueTitle}" --mode resume --max-tokens 1200`,
+      runnerPrompt: runnerPrompt(pkg, actor, tool)
+    };
+  });
   return {
     type: 'issue-orchestration',
     generatedAt: new Date().toISOString(),
@@ -311,6 +318,12 @@ function spawnWorktrees(plan) {
     const parsed = parseJsonFromOutput(result.stdout || '{}');
     const worker = parsed.workers?.[0];
     if (worker) {
+      a.branch = worker.branch;
+      slot.runnerPrompt = runnerPrompt(a, slot.actor, plan.tool);
+      for (const issuePlan of plan.issues) {
+        const pkg = issuePlan.workPackages.find(candidate => candidate.taskId === a.taskId);
+        if (pkg) pkg.branch = worker.branch;
+      }
       spawned.push({
         slot: slot.slot,
         path: worker.path,
@@ -328,11 +341,7 @@ function spawnWorktrees(plan) {
 }
 
 function launchRunners(plan, spawned, opts) {
-  const runnerCmd = opts.runnerCmd || process.env.BRAIN_RUNNER_CMD || '';
-  if (!runnerCmd) {
-    console.error('brain:orchestrate --launch-runners requires --runner-cmd or BRAIN_RUNNER_CMD.');
-    process.exit(1);
-  }
+  const runnerCmd = ensureRunnerCommand(opts);
   const logDir = path.resolve(ROOT, opts.runnerLogDir || process.env.BRAIN_RUNNER_LOG_DIR || '.project-brain/runner-logs');
   ensureDir(logDir);
   for (const worker of spawned) {
@@ -367,10 +376,33 @@ function launchRunners(plan, spawned, opts) {
         BRAIN_RUNNER_PROMPT: prompt
       }
     });
+    fs.closeSync(out);
     child.unref();
     worker.runnerPid = child.pid;
     worker.runnerLog = logPath;
     console.log(`Launched runner ${slot.actor} pid=${child.pid} log=${logPath}`);
+  }
+}
+
+function ensureRunnerCommand(opts) {
+  const runnerCmd = opts.runnerCmd || process.env.BRAIN_RUNNER_CMD || '';
+  if (!runnerCmd) {
+    console.error('brain:orchestrate --launch-runners requires --runner-cmd or BRAIN_RUNNER_CMD.');
+    process.exit(1);
+  }
+  return runnerCmd;
+}
+
+function recordSpawnedWorkstreams(spawned) {
+  for (const worker of spawned) {
+    addWorkstream({
+      taskId: worker.task,
+      owner: worker.actor,
+      tool: worker.tool,
+      branch: worker.branch,
+      scope: worker.issueNumber ? `#${worker.issueNumber} ${worker.title}` : worker.title,
+      status: 'active'
+    });
   }
 }
 
@@ -515,6 +547,21 @@ function activeWorkstreams(state) {
     const status = String(w.status || '').toLowerCase();
     return w.taskId && !['done', 'closed', 'complete', 'completed', 'cancelled', 'canceled'].includes(status);
   });
+}
+
+function workerNumbers(workstreams, tool) {
+  const prefix = `${tool}-worker-`;
+  return new Set(workstreams.map(w => String(w.owner || ''))
+    .filter(owner => owner.startsWith(prefix))
+    .map(owner => Number(owner.slice(prefix.length)))
+    .filter(Number.isInteger));
+}
+
+function nextWorkerNumber(used) {
+  let n = 1;
+  while (used.has(n)) n++;
+  used.add(n);
+  return n;
 }
 
 function issueNumberFromText(text) {
