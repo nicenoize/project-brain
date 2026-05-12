@@ -1,52 +1,82 @@
 import fs from 'node:fs';
-import crypto from 'node:crypto';
-const isCanonicalPackage = fs.existsSync('SKILL.md') && fs.existsSync('scripts/brain-index.mjs') && fs.existsSync('templates/PULL_REQUEST_TEMPLATE.md');
+import { exists, read, JSON_INDEX, staleIndexFromRecords } from './common.mjs';
+
+const argv = process.argv.slice(2);
+const strictStale = argv.includes('--strict-stale') || process.env.BRAIN_HEALTH_STRICT_STALE === '1';
+const jsonOut = argv.includes('--json');
+
+const isCanonicalPackage =
+  fs.existsSync('SKILL.md') && fs.existsSync('scripts/brain-index.mjs') && fs.existsSync('templates/PULL_REQUEST_TEMPLATE.md');
 const required = isCanonicalPackage
   ? ['SKILL.md', 'scripts/brain-index.mjs', 'scripts/brain-search.mjs', 'package.json']
   : [
-      'skills/project-brain/SKILL.md', '.project-brain/context_index.md', '.project-brain/product_plan.md',
-      '.project-brain/repo_context.md', '.project-brain/active_state.md', 'package.json'
+      'skills/project-brain/SKILL.md',
+      '.project-brain/context_index.md',
+      '.project-brain/product_plan.md',
+      '.project-brain/repo_context.md',
+      '.project-brain/active_state.md',
+      'package.json'
     ];
-let ok = true;
-for (const p of required) {
-  if (!fs.existsSync(p)) { console.error(`Missing: ${p}`); ok = false; }
+
+const missing = required.filter((p) => !fs.existsSync(p));
+let layoutOk = missing.length === 0;
+
+if (!fs.existsSync('.gitignore') || !fs.readFileSync('.gitignore', 'utf8').includes('.project-brain/vector-db/')) {
+  if (!jsonOut) console.error('Missing .project-brain/vector-db/ in .gitignore');
+  layoutOk = false;
 }
-if (!fs.existsSync('.gitignore') || !fs.readFileSync('.gitignore','utf8').includes('.project-brain/vector-db/')) {
-  console.error('Missing .project-brain/vector-db/ in .gitignore'); ok = false;
-}
-if (fs.existsSync('.project-brain/search_index.json')) {
+
+let expiredSessionCount = 0;
+let stale = { deleted: [], changed: [] };
+let indexParseError = false;
+
+if (exists(JSON_INDEX)) {
   try {
-    const index = JSON.parse(fs.readFileSync('.project-brain/search_index.json', 'utf8'));
-    const expired = (index.records || []).filter(r => String(r.id || '').startsWith('session:') && r.expiresAt && Date.parse(r.expiresAt) < Date.now());
-    if (expired.length) console.warn(`Expired Project Brain session records found (${expired.length}). Run: npm run brain:session -- clean`);
-    const stale = staleRecords(index.records || []);
-    if (stale.deleted.length) console.warn(`Project Brain index references deleted files (${stale.deleted.length}). Run: npm run brain:sync`);
-    if (stale.changed.length) console.warn(`Project Brain index has stale hashes (${stale.changed.length}). Run: npm run brain:sync`);
-  } catch {}
-}
-if (!ok) process.exit(1);
-console.log('Project Brain health check passed.');
-
-function staleRecords(records) {
-  const deleted = new Set();
-  const changed = new Set();
-  const seen = new Set();
-  for (const record of records) {
-    if (!record.file || record.file.startsWith('.project-brain/project-summary') || record.type?.endsWith('-summary')) continue;
-    if (seen.has(record.file)) continue;
-    seen.add(record.file);
-    if (!fs.existsSync(record.file)) {
-      deleted.add(record.file);
-      continue;
+    const index = JSON.parse(read(JSON_INDEX));
+    const expired = (index.records || []).filter(
+      (r) => String(r.id || '').startsWith('session:') && r.expiresAt && Date.parse(r.expiresAt) < Date.now()
+    );
+    expiredSessionCount = expired.length;
+    if (expiredSessionCount && !jsonOut) {
+      console.warn(`Expired Project Brain session records found (${expiredSessionCount}). Run: npm run brain:session -- clean`);
     }
-    if (record.hash) {
-      const current = hash(fs.readFileSync(record.file, 'utf8'));
-      if (current !== record.hash) changed.add(record.file);
+    stale = staleIndexFromRecords(index.records || []);
+    if (stale.deleted.length && !jsonOut) {
+      console.warn(`Project Brain index references deleted files (${stale.deleted.length}). Run: npm run brain:sync`);
     }
+    if (stale.changed.length && !jsonOut) {
+      console.warn(`Project Brain index has stale hashes (${stale.changed.length}). Run: npm run brain:sync`);
+    }
+  } catch {
+    indexParseError = true;
+    if (!jsonOut) console.warn('Project Brain: could not parse search_index.json for stale checks.');
   }
-  return { deleted: [...deleted], changed: [...changed] };
 }
 
-function hash(text) {
-  return crypto.createHash('sha256').update(text).digest('hex');
+const staleFail = Boolean(strictStale && (stale.deleted.length || stale.changed.length));
+const finalOk = layoutOk && !indexParseError && !staleFail;
+
+if (jsonOut) {
+  console.log(
+    JSON.stringify(
+      {
+        ok: finalOk,
+        missing,
+        stale,
+        strictStale,
+        expiredSessionCount,
+        indexParseError
+      },
+      null,
+      2
+    )
+  );
+} else {
+  if (staleFail) {
+    console.error('Strict stale check failed: run npm run brain:sync (or npm run brain:maintain).');
+  } else if (finalOk) {
+    console.log('Project Brain health check passed.');
+  }
 }
+
+process.exit(finalOk ? 0 : 1);

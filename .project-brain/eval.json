@@ -1,0 +1,26 @@
+[
+  {
+    "query": "Qdrant adapter",
+    "expectedFiles": ["scripts/store.mjs"],
+    "expectedSymbols": ["QdrantStore"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "prompt token budget",
+    "expectedFiles": ["scripts/brain-pack.mjs"],
+    "expectedSymbols": ["packPrompt"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "changed file boost",
+    "expectedFiles": ["scripts/retrieval.mjs"],
+    "expectedSymbols": ["metadataBoost"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "AST chunking",
+    "expectedFiles": ["scripts/chunk.mjs"],
+    "expectedSymbols": ["findSymbolsAst"],
+    "expectedTypes": ["code"]
+  }
+]

@@ -2,7 +2,9 @@
 
 ## Context
 
-The repo uses a JSON full-scan cache (`search_index.json`) rather than the declared LanceDB dependency. The embedding model (MiniLM-L6-v2, 384-dim) truncates at ~256 word pieces. No adapter pattern, no incremental upsert, no code-aware chunking, no hybrid retrieval. Goal: make retrieval faster, smarter, and more token-efficient while keeping Markdown as the authoritative source of truth.
+**Current state (2026):** `openStore()` selects LanceDB when `@lancedb/lancedb` is installed (`BRAIN_STORE=auto|lance`), with a JSON mirror at `search_index.json` for health and fallback. `store.close()` rewrites the mirror from Lance after indexing. The paragraphs below describe the original gap analysis and phased plan; some phases are done—treat the doc as a roadmap for remaining retrieval work, not a description of the current tree.
+
+The repo historically used only a JSON full-scan cache (`search_index.json`) before the Lance path landed. The embedding model (MiniLM-L6-v2, 384-dim) truncates at ~256 word pieces. Goal: make retrieval faster, smarter, and more token-efficient while keeping Markdown as the authoritative source of truth.
 
 ---
 

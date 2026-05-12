@@ -180,6 +180,24 @@ export class LanceStore extends BrainStore {
     return rows.map(normalizeRecord);
   }
 
+  /** Rewrite JSON mirror from the Lance table so health/search_index stay consistent after deletes. */
+  async flushMirrorFromLance() {
+    if (!this.mirrorEnabled) return;
+    try {
+      const rows = await this.getAll();
+      this.mirror.records = rows;
+      if (this.model) this.mirror.model = this.model;
+      this.mirror.persist();
+    } catch (error) {
+      if (this.mirrorStrict) throw error;
+      console.warn(`Project Brain mirror flush failed: ${error.message || error}`);
+    }
+  }
+
+  async close() {
+    await this.flushMirrorFromLance();
+  }
+
   async maybeMirrorUpsert(records) {
     if (!this.mirrorEnabled) return;
     try {
@@ -315,6 +333,23 @@ export class QdrantStore extends BrainStore {
       console.warn(`Project Brain mirror warning (qdrant delete): ${error.message || error}`);
       console.warn('Continuing with Qdrant as source of truth. Set BRAIN_JSON_MIRROR=0 to disable mirror writes.');
     }
+  }
+
+  async flushMirrorFromQdrant() {
+    if (!this.mirrorEnabled) return;
+    try {
+      const rows = await this.getAll();
+      this.mirror.records = rows;
+      if (this.model) this.mirror.model = this.model;
+      this.mirror.persist();
+    } catch (error) {
+      if (this.mirrorStrict) throw error;
+      console.warn(`Project Brain mirror flush failed: ${error.message || error}`);
+    }
+  }
+
+  async close() {
+    await this.flushMirrorFromQdrant();
   }
 }
 

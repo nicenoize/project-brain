@@ -51,6 +51,7 @@ Commit:
 .project-brain/modules/
 .project-brain/decisions/
 .project-brain/sessions/
+.project-brain/eval.json
 .github/PULL_REQUEST_TEMPLATE.md
 .github/workflows/project-brain.yml
 ```
@@ -124,6 +125,8 @@ npm run brain:worktree -- spawn --count 3 --base develop --type feature --issue 
 npm run brain:worktree -- list
 npm run brain:graph -- --format json
 npm run brain:eval
+npm run brain:maintain
+npm run brain:maintain -- --ci
 npm run brain:sync
 npm run brain:guard
 npm run brain:health

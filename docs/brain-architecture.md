@@ -5,7 +5,7 @@ Project Brain has one reusable package and many project brains.
 ```mermaid
 flowchart TD
   Global["Global Project Brain repo<br/>/Users/seebo/Coding/project-brain"] --> Skill["Reusable skill<br/>SKILL.md"]
-  Global --> Scripts["Reusable scripts<br/>brain:guard, brain:index, brain:update-skill"]
+  Global --> Scripts["Reusable scripts<br/>brain:guard, brain:index, brain:sync, brain:maintain"]
   Global --> Templates["Reusable templates<br/>PR template, GitHub workflow, Git hooks"]
   Global --> Conventions["Global conventions<br/>GitFlow, code rules, Cavemem + Caveman policy"]
 
@@ -13,11 +13,13 @@ flowchart TD
   App --> Link["skills/project-brain<br/>symlink/submodule/checkout"]
   Link --> Global
 
-  AppBrain --> Index["Local generated index<br/>.project-brain/search_index.json"]
+  AppBrain --> Index["Local generated index<br/>LanceDB + JSON mirror<br/>search_index.json"]
   Scripts --> Index
+  Scripts --> Maintain["npm run brain:maintain<br/>sync, health, optional eval"]
+  Maintain --> Index
   Scripts --> Guard["Guard checks<br/>branch, PR target, secrets, brain files"]
-  Templates --> CI["GitHub Actions<br/>fetch Project Brain + run checks"]
-  Templates --> Hooks["Local Git hooks<br/>update skill after pull/checkout"]
+  Templates --> CI["GitHub Actions<br/>brain:maintain --ci, brain:guard"]
+  Templates --> Hooks["Local Git hooks<br/>update skill + maintain on pull/checkout"]
 
   Dev["Developer / agent"] --> App
   Cavemem["Cavemem<br/>local/session recall"] --> AppBrain
@@ -44,6 +46,7 @@ app-repo/
     context_index.md
     product_plan.md
     repo_context.md
+    eval.json
     decisions/
     features/
     modules/
@@ -56,6 +59,24 @@ app-repo/
 ```
 
 `skills/project-brain` can be a symlink, Git submodule, mounted checkout, or CI checkout. It should not be a full copied fork unless the app intentionally vendors a pinned version.
+
+**`eval.json`:** optional but recommended. Holds retrieval smoke cases for `npm run brain:eval` / `brain:maintain -- --ci`. Copy from `skills/project-brain/templates/brain/eval.json` or run `npm run brain:init` (seeds `eval.json` when missing). If absent, CI skips strict eval (see workflow).
+
+## Semantic index lifecycle
+
+| Artifact | Role |
+|----------|------|
+| `.project-brain/index_manifest.json` | Per-file hashes and chunk id map (gitignored). |
+| `.project-brain/vector-db/` | LanceDB table when `BRAIN_STORE` resolves to `lance` (gitignored). |
+| `.project-brain/search_index.json` | JSON mirror of rows for health checks and `BRAIN_STORE=json` fallback (gitignored). |
+
+**Sync:** `npm run brain:sync` compares the manifest to the working tree and runs `brain-index` with incremental `BRAIN_CHANGED_FILES` / `BRAIN_DELETED_FILES`. **`npm run brain:sync -- --force`** always invokes `brain-index --force` even when the manifest matches disk (full rebuild path).
+
+**Deletes:** Index rows whose `file` no longer appears in the indexable glob set are removed even when that path was omitted from the manifest (for example, removed session markdown that never had stable manifest ids).
+
+**Mirror consistency:** When using Lance (or Qdrant) with the JSON mirror enabled, `store.close()` after indexing rewrites `search_index.json` from the live table so `brain:health` does not see ghost paths that were already dropped from Lance.
+
+**Automation:** `npm run brain:maintain` runs sync when the mirror reports stale hashes or missing files, then `brain:health`. Flags `--strict`, `--ci`, and `--hook` are documented in root `SKILL.md` and `README.md`.
 
 ## Multi-actor coordination
 
@@ -88,10 +109,13 @@ sequenceDiagram
   App->>PB: npm run brain:update-skill
   PB-->>App: fast-forward only
   App->>App: setup-package refreshes scripts/templates when needed
+  App->>App: npm run brain:maintain -- --hook
+  Note over App: optional sync if index mirror stale
   Dev->>App: commit / PR
   GH->>App: checkout app PR head
   GH->>PB: checkout canonical Project Brain
-  GH->>App: run brain:health and brain:guard
+  GH->>App: npm run brain:maintain -- --ci
+  GH->>App: npm run brain:guard
 ```
 
 The updater refuses to overwrite local Project Brain changes. Set `PROJECT_BRAIN_UPDATE_STASH=1` only when you explicitly want it to stash local changes before updating.

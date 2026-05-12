@@ -47,7 +47,7 @@ for (const file of Object.keys(oldManifest.files || {})) {
   if (!current[file]) deleted.push(file);
 }
 
-if (!changed.length && !deleted.length) {
+if (!changed.length && !deleted.length && !force) {
   console.log('Project Brain index is up to date.');
   process.exit(0);
 }
@@ -66,6 +66,7 @@ if (decision.action === 'skip') {
 }
 
 const indexScript = new URL('./brain-index.mjs', import.meta.url).pathname;
+const indexArgs = force ? ['--force'] : [];
 const env = {
   ...process.env,
   BRAIN_CHANGED_FILES: changed.join('\n'),
@@ -76,7 +77,7 @@ if (decision.action === 'background' && allowBackground) {
   ensureDir(BRAIN_DIR);
   const out = fs.openSync(SYNC_BG_LOG, 'a');
   fs.writeSync(out, `\n--- ${new Date().toISOString()} bg sync (changed=${changed.length}, deleted=${deleted.length})\n`);
-  const child = spawn(process.execPath, [indexScript], {
+  const child = spawn(process.execPath, [indexScript, ...indexArgs], {
     detached: true,
     stdio: ['ignore', out, out],
     env
@@ -94,7 +95,7 @@ if (decision.action === 'background' && allowBackground) {
   process.exit(0);
 }
 
-const result = spawnSync(process.execPath, [indexScript], { stdio: 'inherit', env });
+const result = spawnSync(process.execPath, [indexScript, ...indexArgs], { stdio: 'inherit', env });
 writeSyncState({
   action: decision.action === 'background' ? 'foreground-fallback' : decision.action,
   reason: decision.reason,

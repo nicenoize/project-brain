@@ -24,6 +24,28 @@ export function atomicWrite(p, data) {
   fs.renameSync(tmp, p);
 }
 export function sha256(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
+
+/** One row per source file in the index; detects ghost paths and content drift vs on-disk files. */
+export function staleIndexFromRecords(records = []) {
+  const deleted = new Set();
+  const changed = new Set();
+  const seen = new Set();
+  for (const record of records) {
+    if (!record.file || record.file.startsWith('.project-brain/project-summary') || record.type?.endsWith('-summary')) continue;
+    if (seen.has(record.file)) continue;
+    seen.add(record.file);
+    const full = path.isAbsolute(record.file) ? record.file : path.join(ROOT, record.file);
+    if (!exists(full)) {
+      deleted.add(record.file);
+      continue;
+    }
+    if (record.hash) {
+      const current = sha256(read(full));
+      if (current !== record.hash) changed.add(record.file);
+    }
+  }
+  return { deleted: [...deleted], changed: [...changed] };
+}
 export function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'untitled'; }
 
 export function isFastMode() {
@@ -82,6 +104,7 @@ export function mergePackageScripts(pkg) {
     'brain:impact': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-impact.mjs',
     'brain:graph': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-graph.mjs',
     'brain:eval': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-eval.mjs',
+    'brain:maintain': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-maintain.mjs',
     'brain:install-hooks': 'bash skills/project-brain/bin/install-hooks.sh',
     'brain:update-skill': 'bash skills/project-brain/bin/update.sh'
   };
