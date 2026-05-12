@@ -108,6 +108,12 @@ Recommended team policy:
 
 Project Brain still keeps durable facts in `.project-brain/*.md`; Caveman only changes how agents communicate.
 
+## Auto-compact (Cursor + terminal agents)
+
+- **`npm run brain:compact`** — writes a bounded resume slice (`brain:pack` budget, default 1200 tokens) to `.project-brain/sessions/…__auto-compact__….md` and indexes it. Set `BRAIN_TASK`, `BRAIN_ACTOR`, and `BRAIN_TOOL` (`cursor`, `claude`, `gemini`, `codex`, …) when multiple streams share one branch.
+- **`npm run brain:install-cursor-hooks`** — installs `.cursor/hooks.json` entries for **`preCompact`** and **`stop`** so compaction runs without manual steps. Re-run after updating the skill; merges with existing hooks when possible.
+- **Claude / Codex / Gemini** — run the same `npm run brain:compact` from the repo root before thread reset or long sessions; see `skills/project-brain/templates/agents/COMPACT_INSTRUCTIONS.md`.
+
 ## Common commands
 
 ```bash
@@ -127,6 +133,8 @@ npm run brain:graph -- --format json
 npm run brain:eval
 npm run brain:maintain
 npm run brain:maintain -- --ci
+npm run brain:compact
+npm run brain:install-cursor-hooks
 npm run brain:sync
 npm run brain:guard
 npm run brain:health

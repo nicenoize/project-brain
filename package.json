@@ -19,6 +19,8 @@
     "brain:graph": "node scripts/brain-graph.mjs",
     "brain:eval": "node scripts/brain-eval.mjs",
     "brain:maintain": "node scripts/brain-maintain.mjs",
+    "brain:compact": "node scripts/brain-compact.mjs",
+    "brain:install-cursor-hooks": "node scripts/install-cursor-hooks.mjs",
     "brain:install-hooks": "bash bin/install-hooks.sh",
     "brain:update-skill": "bash bin/update.sh"
   },

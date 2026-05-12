@@ -356,20 +356,20 @@ export class QdrantStore extends BrainStore {
 export async function openStore(options = {}) {
   const requested = options.backend || process.env.BRAIN_STORE || 'auto';
   if (requested === 'qdrant') {
-    console.log('Project Brain store: qdrant');
+    if (!process.env.BRAIN_QUIET) console.log('Project Brain store: qdrant');
     return new QdrantStore(options);
   }
   if (requested !== 'json') {
     try {
       const lancedb = await import('@lancedb/lancedb');
-      console.log('Project Brain store: lance');
+      if (!process.env.BRAIN_QUIET) console.log('Project Brain store: lance');
       return new LanceStore(lancedb, options).open();
     } catch (error) {
       if (requested === 'lance') throw error;
       console.warn('Project Brain store: json fallback (@lancedb/lancedb unavailable)');
     }
   } else {
-    console.log('Project Brain store: json');
+    if (!process.env.BRAIN_QUIET) console.log('Project Brain store: json');
   }
   return new JsonStore(options);
 }

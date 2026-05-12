@@ -29,3 +29,14 @@ if (!fs.existsSync('.github/workflows/project-brain.yml')) {
 }
 
 console.log('Updated package.json, .gitignore, PR template, and GitHub workflow.');
+
+const { spawnSync } = await import('node:child_process');
+const hookInstaller = fs.existsSync('skills/project-brain/scripts/install-cursor-hooks.mjs')
+  ? 'skills/project-brain/scripts/install-cursor-hooks.mjs'
+  : fs.existsSync('scripts/install-cursor-hooks.mjs')
+    ? 'scripts/install-cursor-hooks.mjs'
+    : '';
+if (hookInstaller) {
+  const r = spawnSync(process.execPath, [hookInstaller], { stdio: 'inherit', cwd: process.cwd() });
+  if (r.status) console.warn('install-cursor-hooks exited', r.status);
+}

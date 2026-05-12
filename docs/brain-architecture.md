@@ -78,6 +78,8 @@ app-repo/
 
 **Automation:** `npm run brain:maintain` runs sync when the mirror reports stale hashes or missing files, then `brain:health`. Flags `--strict`, `--ci`, and `--hook` are documented in root `SKILL.md` and `README.md`.
 
+**Auto-compact:** `npm run brain:compact` writes a bounded resume slice under `.project-brain/sessions/` and indexes it. Cursor hooks (`npm run brain:install-cursor-hooks`) attach to `preCompact` and `stop`; other agents run the same command from the shell (see `templates/agents/COMPACT_INSTRUCTIONS.md`).
+
 ## Multi-actor coordination
 
 The same Markdown brain is shared by **humans**, **Cursor agents**, **Claude**, **Gemini**, and CI. Retrieval stays local per machine; coordination is Git + conventions.

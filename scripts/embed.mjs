@@ -20,7 +20,7 @@ export class LocalProvider extends EmbedProvider {
 
   async load() {
     if (!this.extractor) {
-      console.log(`Loading local embedding model: ${this.modelName}`);
+      if (!process.env.BRAIN_QUIET) console.log(`Loading local embedding model: ${this.modelName}`);
       const { pipeline } = await import('@xenova/transformers');
       this.extractor = await pipeline('feature-extraction', this.modelName);
     }

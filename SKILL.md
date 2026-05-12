@@ -103,6 +103,8 @@ npm run brain:eval
 npm run brain:maintain
 npm run brain:maintain -- --strict
 npm run brain:maintain -- --ci
+npm run brain:compact
+npm run brain:install-cursor-hooks
 ```
 
 Retrieval ranks with dense vector similarity, keyword relevance, exact symbol matches, metadata, and current branch/diff boosts. Set `BRAIN_CONTEXT_FILES` to comma-separated files when the current task should favor a specific diff or changed-file set. Set `BRAIN_TASK` and/or `BRAIN_ACTOR` (or use `--task` / `--actor` on `brain:search`, `brain:pack`, `brain:ask`) to boost session handoffs and chunks whose frontmatter matches that workstream.
@@ -124,6 +126,14 @@ The skill and Markdown layers improve **answer** quality; **`npm run brain:maint
 `post-merge` and `post-checkout` (branch switch) hooks run **`npm run brain:update-skill`** then **`npm run brain:maintain -- --hook`**. The GitHub Actions template runs **`npm run brain:maintain -- --ci`** before `brain:guard`.
 
 `npm run brain:health -- --json` emits machine-readable layout/stale/expiry fields for scripts.
+
+### Auto-compact (token reload slice)
+
+**`npm run brain:compact`** builds a **bounded `brain:pack` slice** (default ~1200 token budget), writes `.project-brain/sessions/<branch>__auto-compact__<timestamp>.md`, and indexes it so the next agent turn can reload context without re-reading the whole repo. Set `BRAIN_TASK`, `BRAIN_ACTOR`, and **`BRAIN_TOOL`** (`cursor`, `claude`, `gemini`, `codex`, …) in the environment so retrieval boosts match the active workstream.
+
+- **Cursor (automatic):** run **`npm run brain:install-cursor-hooks`** once per repo. Hooks run on **`preCompact`** and **`stop`** (`npm run brain:compact -- --cursor-hook …`). Optional rule: `skills/project-brain/templates/cursor/rules/project-brain-compact.mdc` is copied beside `hooks.json` when the rule file is missing.
+- **Claude Code / Codex CLI / Gemini CLI:** no IDE hook—run **`npm run brain:compact`** (same env vars) before `/compact`, thread reset, or ending a long terminal session. Copy-paste policy from **`skills/project-brain/templates/agents/COMPACT_INSTRUCTIONS.md`** into team docs or `CLAUDE.md` if desired.
+- **CLI follow-up:** compact triggers **`npm run brain:sync`** by default so the index sees the new session file; Cursor hook mode skips sync for latency (set `BRAIN_COMPACT_SYNC=1` to force sync from hooks). Set **`BRAIN_QUIET=1`** is applied automatically for hook runs so stdout stays JSON-clean for Cursor.
 
 ### Performance modes
 
@@ -308,7 +318,7 @@ Rules:
 
 - `active_state.md` is the team radar: workstreams, leases, overlaps. Prefer **one person or lead agent** merging it to reduce git conflicts.
 - If two actors touch the same module/feature, record overlap risk in `active_state.md` before implementing.
-- **Parallel agents / split tools**: assign a stable `task_id` per stream. Each stream runs `brain:session -- start --task … --actor … --tool …` and ends with `brain:session -- end --task …`. Sub-agents may set `--parent` to the orchestrator run id.
+- **Parallel agents / split tools**: assign a stable `task_id` per stream. Each stream runs `brain:session -- start --task … --actor … --tool …` and ends with `brain:session -- end --task …`. Sub-agents may set `--parent` to the orchestrator run id. Run **`npm run brain:compact`** (or rely on Cursor hooks after `npm run brain:install-cursor-hooks`) before long compacts or handoffs so the next model load can use `.project-brain/sessions/*__auto-compact__*.md` plus `brain:pack` with the same `BRAIN_TASK` / `BRAIN_ACTOR`.
 - **Parallel branches (Cursor, Claude Code, Codex, Gemini, humans)**: use `npm run brain:worktree -- spawn --count N … [--tool …]` so each worker gets its own directory and GitFlow branch off `develop` (or `--base`). Match the printed `<tool>-worker-N` actor and `--tool` per session; merge brain Markdown through normal PRs and still prefer **one merge point** for `active_state.md`.
 - **Orchestrator pattern** (e.g. Cursor parent + workers, or any multi-step automation): parent runs `brain:pack` once with `BRAIN_TASK` / `BRAIN_ACTOR` (or flags) and passes the same blob to children; children write notes under `.project-brain/sessions/`; one actor merges durable facts into features/modules/decisions and updates `active_state.md`.
 - Capture handoffs in `.project-brain/sessions/` when work is interrupted or handed off between tools or people.
