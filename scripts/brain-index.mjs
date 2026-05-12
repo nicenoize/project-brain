@@ -44,6 +44,16 @@ for (const file of files) currentHashes.set(file, sha256(read(path.join(ROOT, fi
 let changedFiles = files.filter(file => forceRebuild || oldManifest.files?.[file]?.hash !== currentHashes.get(file));
 let deletedFiles = Object.keys(oldManifest.files || {}).filter(file => !fileSet.has(file));
 
+const existingRecords = await store.getAll();
+const existingIdsByFile = new Map();
+for (const record of existingRecords) {
+  if (!record.file) continue;
+  if (!existingIdsByFile.has(record.file)) existingIdsByFile.set(record.file, []);
+  existingIdsByFile.get(record.file).push(record.id);
+}
+const strayFiles = [...new Set(existingRecords.map((r) => r.file).filter(Boolean))].filter((file) => !fileSet.has(file));
+deletedFiles = [...new Set([...deletedFiles, ...strayFiles])];
+
 if (!forceRebuild && changedEnv.length) {
   const allowed = new Set(changedEnv);
   changedFiles = changedFiles.filter(file => allowed.has(file));
@@ -53,8 +63,14 @@ if (!forceRebuild && deletedEnv.length) {
 }
 
 const deleteIds = [];
-for (const file of [...changedFiles, ...deletedFiles]) {
-  deleteIds.push(...(oldManifest.files?.[file]?.ids || []));
+const seenDelete = new Set();
+for (const file of new Set([...changedFiles, ...deletedFiles])) {
+  const ids = new Set([...(oldManifest.files?.[file]?.ids || []), ...(existingIdsByFile.get(file) || [])]);
+  for (const id of ids) {
+    if (seenDelete.has(id)) continue;
+    seenDelete.add(id);
+    deleteIds.push(id);
+  }
 }
 await store.delete(deleteIds);
 

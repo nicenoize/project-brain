@@ -5,6 +5,16 @@ import { BRAIN_DIR, ensureDir, exists, write } from './common.mjs';
 const dirs = ['features', 'modules', 'decisions', 'sessions', 'vector-db'].map(d => path.join(BRAIN_DIR, d));
 dirs.forEach(ensureDir);
 
+const evalTemplateCandidates = [
+  path.join('skills', 'project-brain', 'templates', 'brain', 'eval.json'),
+  path.join('templates', 'brain', 'eval.json')
+];
+const evalTemplate = evalTemplateCandidates.find((p) => fs.existsSync(p));
+const evalDest = path.join(BRAIN_DIR, 'eval.json');
+if (evalTemplate && !exists(evalDest)) {
+  fs.copyFileSync(evalTemplate, evalDest);
+}
+
 const files = {
   'context_index.md': `# Context Index\n\nPurpose: compact, low-token map of the project. Claude should load this first.\n\n## Project Snapshot\n- Status: Needs Review\n- Stack: Needs Review\n- Primary goal: Needs Review\n\n## Current Focus\n- Needs Review\n\n## Core Modules\n- Needs Review\n\n## Active Features\n- Needs Review\n\n## Key Decisions\n- Needs Review\n\n## Retrieval Hints\n- Use semantic search before loading full specs.\n- Load master_plan.md only when details are missing or ambiguous.\n`,
   'master_plan.md': `# Master Plan\n\nPaste or import the complete project plan here.\n\nAfter adding it, ask Claude:\n\n> Use the project-brain skill. Ingest .project-brain/master_plan.md and update context_index, product_plan, modules, features, and decisions.\n`,

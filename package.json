@@ -18,6 +18,7 @@
     "brain:impact": "node scripts/brain-impact.mjs",
     "brain:graph": "node scripts/brain-graph.mjs",
     "brain:eval": "node scripts/brain-eval.mjs",
+    "brain:maintain": "node scripts/brain-maintain.mjs",
     "brain:install-hooks": "bash bin/install-hooks.sh",
     "brain:update-skill": "bash bin/update.sh"
   },

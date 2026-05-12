@@ -37,13 +37,27 @@ The vector database is not the source of truth. The Git-tracked Markdown brain i
 
 Do not commit:
 
-- `.project-brain/vector-db/`
-- `.project-brain/index_manifest.json`
-- `.project-brain/search_index.json`
+- `.project-brain/vector-db/` — LanceDB tables when `BRAIN_STORE` resolves to `lance` (e.g. `brain_records.lance`).
+- `.project-brain/index_manifest.json` — model, dimensions, backend, file↔chunk id map (row count can differ from total chunks).
+- `.project-brain/search_index.json` — full record mirror for health/fallback JSON mode; can be large on big repos.
 
 The local vector backend is selected with `BRAIN_STORE=auto|json|lance|qdrant`. `auto` prefers LanceDB when the optional dependency is installed and falls back to the JSON cache. `qdrant` uses `BRAIN_QDRANT_URL`, `BRAIN_QDRANT_COLLECTION`, and optional `BRAIN_QDRANT_API_KEY`.
 
 Default retrieval requires no API keys: local MiniLM embeddings plus JSON/LanceDB local cache. OpenAI embeddings require `OPENAI_API_KEY`; hosted Qdrant usually requires `BRAIN_QDRANT_API_KEY`.
+
+### Local retrieval (what the index is)
+
+Treat the index as a **machine-local cache** built from Git-tracked `.project-brain/` markdown **and** application source (often a large share of chunks under `lib/`, `app/`, `components/`, `e2e/`, etc.). It is not “only product docs.”
+
+Each **record** is: a **384-dimensional** embedding (`Xenova/all-MiniLM-L6-v2`), the **retrieval text** (one chunk/slice of a file, often near a heading—not the whole file in one vector), and **metadata** (path, record type, chunk index, symbols where applicable). Judge relevance from returned **text and paths**, not from vector floats.
+
+**Freshness:** `npm run brain:health` may report indexed paths for **deleted files** or **stale content hashes**. Until you run `npm run brain:sync` (or a full re-index), answers can cite **ghost paths** or **old slices**. After meaningful edits, prefer sync before trusting retrieval-only answers.
+
+**Ranking limits:** Hybrid scoring (dense similarity, keywords, symbol hits, metadata, branch/diff boosts) is good for many queries but not all. Natural-language questions can sometimes rank **tests or e2e** above the **implementation module** that owns the behavior. When top hits look like the wrong layer, use `npm run brain:symbol -- …`, narrower `brain:search` flags (e.g. `--modules-only`), `BRAIN_CONTEXT_FILES` for known touched files, or read the target file from `context_index.md` / module pages instead of assuming the first vector hit is canonical.
+
+**Not the same as in-app RAG:** Some applications keep a **separate** vector store for product features (e.g. venue-scoped rows in Postgres/pgvector with a different embedding model and dimensions). That system does not appear in `.project-brain/`; Project Brain local retrieval only sees what this repo’s indexer ingests.
+
+**Measuring quality:** `npm run brain:eval` exercises smoke cases (from `.project-brain/eval.json` when present). Expand those cases when you find repeatable blind spots so retrieval regressions stay visible in CI or local runs.
 
 ## Token-saving communication
 
@@ -53,6 +67,7 @@ Use the external Caveman skill for compressed agent communication when available
 - User-facing summaries: keep concise and understandable; do not hide risk or ordering for token savings.
 - Temporarily drop compression for security warnings, destructive actions, or ambiguous multi-step instructions.
 - Caveman affects wording only. Durable facts still belong in `.project-brain/*.md`.
+- **`npm run brain:maintain`** optional logs: `BRAIN_MAINTAIN_CAVEMAN=1` and/or `BRAIN_MAINTAIN_WENYAN=1` (or `--caveman` / `--wenyan`) print terse hook/CI status lines only; they do not rewrite skill text or Markdown.
 
 ## Standard commands
 
@@ -85,9 +100,30 @@ npm run brain:pack -- "query text" --max-tokens 3000
 npm run brain:pack -- "query text" --task issue-99-slug --actor cursor-worker-a
 npm run brain:graph -- --format json
 npm run brain:eval
+npm run brain:maintain
+npm run brain:maintain -- --strict
+npm run brain:maintain -- --ci
 ```
 
 Retrieval ranks with dense vector similarity, keyword relevance, exact symbol matches, metadata, and current branch/diff boosts. Set `BRAIN_CONTEXT_FILES` to comma-separated files when the current task should favor a specific diff or changed-file set. Set `BRAIN_TASK` and/or `BRAIN_ACTOR` (or use `--task` / `--actor` on `brain:search`, `brain:pack`, `brain:ask`) to boost session handoffs and chunks whose frontmatter matches that workstream.
+
+### Automated maintenance (outcome quality)
+
+The skill and Markdown layers improve **answer** quality; **`npm run brain:maintain`** automates **index freshness + gates** so agents cite fewer ghosts. It does **not** change MiniLM, LanceDB chunking, or hybrid ranking weights—those still need deliberate `scripts/retrieval.mjs` (or config) work when `brain:eval` proves a blind spot.
+
+| Command / mode | Behavior |
+|----------------|----------|
+| `npm run brain:maintain` | If `search_index.json` reports deleted paths or stale hashes (and not `BRAIN_FAST=1`), runs `brain:sync`, then `brain:health`. |
+| `--strict` | After sync, runs `brain:health --strict-stale`, then **`brain:eval` with `BRAIN_EVAL_STRICT=1`** when `.project-brain/eval.json` exists. |
+| `--ci` | Same as `--strict` for CI. If there is **no** `.project-brain/eval.json`, eval is skipped with a log line (add one from `skills/project-brain/templates/brain/eval.json` via `brain:init` or hand-author cases). |
+| `--hook` | For Git hooks after pulls: sync when needed; **non-zero exits become 0** so merges are not blocked (inspect logs if retrieval feels wrong). |
+| `--no-sync` | Health (and strict/eval when combined with `--strict`) only. |
+| `--force-sync` | Passes `--force` into the first `brain:sync`. |
+| Stale after sync | One automatic `brain:sync --force` retry when `--strict` / `--ci` before failing. |
+
+`post-merge` and `post-checkout` (branch switch) hooks run **`npm run brain:update-skill`** then **`npm run brain:maintain -- --hook`**. The GitHub Actions template runs **`npm run brain:maintain -- --ci`** before `brain:guard`.
+
+`npm run brain:health -- --json` emits machine-readable layout/stale/expiry fields for scripts.
 
 ### Performance modes
 
