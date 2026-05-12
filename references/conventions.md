@@ -76,6 +76,7 @@ Allowed commit types:
 - After pulls or branch switches, installed hooks run `brain:update-skill` and `brain:maintain --hook` so the local index can catch deleted files and hash drift.
 - For CI-quality gates, commit `.project-brain/eval.json` (see `templates/brain/eval.json`) and let the Project Brain workflow run `brain:maintain --ci` before `brain:guard`.
 - Ranking and embedding behavior still follow `scripts/retrieval.mjs` and embedder config; extend `eval.json` when you find repeatable retrieval misses.
+- Before **Cursor context compaction** or when switching terminal agents, run **`npm run brain:compact`** (or install Cursor hooks so it runs automatically); set `BRAIN_TOOL` to `cursor`, `claude`, `gemini`, or `codex` per session.
 
 ## Multi-tool and multi-agent coordination
 

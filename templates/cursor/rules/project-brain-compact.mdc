@@ -1,0 +1,17 @@
+---
+description: Run Project Brain compact before long internal summaries or when context is large
+globs:
+alwaysApply: false
+---
+
+# Project Brain — auto compact
+
+When the user (or you) is about to **compact context**, lose thread history, or hand off to another agent:
+
+1. Ensure `BRAIN_TASK` / `BRAIN_ACTOR` match the current workstream if you use parallel streams.
+2. Run: `npm run brain:compact` (optional: `--max-tokens 1200`, custom query after flags).
+3. After compaction, load `.project-brain/context_index.md`, `.project-brain/active_state.md`, then the newest `.project-brain/sessions/*__auto-compact__*.md` for this branch.
+
+Do **not** use compact output as the only copy of security-sensitive or contractual facts—promote those into `.project-brain/decisions/` or feature/module pages first.
+
+For **Claude Code / Codex / Gemini** terminals (no Cursor hooks), run the same `npm run brain:compact` before ending a long session or starting a fresh shell; set `export BRAIN_TOOL=claude|codex|gemini` in that terminal.

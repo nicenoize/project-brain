@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "preCompact": [
+      {
+        "command": "npm run brain:compact -- --cursor-hook preCompact",
+        "timeout": 180
+      }
+    ],
+    "stop": [
+      {
+        "command": "npm run brain:compact -- --cursor-hook stop",
+        "timeout": 180
+      }
+    ]
+  }
+}
