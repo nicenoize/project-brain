@@ -34,6 +34,12 @@ npm run brain:compact -- --max-tokens 1500 "Custom resume query focused on auth 
 | **Codex CLI** | Same: export `BRAIN_TOOL=codex`; run before long context resets. |
 | **Gemini CLI** | Same: export `BRAIN_TOOL=gemini`. |
 
+## Workflow discipline
+
+- If the task is large, unclear, or spans multiple modules, run `npm run brain:ticket -- "task title" --packages N --write` before coding.
+- If multiple agents or humans may touch the same files, check `npm run brain:lease -- list` and add leases before editing.
+- For non-trivial implementation, prefer `npm run brain:work -- start ...` so task id, session, active state, leases, and context pack stay aligned.
+
 ## After compaction
 
 1. `.project-brain/context_index.md`

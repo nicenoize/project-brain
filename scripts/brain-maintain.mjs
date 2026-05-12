@@ -8,6 +8,8 @@ const ci = argv.includes('--ci') || process.env.BRAIN_MAINTAIN_CI === '1';
 const strict = argv.includes('--strict') || ci;
 const noSync = argv.includes('--no-sync');
 const forceSync = argv.includes('--force-sync');
+const cleanSessions = argv.includes('--clean-sessions') || process.env.BRAIN_MAINTAIN_CLEAN_SESSIONS !== '0';
+const cleanSessionFiles = argv.includes('--clean-session-files') || process.env.BRAIN_SESSION_CLEAN_FILES === '1';
 const caveman = argv.includes('--caveman') || process.env.BRAIN_MAINTAIN_CAVEMAN === '1';
 const wenyan = argv.includes('--wenyan') || process.env.BRAIN_MAINTAIN_WENYAN === '1';
 
@@ -78,6 +80,14 @@ function main() {
   const healthCode = npmRun('brain:health', strict ? ['--strict-stale'] : []);
   if (healthCode !== 0) return hook ? 0 : healthCode;
   say('health OK', '康');
+
+  if (cleanSessions) {
+    const cleanArgs = ['clean'];
+    if (cleanSessionFiles) cleanArgs.push('--files');
+    const cleanCode = npmRun('brain:session', cleanArgs);
+    if (cleanCode !== 0 && !hook) return cleanCode;
+    say('expired sessions cleaned', '汰');
+  }
 
   const hasEvalFile = exists(EVAL_PATH);
   if (strict && hasEvalFile) {

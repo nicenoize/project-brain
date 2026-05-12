@@ -50,6 +50,7 @@ Commit:
 .project-brain/features/
 .project-brain/modules/
 .project-brain/decisions/
+.project-brain/work-packages/
 .project-brain/sessions/
 .project-brain/eval.json
 .github/PULL_REQUEST_TEMPLATE.md
@@ -111,6 +112,7 @@ Project Brain still keeps durable facts in `.project-brain/*.md`; Caveman only c
 ## Auto-compact (Cursor + terminal agents)
 
 - **`npm run brain:compact`** — writes a bounded resume slice (`brain:pack` budget, default 1200 tokens) to `.project-brain/sessions/…__auto-compact__….md` and indexes it. Set `BRAIN_TASK`, `BRAIN_ACTOR`, and `BRAIN_TOOL` (`cursor`, `claude`, `gemini`, `codex`, …) when multiple streams share one branch.
+- **Compact anti-recursion:** `brain:compact` uses resume packing and excludes prior auto-compact snapshots by default, so compact files do not quote older compact files forever. Set `BRAIN_PACK_INCLUDE_AUTO_COMPACT=1` only when you explicitly need old compact text.
 - **`npm run brain:install-cursor-hooks`** — installs `.cursor/hooks.json` entries for **`preCompact`** and **`stop`** so compaction runs without manual steps. Re-run after updating the skill; merges with existing hooks when possible.
 - **Claude / Codex / Gemini** — run the same `npm run brain:compact` from the repo root before thread reset or long sessions; see `skills/project-brain/templates/agents/COMPACT_INSTRUCTIONS.md`.
 
@@ -120,11 +122,19 @@ Project Brain still keeps durable facts in `.project-brain/*.md`; Caveman only c
 npm run brain:init
 npm run brain:update-skill
 npm run brain:index
+npm run brain:ask -- "auth checkout module"
 npm run brain:search -- "auth checkout module"
 npm run brain:search -- "auth checkout module" --summary-only
 npm run brain:symbol -- QdrantStore QdrantStore
 npm run brain:impact -- QdrantStore
 npm run brain:pack -- "auth checkout module" --max-tokens 3000
+npm run brain:pack -- "resume current work" --mode resume --max-tokens 1200
+npm run brain:pack -- "architecture map" --mode minimal --max-tokens 800
+npm run brain:ticket -- "large auth hardening task" --packages 4 --write
+npm run brain:ticket -- create "large auth hardening task" --packages 4 --github
+npm run brain:work -- start --issue 123 --slug auth-hardening --actor codex --tool codex --files lib/auth.ts
+npm run brain:lease -- add "lib/auth.ts" --task issue-123-auth-hardening --actor codex
+npm run brain:pr -- prepare --write .project-brain/pr-body.md
 npm run brain:session -- start --task issue-123-slug --actor alice --tool human
 npm run brain:session -- end --task issue-123-slug
 npm run brain:worktree -- spawn --count 3 --base develop --type feature --issue 456 --slug parallel-audit --tool codex
@@ -132,6 +142,7 @@ npm run brain:worktree -- list
 npm run brain:graph -- --format json
 npm run brain:eval
 npm run brain:maintain
+npm run brain:maintain -- --clean-session-files
 npm run brain:maintain -- --ci
 npm run brain:compact
 npm run brain:install-cursor-hooks
@@ -139,6 +150,33 @@ npm run brain:sync
 npm run brain:guard
 npm run brain:health
 ```
+
+## Agent-ready workflow
+
+For ordinary context lookup, use the router first:
+
+```bash
+npm run brain:ask -- "where is auth session validated?"
+```
+
+For a normal implementation workstream:
+
+```bash
+npm run brain:work -- start --issue 123 --slug auth-hardening --actor codex --tool codex --files lib/auth.ts
+# work, update brain docs when durable facts change
+npm run brain:compact
+npm run brain:pr -- prepare --write .project-brain/pr-body.md
+npm run brain:work -- end --task issue-123-auth-hardening
+```
+
+For oversized or multi-agent work, split before coding:
+
+```bash
+npm run brain:ticket -- "auth billing migration" --packages 4 --files lib/auth.ts,lib/billing.ts --modules auth,billing --write
+npm run brain:worktree -- spawn --count 3 --base develop --type feature --issue 123 --slug auth-billing --tool codex
+```
+
+Use `brain:lease -- list` before assigning workers and `brain:lease -- add ...` before editing shared files.
 
 Useful retrieval env vars:
 

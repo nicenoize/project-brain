@@ -26,10 +26,11 @@ const flags = command === 'start' || command === 'end' ? parseSessionFlags(subAr
 if (command === 'start') await startSession(flags);
 else if (command === 'end') await endSession(flags);
 else if (command === 'list') await listSessions(subArgs.includes('--json'));
-else if (command === 'clean') await cleanSessions();
+else if (command === 'clean') await cleanSessions({ deleteFiles: subArgs.includes('--files') || process.env.BRAIN_SESSION_CLEAN_FILES === '1' });
 else {
   console.error('Usage: npm run brain:session -- start|end|list|clean [--task <id>] [--actor <label>] [--tool cursor|claude|gemini|codex|human|other] [--parent <run-id>]');
   console.error('       npm run brain:session -- list [--json]');
+  console.error('       npm run brain:session -- clean [--files]');
   process.exit(1);
 }
 
@@ -93,12 +94,22 @@ async function listSessions(asJson) {
   await store.close();
 }
 
-async function cleanSessions() {
+async function cleanSessions({ deleteFiles = false } = {}) {
   const store = await openStore();
   const now = Date.now();
   const expired = (await store.getAll()).filter(record => record.id.startsWith('session:') && record.expiresAt && Date.parse(record.expiresAt) < now);
   await store.delete(expired.map(record => record.id));
-  console.log(`Removed ${expired.length} expired session records.`);
+  let removedFiles = 0;
+  if (deleteFiles) {
+    for (const record of expired) {
+      if (!record.file || !record.file.startsWith('.project-brain/sessions/')) continue;
+      const full = path.join(ROOT, record.file);
+      if (!fs.existsSync(full)) continue;
+      fs.unlinkSync(full);
+      removedFiles++;
+    }
+  }
+  console.log(`Removed ${expired.length} expired session records${deleteFiles ? ` and ${removedFiles} files` : ''}.`);
   await store.close();
 }
 
