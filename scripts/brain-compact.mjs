@@ -136,7 +136,13 @@ async function main() {
   const sessionsDir = path.join(BRAIN_DIR, 'sessions');
   ensureDir(sessionsDir);
 
-  const packed = await packPrompt(query, { maxTokens, taskId, actor });
+  const packed = await packPrompt(query, {
+    maxTokens,
+    taskId,
+    actor,
+    mode: process.env.BRAIN_COMPACT_PACK_MODE || 'resume',
+    includeAutoCompact: false
+  });
 
   const stamp = sessionTimestampSlug();
   const file = newSessionFilePath(sessionsDir, branchSlug, 'auto-compact', stamp);

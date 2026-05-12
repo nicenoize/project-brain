@@ -21,6 +21,27 @@ Do not repeatedly load the whole repository or full master plan. Always use the 
 
 The vector database is not the source of truth. The Git-tracked Markdown brain is the source of truth. The vector DB is a generated local retrieval cache.
 
+## Default automation policy
+
+Choose the smallest workflow command that matches the user's intent:
+
+| User intent / situation | Default action |
+|-------------------------|----------------|
+| Ask a repo/context question | Load `context_index.md` + `active_state.md`, then run `npm run brain:ask -- "query"`. |
+| Need exact implementation context | Use `brain:ask --pack --max-tokens 1200-3000`; fall back to direct file reads only for returned paths. |
+| Start non-trivial implementation | Prefer `npm run brain:work -- start ...` so branch, session, workstream, leases, and initial pack stay aligned. |
+| Task looks too large, vague, cross-module, or likely to overwhelm one agent | Run `npm run brain:ticket -- "task title" --packages N --write` before coding. Use its size score and package split. |
+| User asks to create GitHub tickets/issues | Run `brain:ticket -- create ... --github` only when `gh` is installed/authenticated or the GitHub connector is available. Otherwise write the package plan locally. |
+| Multiple agents/humans may edit overlapping files | Use `brain:lease -- add ...` before editing and `brain:lease -- list` before assigning work. |
+| Parallel work on separate branches | Use `brain:ticket` first, then `brain:worktree -- spawn --count N ...`; each worker starts a session with the printed task/actor/tool. |
+| Long session, compaction, or handoff | Run `npm run brain:compact` with `BRAIN_TASK`, `BRAIN_ACTOR`, and `BRAIN_TOOL` set. |
+| Preparing a PR | Run `brain:maintain`, `brain:guard`, project checks, then `brain:pr -- prepare --write .project-brain/pr-body.md`. |
+| Updating durable architecture/product facts | Update the specific feature/module/decision file and keep `context_index.md` compact. |
+
+Do not create branches, GitHub issues, PRs, or destructive changes just because a command can do it. Use those modes when the user asks for implementation/workflow execution or when the existing repo workflow clearly requires them. For planning-only requests, use `brain:ticket --write`, `brain:work -- status`, `brain:lease -- list`, and `brain:ask`.
+
+Heuristic for splitting work: if a task touches more than 5 files, more than 1 module, auth/billing/security/deploy/schema code, or has unclear ownership, create work packages first. Prefer discovery → implementation slice(s) → integration → verification.
+
 ## Source of truth files
 
 - `.project-brain/context_index.md` — compact low-token map of the whole project.
@@ -31,6 +52,7 @@ The vector database is not the source of truth. The Git-tracked Markdown brain i
 - `.project-brain/features/*.md` — feature specs and progress.
 - `.project-brain/modules/*.md` — architecture/module specs.
 - `.project-brain/decisions/*.md` — durable decisions and rationale.
+- `.project-brain/work-packages/*.md` — agent-ready ticket splits for large work.
 - `.project-brain/sessions/*.md` — optional session handoffs.
 
 ## Generated files
@@ -97,7 +119,14 @@ npm run brain:search -- "query text" --modules-only
 npm run brain:symbol -- SymbolName SymbolName
 npm run brain:impact -- SymbolName
 npm run brain:pack -- "query text" --max-tokens 3000
+npm run brain:pack -- "resume current work" --mode resume --max-tokens 1200
+npm run brain:pack -- "architecture map" --mode minimal --max-tokens 800
 npm run brain:pack -- "query text" --task issue-99-slug --actor cursor-worker-a
+npm run brain:ticket -- "large task title" --packages 4 --write
+npm run brain:ticket -- create "large task title" --packages 4 --github
+npm run brain:work -- start --issue 99 --slug checkout-hardening --actor codex --tool codex --files lib/auth.ts
+npm run brain:lease -- add "lib/auth.ts" --task issue-99-checkout-hardening --actor codex
+npm run brain:pr -- prepare --write .project-brain/pr-body.md
 npm run brain:graph -- --format json
 npm run brain:eval
 npm run brain:maintain
@@ -115,12 +144,13 @@ The skill and Markdown layers improve **answer** quality; **`npm run brain:maint
 
 | Command / mode | Behavior |
 |----------------|----------|
-| `npm run brain:maintain` | If `search_index.json` reports deleted paths or stale hashes (and not `BRAIN_FAST=1`), runs `brain:sync`, then `brain:health`. |
+| `npm run brain:maintain` | If `search_index.json` reports deleted paths or stale hashes (and not `BRAIN_FAST=1`), runs `brain:sync`, then `brain:health`, then removes expired session records. |
 | `--strict` | After sync, runs `brain:health --strict-stale`, then **`brain:eval` with `BRAIN_EVAL_STRICT=1`** when `.project-brain/eval.json` exists. |
 | `--ci` | Same as `--strict` for CI. If there is **no** `.project-brain/eval.json`, eval is skipped with a log line (add one from `skills/project-brain/templates/brain/eval.json` via `brain:init` or hand-author cases). |
 | `--hook` | For Git hooks after pulls: sync when needed; **non-zero exits become 0** so merges are not blocked (inspect logs if retrieval feels wrong). |
 | `--no-sync` | Health (and strict/eval when combined with `--strict`) only. |
 | `--force-sync` | Passes `--force` into the first `brain:sync`. |
+| `--clean-session-files` | Also deletes expired `.project-brain/sessions/*.md` files, not just expired index records. |
 | Stale after sync | One automatic `brain:sync --force` retry when `--strict` / `--ci` before failing. |
 
 `post-merge` and `post-checkout` (branch switch) hooks run **`npm run brain:update-skill`** then **`npm run brain:maintain -- --hook`**. The GitHub Actions template runs **`npm run brain:maintain -- --ci`** before `brain:guard`.
@@ -129,7 +159,7 @@ The skill and Markdown layers improve **answer** quality; **`npm run brain:maint
 
 ### Auto-compact (token reload slice)
 
-**`npm run brain:compact`** builds a **bounded `brain:pack` slice** (default ~1200 token budget), writes `.project-brain/sessions/<branch>__auto-compact__<timestamp>.md`, and indexes it so the next agent turn can reload context without re-reading the whole repo. Set `BRAIN_TASK`, `BRAIN_ACTOR`, and **`BRAIN_TOOL`** (`cursor`, `claude`, `gemini`, `codex`, …) in the environment so retrieval boosts match the active workstream.
+**`npm run brain:compact`** builds a **bounded resume-mode `brain:pack` slice** (default ~1200 token budget), writes `.project-brain/sessions/<branch>__auto-compact__<timestamp>.md`, and indexes it so the next agent turn can reload context without re-reading the whole repo. It excludes prior auto-compact snapshots by default to avoid recursive context bloat. Set `BRAIN_TASK`, `BRAIN_ACTOR`, and **`BRAIN_TOOL`** (`cursor`, `claude`, `gemini`, `codex`, …) in the environment so retrieval boosts match the active workstream.
 
 - **Cursor (automatic):** run **`npm run brain:install-cursor-hooks`** once per repo. Hooks run on **`preCompact`** and **`stop`** (`npm run brain:compact -- --cursor-hook …`). Optional rule: `skills/project-brain/templates/cursor/rules/project-brain-compact.mdc` is copied beside `hooks.json` when the rule file is missing.
 - **Claude Code / Codex CLI / Gemini CLI:** no IDE hook—run **`npm run brain:compact`** (same env vars) before `/compact`, thread reset, or ending a long terminal session. Copy-paste policy from **`skills/project-brain/templates/agents/COMPACT_INSTRUCTIONS.md`** into team docs or `CLAUDE.md` if desired.
@@ -166,7 +196,7 @@ When asked to track short-lived work context (branch-scoped; use flags when seve
 npm run brain:session -- start [--task <workstream-id>] [--actor <label>] [--tool cursor|claude|gemini|codex|human|other] [--parent <orchestrator-id>]
 npm run brain:session -- end [--task <workstream-id>]
 npm run brain:session -- list [--json]
-npm run brain:session -- clean
+npm run brain:session -- clean [--files]
 ```
 
 For retrieval that prefers the current workstream’s session chunks, set `BRAIN_TASK` / `BRAIN_ACTOR` or pass `--task` / `--actor` to `brain:search`, `brain:pack`, or `brain:ask`.
@@ -213,25 +243,52 @@ When the user provides or references a master plan:
 When starting feature work:
 
 1. Read `context_index.md` and `active_state.md`.
-2. Semantic search for the feature name, related modules, related decisions, and nearby code.
-3. Load only relevant feature/module/decision files.
-4. Check whether another developer is working on overlapping files/modules.
-5. Search GitHub issues for existing matching work.
-6. If no suitable issue exists and the work is non-trivial, create a GitHub issue with scope, acceptance criteria, and Project Brain references.
-7. Create or update the feature page.
-8. Create or switch to a branch from `develop` named `type/issue-number-kebab-description` for issue-linked work.
-9. Define scope boundaries and out-of-scope items.
-10. Update `active_state.md` with issue, branch, owner, overlap risks, and current status.
+2. If the task is large or unclear, run `brain:ticket -- "task title" --packages N --write` before implementation.
+3. Check `brain:lease -- list` and `active_state.md` for overlaps.
+4. Semantic search for the feature name, related modules, related decisions, and nearby code.
+5. Load only relevant feature/module/decision files.
+6. Search GitHub issues for existing matching work when issue work is expected.
+7. If the user wants issue creation and no suitable issue exists, create a GitHub issue/work packages with Project Brain references.
+8. Use `npm run brain:work -- start ...` for the full workflow envelope: branch, session, workstream, optional leases, and initial resume pack.
+9. Create or update the feature page and define scope boundaries/out-of-scope items.
+10. Keep `active_state.md` current while work is active.
+
+`brain:work -- start` creates/switches the GitFlow branch unless `--no-branch` is passed. Use `--no-branch` for dry runs, audits, or planning-only sessions.
+
+### Split large work for agents
+
+When a task is too large for one agent or spans multiple modules:
+
+1. Run `npm run brain:ticket -- "task title" --packages N --write` to create an agent-ready work-package plan.
+2. Read the size score: `small` can usually stay with one agent; `medium` should have explicit packages; `large` should start with discovery and a merge actor.
+3. Use 2-6 packages by default: discovery, one or more implementation slices, integration, verification/handoff.
+4. Keep each package small enough for one agent: clear objective, owned files/globs, dependencies, acceptance criteria, verification, and handoff rules.
+5. If GitHub CLI is authenticated and the user wants issues created, run `npm run brain:ticket -- create "task title" --packages N --github`.
+6. Use `brain:worktree -- spawn --count N --issue <id> --slug <slug> --tool <tool>` when packages can run in parallel.
+7. One orchestrator or merge actor owns `active_state.md`, dependency reconciliation, and final PR preparation.
+
+Do not parallelize tightly coupled edits just because several packages exist. Discovery or integration packages should run serially when they define or reconcile dependencies.
+
+### Coordinate parallel edits
+
+When multiple agents or humans may touch the same area:
+
+1. Use `npm run brain:lease -- add "file-or-glob" --task <task> --actor <actor>` before editing shared files.
+2. Use `npm run brain:lease -- list` before assigning a worker.
+3. Use `npm run brain:lease -- release --task <task>` when the package is done.
+4. The orchestrator should resolve overlaps before integration work begins.
 
 ### During implementation
 
 Before making large changes:
 
 1. Verify module ownership and conventions.
-2. Avoid unrelated changes.
-3. Keep commits small and logical.
-4. Capture new decisions in `decisions/`.
-5. Update feature/module pages after meaningful progress.
+2. Add/confirm file leases for shared or risky files.
+3. Avoid unrelated changes.
+4. Keep commits small and logical.
+5. Capture new decisions in `decisions/`.
+6. Update feature/module pages after meaningful progress.
+7. Run `npm run brain:compact` before handoff, compaction, or switching tools.
 
 ### Prepare PR
 
@@ -246,6 +303,8 @@ When preparing a PR:
 7. Include `Closes #issue` or `Fixes #issue` so GitHub closes the issue on merge.
 8. Include brain impact and test evidence.
 9. Only target `main` for release or hotfix PRs.
+
+Use `npm run brain:pr -- prepare --write .project-brain/pr-body.md` to generate a PR body from branch diff, active workstream state, sessions, touched modules, and verification expectations.
 
 ### Daily/team sync
 
