@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ROOT, BRAIN_DIR, read, isFastMode } from './common.mjs';
+import { looksArchitecturalQuery } from './retrieval.mjs';
 
 const argv = process.argv.slice(2);
 
@@ -105,7 +106,7 @@ if (decision.route === 'module') {
 
 // vector route — pick pack vs search
 const tokens = query.split(/\s+/).filter(Boolean).length;
-const wantsPack = flags.has('--pack') || (!flags.has('--no-pack') && tokens > 12);
+const wantsPack = flags.has('--pack') || (!flags.has('--no-pack') && tokens > 14);
 
 if (wantsPack) {
   const a = [packScript, query];
@@ -162,8 +163,8 @@ function classify(q, opts = {}) {
     return { route: 'symbol', target: tokens[0], detail: tokens[0] };
   }
 
-  // 3. Question or doc-style query
-  if (/^(how|why|where|when|which|what|who)\b/i.test(cleaned) || /\b(decision|policy|architecture|plan|convention|workflow)\b/i.test(cleaned)) {
+  // 3. Question or doc-style query (aligned with retrieval architectural heuristics)
+  if (looksArchitecturalQuery(cleaned)) {
     return { route: 'doc', detail: 'summary-only' };
   }
 

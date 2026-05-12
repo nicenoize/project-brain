@@ -13,6 +13,8 @@
 
 ## Project Brain Impact
 
+- **Source hierarchy:** canonical facts = root `.project-brain/*.md` + `decisions|modules|features/`; `sessions/` = handoff only; see `templates/brain/DECISIONS.md`.
+- MODULE_MAP updated (if your team uses `.project-brain/MODULE_MAP.md`): yes/no/not applicable
 - Feature page updated: yes/no/not applicable
 - Module page updated: yes/no/not applicable
 - Decision recorded: yes/no/not applicable

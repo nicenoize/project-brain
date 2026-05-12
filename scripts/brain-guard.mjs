@@ -5,6 +5,13 @@ import { read } from './common.mjs';
 let errors = [];
 let warnings = [];
 
+const strictContextIndex = process.argv.includes('--strict-context-index') || process.env.BRAIN_GUARD_STRICT_CONTEXT_INDEX === '1';
+const warnTok = Number(process.env.BRAIN_CONTEXT_INDEX_WARN_TOKENS || 700);
+
+function estimateTokens(text) {
+  return Math.ceil(String(text).length / 4);
+}
+
 function sh(cmd) {
   try { return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
   catch { return ''; }
@@ -39,6 +46,17 @@ if (protectedBranch && staged.length) {
 const requiredBrain = ['.project-brain/context_index.md', '.project-brain/active_state.md', '.project-brain/product_plan.md', '.project-brain/repo_context.md'];
 for (const file of requiredBrain) if (!fs.existsSync(file)) errors.push(`Missing required brain file: ${file}`);
 
+const ctxPath = '.project-brain/context_index.md';
+if (fs.existsSync(ctxPath)) {
+  const body = read(ctxPath);
+  const est = estimateTokens(body);
+  if (est > warnTok) {
+    const msg = `context_index.md is ~${est} tokens (soft budget ${warnTok}). Trim bullets or move detail to repo_context/product_plan.`;
+    if (strictContextIndex) errors.push(msg);
+    else warnings.push(msg);
+  }
+}
+
 const codeFiles = staged.filter(f => /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(f) && fs.existsSync(f));
 for (const file of codeFiles) {
   const text = read(file);
@@ -59,6 +77,23 @@ for (const file of codeFiles) {
 const commitMsg = sh('git log -1 --no-merges --pretty=%s');
 if (commitMsg && !/^(feat|fix|refactor|chore|docs|test)\([a-z0-9-]+\): [a-z0-9]/.test(commitMsg)) {
   warnings.push(`Last commit message may not match convention: ${commitMsg}`);
+}
+
+const brainFeatureModule = staged.filter(f => /^\.project-brain\/(features|modules)\/.+\.md$/i.test(f));
+const brainDecision = staged.some(f => /^\.project-brain\/decisions\/.+\.md$/i.test(f));
+if (brainFeatureModule.length && !brainDecision) {
+  warnings.push('Staged `.project-brain/features/` or `modules/` updates without a matching `decisions/` change. Record durable architecture or product decisions in `.project-brain/decisions/` when behavior or policy shifts.');
+}
+
+const conventionPaths = ['AGENTS.md', 'references/conventions.md'].filter((p) => fs.existsSync(p));
+const tsStaged = staged.filter((f) => /\.(ts|tsx)$/i.test(f) && fs.existsSync(f));
+if (conventionPaths.length && tsStaged.length >= 15) {
+  const conventionsStaged = staged.some((f) => f === 'AGENTS.md' || f === 'references/conventions.md');
+  if (!conventionsStaged) {
+    warnings.push(
+      `Many TypeScript files staged (${tsStaged.length}); if standards or agent instructions shift, update ${conventionPaths.join(' or ')}.`
+    );
+  }
 }
 
 if (errors.length || warnings.length) {

@@ -5,17 +5,25 @@ import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
 
 const args = process.argv.slice(2);
-const maxTokens = Number(takeOption(args, '--max-tokens') || 3000);
+const tightBudget = takeFlag(args, '--tight-budget');
+const maxTokens = Number(
+  takeOption(args, '--max-tokens') ||
+    process.env.BRAIN_PACK_MAX_TOKENS ||
+    (tightBudget ? 2000 : 2600)
+);
 const format = takeOption(args, '--format') || 'text';
 const mode = takeOption(args, '--mode') || (takeFlag(args, '--resume') ? 'resume' : takeFlag(args, '--minimal') ? 'minimal' : 'default');
 const includeAutoCompact = takeFlag(args, '--include-auto-compact') || process.env.BRAIN_PACK_INCLUDE_AUTO_COMPACT === '1';
+const printBudget = takeFlag(args, '--print-budget') || process.env.BRAIN_PACK_PRINT_BUDGET === '1';
 const taskOpt = takeOption(args, '--task');
 const actorOpt = takeOption(args, '--actor');
 const query = args.join(' ').trim();
 
 if (!query && import.meta.url === `file://${process.argv[1]}`) {
-  console.error('Usage: npm run brain:pack -- "query" [--max-tokens 3000] [--mode default|resume|minimal] [--include-auto-compact] [--format json|text] [--task <workstream-id>] [--actor <label>]');
-  console.error('Env: BRAIN_TASK, BRAIN_ACTOR (same semantics as flags).');
+  console.error(
+    'Usage: npm run brain:pack -- "query" [--max-tokens N] [--tight-budget] [--mode default|resume|minimal] [--include-auto-compact] [--print-budget] [--format json|text] [--task <workstream-id>] [--actor <label>]'
+  );
+  console.error('Env: BRAIN_TASK, BRAIN_ACTOR, BRAIN_PACK_MAX_TOKENS (defaults to 2600; --tight-budget uses 2000). BRAIN_PACK_PRINT_BUDGET=1 logs token usage to stderr.');
   process.exit(1);
 }
 
@@ -69,6 +77,9 @@ export async function packPrompt(query, opts = {}) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const packed = await packPrompt(query, { maxTokens, mode });
+  if (printBudget) {
+    console.error(`[brain:pack] estimated tokens: ${packed.estimatedTokens} / budget ${maxTokens}`);
+  }
   if (format === 'json') console.log(JSON.stringify(packed, null, 2));
   else console.log(packed.prompt);
 }
@@ -105,6 +116,7 @@ function isAutoCompactRecord(record) {
     (file === '.project-brain/sessions' && text.includes('__auto-compact__'))
   ) && (
     record.type === 'session' ||
+    record.type === 'auto-compact' ||
     record.type === 'module-summary' ||
     file.startsWith('.project-brain/sessions')
   );
@@ -116,7 +128,7 @@ function prioritizeResumeRecords(records) {
 
 function resumeRank(record) {
   let rank = 0;
-  if (record.type === 'session') rank += 4;
+  if (record.type === 'session' || record.type === 'auto-compact') rank += 4;
   if (record.type === 'decision') rank += 3;
   if (record.isModuleSummary) rank += 2;
   if (record.isSummary) rank += 1;

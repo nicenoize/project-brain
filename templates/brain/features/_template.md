@@ -1,6 +1,7 @@
 ---
 type: feature
 status: planned
+layer: architecture
 owner: Needs Review
 contributors: []
 modules: []

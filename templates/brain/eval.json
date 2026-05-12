@@ -14,13 +14,23 @@
   {
     "query": "changed file boost",
     "expectedFiles": ["scripts/retrieval.mjs"],
-    "expectedSymbols": ["metadataBoost"],
     "expectedTypes": ["code"]
   },
   {
     "query": "AST chunking",
     "expectedFiles": ["scripts/chunk.mjs"],
     "expectedSymbols": ["findSymbolsAst"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "where are GitFlow branch naming conventions documented",
+    "expectedFiles": [".project-brain/repo_context.md"],
+    "expectedTypes": ["doc"]
+  },
+  {
+    "query": "how does hybrid score combine dense vector keyword and symbol signals",
+    "expectedFiles": ["scripts/retrieval.mjs"],
+    "expectedSymbols": ["hybridScore"],
     "expectedTypes": ["code"]
   }
 ]

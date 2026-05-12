@@ -1,5 +1,8 @@
 ---
 type: session
+provenance: human
+layer: session
+status: draft
 task_id: ""
 branch: ""
 actor: ""

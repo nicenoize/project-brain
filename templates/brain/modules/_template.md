@@ -1,6 +1,7 @@
 ---
 type: module
 status: active
+layer: architecture
 owner: Needs Review
 paths: []
 last_updated: Needs Review

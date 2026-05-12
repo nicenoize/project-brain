@@ -119,6 +119,7 @@ async function upsertSessionRecord(file, changedFiles, expiresAt) {
   const relative = path.relative(ROOT, file);
   const text = read(file);
   const meta = readSessionMeta(file, path.basename(file));
+  const stat = fs.statSync(file);
   const vector = await embedder.embed(`${relative}\n${text}`);
   await store.upsert([{
     id: `session:${sha256(relative)}`,
@@ -131,6 +132,7 @@ async function upsertSessionRecord(file, changedFiles, expiresAt) {
     embeddingText: `${relative}\n${text}`,
     isSummary: true,
     isModuleSummary: false,
+    isProjectSummary: false,
     branch,
     expiresAt,
     changedFiles,
@@ -138,6 +140,12 @@ async function upsertSessionRecord(file, changedFiles, expiresAt) {
     actor: meta.actor || '',
     tool: meta.tool || '',
     parentRun: meta.parentRun || '',
+    provenance: 'human',
+    layer: 'session',
+    docStatus: 'draft',
+    synthetic: false,
+    noindex: false,
+    mtime: stat.mtime.toISOString(),
     vector
   }]);
   await store.close();
