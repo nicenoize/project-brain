@@ -139,6 +139,45 @@ export function syncClaudeSettings() {
     `marketplaces:+${marketsResult.added}`,
   ].join(' ');
   console.log(`Synced .claude/settings.json (${summary}).`);
+
+  setCavemanUltra();
+}
+
+/**
+ * Idempotently set the caveman compression mode to `ultra` (the token-
+ * efficient default for inter-agent communication per the brain's
+ * ADR convention). Skips when:
+ *   - PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA=1 (developer opt-out)
+ *   - flag file already contains a non-default mode the developer
+ *     picked themselves (lite/wenyan/wenyan-lite/etc.) — only `full`
+ *     (the SessionStart-hook default) and empty get upgraded.
+ *
+ * The caveman plugin lives at user scope, so the flag is at
+ * ~/.claude/.caveman-active and applies across all projects on this
+ * machine. First project to setup wins; subsequent projects are
+ * no-ops.
+ */
+function setCavemanUltra() {
+  if (process.env.PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA === '1') return;
+  const flag = path.join(process.env.HOME ?? '', '.claude', '.caveman-active');
+  if (!flag.startsWith('/')) return; // safety: no HOME, abort
+  let current = '';
+  try {
+    current = fs.readFileSync(flag, 'utf8').trim();
+  } catch {
+    // file may not exist — that's fine, we'll create it
+  }
+  if (current && current !== 'full') {
+    console.log(`Caveman already set to '${current}' — leaving as-is.`);
+    return;
+  }
+  try {
+    fs.mkdirSync(path.dirname(flag), { recursive: true });
+    fs.writeFileSync(flag, 'ultra');
+    console.log("Caveman compression set to 'ultra' (token-efficient default).");
+  } catch (err) {
+    console.warn(`[brain] failed to set caveman mode: ${err.message}`);
+  }
 }
 
 // Allow `node scripts/setup-claude-settings.mjs` direct invocation too.
