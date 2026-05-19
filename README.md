@@ -129,6 +129,26 @@ Project Brain still keeps durable facts in `.project-brain/*.md`; Caveman only c
 - **`npm run brain:install-cursor-hooks`** — installs `.cursor/hooks.json` entries for **`preCompact`** and **`stop`** so compaction runs without manual steps. Re-run after updating the skill; merges with existing hooks when possible.
 - **Claude / Codex / Gemini** — run the same `npm run brain:compact` from the repo root before thread reset or long sessions; see `skills/project-brain/templates/agents/COMPACT_INSTRUCTIONS.md`.
 
+### Prune + session digest (durable-memory compaction)
+
+`brain:compact` writes resume slices for the **current** session. The two scripts below shrink the **durable** memory files so every future session starts lighter.
+
+- **`npm run brain:prune`** — moves "Complete (≥30 days ago)" bullets out of `.project-brain/active_state.md` into `.project-brain/history/YYYY-MM.md`, leaving a one-line stub that `brain:ask` can still find. Default is dry-run; pass `--apply` to write, `--with-caveman` to additionally pipe the file through `caveman-compress` (calls Claude — costs tokens). Tunable via `BRAIN_COMPACT_AGE_DAYS` (default `30`). Skips any file with uncommitted changes to avoid clobbering in-flight edits.
+- **`npm run brain:digest`** — Claude Code `PreCompact` / `Stop` hook target. Reads the hook JSON payload from stdin (`transcript_path`, `session_id`, `hook_event_name`), scrapes `## Decided:` / `## Memory:` / `## Followup:` lines from the assistant transcript, and appends them to `.project-brain/sessions/YYYY-MM-DD-digest.md`. Always emits `{"continue": true}` so the host workflow proceeds even on script error.
+
+Claude Code wiring (`.claude/settings.json` per project):
+
+```json
+{
+  "hooks": {
+    "PreCompact": [{ "hooks": [{ "type": "command", "command": "npm run -s brain:digest" }] }],
+    "Stop":       [{ "hooks": [{ "type": "command", "command": "npm run -s brain:digest" }] }]
+  }
+}
+```
+
+Optional: add `npm run brain:prune` to a weekly cron (or a `prepare-commit-msg` hook with a date-stamped lock file) so `active_state.md` self-trims without manual housekeeping.
+
 ## Common commands
 
 ```bash
