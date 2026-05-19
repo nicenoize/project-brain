@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node skills/project-brain/scripts/brain-session-digest.mjs"
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-session-digest.mjs\""
           }
         ]
       }
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node skills/project-brain/scripts/brain-session-digest.mjs"
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-session-digest.mjs\""
           }
         ]
       }
