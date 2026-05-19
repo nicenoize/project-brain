@@ -118,6 +118,8 @@ Recommended team policy:
 
 Project Brain still keeps durable facts in `.project-brain/*.md`; Caveman only changes how agents communicate.
 
+`npm run brain:update-skill` (and `bin/setup.sh`) now idempotently writes `ultra` to `~/.claude/.caveman-active` so every consuming repo gets the recommended compression mode automatically. The setter skips when (a) `PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA=1` is set, or (b) the developer has already picked a non-default mode themselves (`lite`, `wenyan`, etc.) — only empty/missing or the SessionStart-hook default `full` gets upgraded.
+
 `npm run brain:guard` warns when `context_index.md` exceeds `BRAIN_CONTEXT_INDEX_WARN_TOKENS` (default 700 estimated tokens). Use `npm run brain:guard -- --strict-context-index` to fail the hook on oversize indexes. `npm run brain:health -- --check-brain-refs` scans `.project-brain/**/*.md` for broken relative links; strict CI runs this via `brain:maintain -- --ci`. `brain:health` also prints **root brain doc ages** (git last commit, else mtime) for `context_index`, `repo_context`, `master_plan`, and `active_state`, warns when `repo_context.md` is older than `package.json` (mtime), and honors **`BRAIN_STALE_DOC_DAYS`** (set to a positive number to warn when any of those files exceed that age).
 
 ## Auto-compact (Cursor + terminal agents)
