@@ -149,6 +149,18 @@ Claude Code wiring (`.claude/settings.json` per project):
 
 Optional: add `npm run brain:prune` to a weekly cron (or a `prepare-commit-msg` hook with a date-stamped lock file) so `active_state.md` self-trims without manual housekeeping.
 
+### Claude Code plugin set (auto-wired)
+
+`brain:update-skill` now also merges `templates/claude-code/settings.recommended.json` into the project's `.claude/settings.json`. That gives every consumer the same baseline:
+
+- `SessionStart` hook that dumps `active_state.md` so Claude opens with current context.
+- `PreCompact` + `Stop` hooks pointing at `brain:digest`.
+- The wshobson/agents plugin set (security audits, testing, comprehensive review, multi-agent orchestration, full-stack orchestration, javascript-typescript) plus caveman, with their marketplaces declared.
+
+The merger is **additive only** — it never overwrites existing keys. It unions `permissions.allow`, `enabledPlugins`, and `extraKnownMarketplaces`; for `hooks`, it only appends a group whose command isn't already present for that event. Skip the sync entirely with `PROJECT_BRAIN_SKIP_CLAUDE_SETTINGS=1` (useful in CI or in projects that manage settings by hand).
+
+After `brain:update-skill` writes the marketplaces + enabledPlugins entries, run `claude plugin marketplace update` once to fetch the plugin code. Subsequent `brain:update-skill` runs are no-ops unless a new plugin or hook is added upstream.
+
 ## Common commands
 
 ```bash
