@@ -142,6 +142,12 @@ export function syncClaudeSettings() {
 }
 
 // Allow `node scripts/setup-claude-settings.mjs` direct invocation too.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  syncClaudeSettings();
+// Use realpath so the check survives symlinked vendor checkouts.
+import { realpathSync } from 'node:fs';
+try {
+  const here = realpathSync(new URL(import.meta.url).pathname);
+  const invoked = realpathSync(process.argv[1] ?? '');
+  if (here === invoked) syncClaudeSettings();
+} catch {
+  // No-op when invoked as a module.
 }
