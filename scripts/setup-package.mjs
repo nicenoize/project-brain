@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { read, write, mergePackageScripts, mergePackageDeps } from './common.mjs';
+import { syncClaudeSettings } from './setup-claude-settings.mjs';
 
 const packagePath = 'package.json';
 let pkg = {};
@@ -29,6 +30,8 @@ if (!fs.existsSync('.github/workflows/project-brain.yml')) {
 }
 
 console.log('Updated package.json, .gitignore, PR template, and GitHub workflow.');
+
+syncClaudeSettings();
 
 const { spawnSync } = await import('node:child_process');
 const hookInstaller = fs.existsSync('skills/project-brain/scripts/install-cursor-hooks.mjs')
