@@ -18,18 +18,28 @@ function sh(cmd) {
 }
 
 const branch = process.env.GITHUB_HEAD_REF || sh('git rev-parse --abbrev-ref HEAD');
+const issueLinkedWork =
+  /^(feature|fix|refactor|chore|docs|test)\/\d+-[a-z0-9-]+$/.test(branch) ||
+  /^epic\/\d+-[a-z0-9-]+$/.test(branch);
 if (branch && branch !== 'HEAD' && !['main', 'master', 'develop', 'dev'].includes(branch)) {
-  const ok = /^(feature|fix|refactor|chore|docs|test|release|hotfix)\/[a-z0-9]+[a-z0-9-]*$/.test(branch) || /^(feature|fix|refactor|chore|docs|test|hotfix)\/\d+-[a-z0-9-]+$/.test(branch);
+  const ok =
+    /^(feature|fix|refactor|chore|docs|test|release|hotfix)\/[a-z0-9]+[a-z0-9-]*$/.test(branch) ||
+    /^(feature|fix|refactor|chore|docs|test|hotfix)\/\d+-[a-z0-9-]+$/.test(branch) ||
+    /^epic\/\d+-[a-z0-9-]+$/.test(branch);
   if (!ok) errors.push(`Branch name does not match convention: ${branch}`);
-  if (/^(feature|fix|refactor|chore|docs|test)\//.test(branch) && !/^(feature|fix|refactor|chore|docs|test)\/\d+-[a-z0-9-]+$/.test(branch)) {
+  if (/^(feature|fix|refactor|chore|docs|test)\//.test(branch) && !issueLinkedWork) {
     warnings.push(`Branch is not issue-linked: ${branch}. Prefer <type>/<issue-number>-description before push/PR.`);
+  }
+  if (/^epic\//.test(branch) && !/^epic\/\d+-[a-z0-9-]+$/.test(branch)) {
+    warnings.push(`Epic branch is not issue-linked: ${branch}. Prefer epic/<issue-number>-description.`);
   }
 }
 
 const baseBranch = process.env.GITHUB_BASE_REF || '';
+const epicBase = /^epic\/\d+-[a-z0-9-]+$/.test(baseBranch);
 if (baseBranch && branch && branch !== 'HEAD') {
-  if (/^(feature|fix|refactor|chore|docs|test)\//.test(branch) && !['develop', 'dev'].includes(baseBranch)) {
-    errors.push(`Work branch ${branch} targets ${baseBranch}. GitFlow PRs for this branch type must target develop.`);
+  if (/^(feature|fix|refactor|chore|docs|test)\//.test(branch) && !['develop', 'dev'].includes(baseBranch) && !epicBase) {
+    errors.push(`Work branch ${branch} targets ${baseBranch}. GitFlow PRs for this branch type must target develop or an epic/* integration branch.`);
   }
   if (/^release\//.test(branch) && !['main', 'master'].includes(baseBranch)) {
     errors.push(`Release branch ${branch} targets ${baseBranch}. Release PRs must target main.`);
