@@ -1,0 +1,54 @@
+{
+  "$schema-note": "Copy to .project-brain/conventions.json and prune to what your project actually enforces. Each rule blocks Edit/Write/MultiEdit at the PreToolUse hook and is also checked by `npm run brain:lint-conventions -- --scan` in pre-commit/CI. Cite the ADR that owns each rule in the message so the agent knows where to read more.",
+  "rules": [
+    {
+      "name": "no-supabase-from-outside-db-or-actions",
+      "match": ["**/*.ts", "**/*.tsx"],
+      "exclude": [
+        "lib/db/**",
+        "lib/actions/**",
+        "lib/supabase/**",
+        "supabase/**",
+        "e2e/**",
+        "**/*.test.*",
+        "**/*.spec.*",
+        "scripts/**"
+      ],
+      "forbid": "\\bsupabase\\.from\\(",
+      "message": "Raw supabase.from() must live in lib/db/ (reads) or lib/actions/ (writes). RLS is enforced via has_venue_role — see .project-brain/decisions/0001-rls-as-single-authz-source.md.",
+      "severity": "block"
+    },
+    {
+      "name": "no-service-role-in-app-code",
+      "match": ["app/**/*.{ts,tsx}", "components/**/*.{ts,tsx}", "lib/**/*.{ts,tsx}"],
+      "exclude": ["scripts/**", "supabase/**", "**/*.test.*"],
+      "forbid": "SUPABASE_SERVICE_ROLE_KEY",
+      "message": "Service-role key bypasses RLS. Only scripts/ and supabase/ may reference it. See decisions/0001-rls-as-single-authz-source.md.",
+      "severity": "block"
+    },
+    {
+      "name": "server-only-in-client-component",
+      "match": ["**/*.tsx"],
+      "forbid": "^\\s*['\"]use client['\"];?[\\s\\S]*?import\\s+['\"]server-only['\"]",
+      "flags": "ms",
+      "message": "A 'use client' file cannot import 'server-only'. Move server logic into lib/db/ or lib/actions/ and call it from a server component.",
+      "severity": "block"
+    },
+    {
+      "name": "no-direct-rls-disable",
+      "match": ["supabase/**/*.sql", "**/*.sql"],
+      "forbid": "DISABLE\\s+ROW\\s+LEVEL\\s+SECURITY",
+      "flags": "i",
+      "message": "Disabling RLS is forbidden. Use a security-definer RPC for anon flows — see decisions/0003-anon-public-flow-via-security-definer-rpcs.md.",
+      "severity": "block"
+    },
+    {
+      "name": "no-any-without-justification",
+      "match": ["app/**/*.{ts,tsx}", "lib/**/*.{ts,tsx}", "components/**/*.{ts,tsx}"],
+      "exclude": ["**/*.test.*", "**/*.spec.*"],
+      "forbid": ":\\s*any\\b(?!.*\\/\\/\\s*ok-any)",
+      "message": "`: any` requires a `// ok-any: <reason>` trailing comment. TS 5 — see CLAUDE.md stack section.",
+      "severity": "warn"
+    }
+  ]
+}

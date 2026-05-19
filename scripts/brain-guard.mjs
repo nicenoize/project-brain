@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { execSync } from 'node:child_process';
+import path from 'node:path';
+import { execSync, spawnSync } from 'node:child_process';
 import { read } from './common.mjs';
 
 let errors = [];
@@ -103,6 +104,22 @@ if (conventionPaths.length && tsStaged.length >= 15) {
     warnings.push(
       `Many TypeScript files staged (${tsStaged.length}); if standards or agent instructions shift, update ${conventionPaths.join(' or ')}.`
     );
+  }
+}
+
+const brainDocStaged = staged.some((f) => /^\.project-brain\/.+\.md$/i.test(f));
+if (brainDocStaged) {
+  try {
+    const linkCheckPath = new URL('./brain-link-check.mjs', import.meta.url).pathname;
+    const linkCheck = spawnSync(process.execPath, [linkCheckPath, '--quiet'], { encoding: 'utf8' });
+    if (linkCheck.status === 1) {
+      errors.push(
+        'Broken code references in `.project-brain/**.md` (run `npm run brain:link-check` for details).\n' +
+          (linkCheck.stdout || '').trim()
+      );
+    }
+  } catch {
+    // best-effort: never block commits when the link-check itself errors
   }
 }
 

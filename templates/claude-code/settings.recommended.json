@@ -34,6 +34,25 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-session-digest.mjs\""
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-prune.mjs\" --apply >/dev/null 2>&1 || true"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-lint-conventions.mjs\""
+          }
+        ]
       }
     ]
   },

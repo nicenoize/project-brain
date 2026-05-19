@@ -161,6 +161,16 @@ The merger is **additive only** — it never overwrites existing keys. It unions
 
 After `brain:update-skill` writes the marketplaces + enabledPlugins entries, run `claude plugin marketplace update` once to fetch the plugin code. Subsequent `brain:update-skill` runs are no-ops unless a new plugin or hook is added upstream.
 
+## Enforcement hooks
+
+Three guardrails run alongside the brain so durable rules don't depend on agent recall.
+
+- **`brain:lint-conventions`** — registered as a Claude Code `PreToolUse` hook on `Edit`/`Write`/`MultiEdit`. Reads `.project-brain/conventions.json` (start from `.project-brain/conventions.example.json`, scaffolded by `brain:init`); each rule is a regex `forbid` pattern scoped by glob include/exclude with a human message that should cite the owning ADR. `severity: "block"` denies the tool call with the message returned to the agent; `severity: "warn"` only logs to stderr. Also a CLI: `npm run brain:lint-conventions -- --scan` walks the working tree (or supplied paths) and exits 1 on any block-severity hit — wire into pre-commit or CI alongside lint/typecheck.
+- **`brain:link-check`** — verifies that code-path references inline-coded inside `.project-brain/**.md` (e.g. ``lib/db/events.ts``) still exist in the working tree. Runs automatically inside `brain:guard` whenever a brain doc is staged, so renames that orphan the map fail pre-commit. Stand-alone: `npm run brain:link-check` (or `--json`, `--quiet`). Markdown→Markdown links are still owned by `brain:health --check-brain-refs`.
+- **Stop-hook `brain:prune --apply`** — added to the recommended `.claude/settings.json` Stop hooks alongside `brain:digest`. Every session end moves `Complete (≥BRAIN_COMPACT_AGE_DAYS old)` bullets out of `active_state.md` into `.project-brain/history/YYYY-MM.md`, so the always-loaded state file stays scannable. Set `BRAIN_COMPACT_AGE_DAYS=7` (or lower) in the host shell for a tighter retention window.
+
+When `brain:init` runs in a host repo that has a `pkg/` directory, it also scaffolds `.project-brain/packages/<name>.md` from the package template — fill these in so `BRAIN_TASK=pkg-<name>` retrieval boosts have something to score against.
+
 ## Common commands
 
 ```bash
@@ -197,6 +207,8 @@ npm run brain:sync
 npm run brain:guard
 npm run brain:health
 npm run brain:adr -- "short decision title"
+npm run brain:lint-conventions -- --scan
+npm run brain:link-check
 ```
 
 ## Agent-ready workflow

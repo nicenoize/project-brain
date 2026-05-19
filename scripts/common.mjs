@@ -114,6 +114,8 @@ export function mergePackageScripts(pkg) {
     'brain:prune': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-prune.mjs',
     'brain:digest': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-session-digest.mjs',
     'brain:adr': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-adr.mjs',
+    'brain:lint-conventions': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-lint-conventions.mjs',
+    'brain:link-check': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-link-check.mjs',
     'brain:install-cursor-hooks': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/install-cursor-hooks.mjs',
     'brain:install-hooks': 'bash skills/project-brain/bin/install-hooks.sh',
     'brain:update-skill': 'bash skills/project-brain/bin/update.sh'
