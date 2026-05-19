@@ -2,8 +2,43 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, BRAIN_DIR, ensureDir, exists, write } from './common.mjs';
 
-const dirs = ['features', 'modules', 'decisions', 'sessions', 'work-packages', 'orchestration', 'vector-db'].map(d => path.join(BRAIN_DIR, d));
+const dirs = ['features', 'modules', 'decisions', 'sessions', 'work-packages', 'orchestration', 'vector-db', 'packages'].map(d => path.join(BRAIN_DIR, d));
 dirs.forEach(ensureDir);
+
+// If the host repo has a `pkg/<name>/` layout, scaffold a matching
+// `.project-brain/packages/<name>.md` from the package template so the
+// brain map mirrors the actual code-package boundaries. Skips packages
+// that already have a doc, and is silent when no `pkg/` exists.
+const pkgRoot = path.join(ROOT, 'pkg');
+const packagesDir = path.join(BRAIN_DIR, 'packages');
+const packageTemplateCandidates = [
+  path.join('skills', 'project-brain', 'templates', 'brain', 'packages', 'PACKAGE_TEMPLATE.md'),
+  path.join('templates', 'brain', 'packages', 'PACKAGE_TEMPLATE.md')
+];
+const packageTemplate = packageTemplateCandidates.find((p) => fs.existsSync(p));
+if (packageTemplate && fs.existsSync(pkgRoot)) {
+  for (const entry of fs.readdirSync(pkgRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    const dest = path.join(packagesDir, `${entry.name}.md`);
+    if (exists(dest)) continue;
+    const tpl = fs.readFileSync(packageTemplate, 'utf8').replace(/<pkg-name>/g, entry.name);
+    fs.writeFileSync(dest, tpl);
+  }
+}
+
+// Drop a conventions.example.json next to the brain so projects can
+// `cp .project-brain/conventions.example.json .project-brain/conventions.json`
+// and start enforcing patterns. The lint hook is a no-op until the real
+// file exists, so this is safe to scaffold by default.
+const conventionsExampleCandidates = [
+  path.join('skills', 'project-brain', 'templates', 'brain', 'conventions.example.json'),
+  path.join('templates', 'brain', 'conventions.example.json')
+];
+const conventionsExample = conventionsExampleCandidates.find((p) => fs.existsSync(p));
+const conventionsExampleDest = path.join(BRAIN_DIR, 'conventions.example.json');
+if (conventionsExample && !exists(conventionsExampleDest)) {
+  fs.copyFileSync(conventionsExample, conventionsExampleDest);
+}
 
 const evalTemplateCandidates = [
   path.join('skills', 'project-brain', 'templates', 'brain', 'eval.json'),
