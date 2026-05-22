@@ -141,9 +141,20 @@ export class LanceStore extends BrainStore {
         await table.mergeInsert('id').whenMatchedUpdateAll().whenNotMatchedInsertAll().execute(forLance);
       } catch (error) {
         const msg = String(error?.message || error);
-        if (/schema|fields did not match|unexpected=/i.test(msg)) {
+        const isSchemaErr = /schema|fields did not match|unexpected=/i.test(msg);
+        if (isSchemaErr) {
+          const autoRecover = process.env.BRAIN_AUTO_RECOVER === '1';
+          if (autoRecover) {
+            console.warn('Project Brain: Lance schema mismatch detected. Auto-recovering: dropping table and re-creating from current records.');
+            try {
+              await this.db.dropTable(TABLE_NAME);
+            } catch {}
+            this.table = await this.db.createTable(TABLE_NAME, forLance, { mode: 'overwrite' });
+            return;
+          }
           console.error('Project Brain: Lance table schema is older than this package (new coordination fields on records).');
           console.error('Fix: rm -rf .project-brain/vector-db && npm run brain:index -- --force');
+          console.error('Or: rerun with BRAIN_AUTO_RECOVER=1 to drop+rebuild the Lance table automatically.');
         }
         throw error;
       }
