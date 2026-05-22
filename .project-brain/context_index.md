@@ -21,6 +21,7 @@ Retrieval performance + multi-actor correctness + aggregate vectors. See `decisi
 | Indexing | [[modules/indexing]] | `scripts/brain-index.mjs`, `scripts/chunk.mjs`, `scripts/aggregate.mjs`, `scripts/ts-graph.mjs`, `scripts/embed.mjs` |
 | Coordination | [[modules/coordination]] | `scripts/active-state.mjs`, `scripts/brain-orchestrate.mjs`, `scripts/brain-work.mjs`, `scripts/brain-worktree.mjs`, `scripts/brain-session.mjs` |
 | Hooks + guardrails | [[modules/hooks]] | `scripts/brain-guard.mjs`, `scripts/brain-health.mjs`, `scripts/brain-lint-conventions.mjs`, `scripts/brain-session-digest.mjs`, `bin/install-hooks.sh` |
+| **Fleet mode** | [[modules/fleet]] | `scripts/projects.mjs`, `scripts/edges/*.mjs`, `scripts/brain-edges.mjs`, `scripts/brain-projects.mjs` |
 
 ## Record kinds in the index
 
@@ -33,6 +34,9 @@ Retrieval performance + multi-actor correctness + aggregate vectors. See `decisi
 | `-4` | project-summary | aggregates module summaries |
 | `-5` | package-summary | per `packages/*` / `apps/*` (monorepos only) |
 | `-6` | decision-cluster | grouped ADRs by `module:` / `feature:` |
+| `-7` | repo-summary | per fleet project (Node/Go/Python/K8s/Docker extractors) |
+| `-8` | fleet-summary | one per fleet brain (aggregates repo-summaries + edges) |
+| `-9` | cross-project-edge | one per detected cross-project edge |
 
 All aggregate records use `aggregate.mjs#buildAggregateSummaryTexts` so the embedding fits MiniLM's ~256-token window.
 
@@ -52,6 +56,15 @@ See `decisions/0001` through `0004`.
 
 See `decisions/0005`, `0006`.
 
+## Fleet mode invariants
+
+- `discoverProjects(ROOT)` auto-activates fleet behavior when ≥ 2 projects detected (`BRAIN_FLEET_MODE=0|1` overrides).
+- Every record carries `project: <name>` in fleet mode; single-project mode emits `''`.
+- 11 pluggable edge detectors live in `scripts/edges/`. Each is an async generator with `AbortSignal.timeout(BRAIN_EDGE_TIMEOUT_MS||30s)`.
+- Per-project git scope: `brain:work --project NAME` / `brain:worktree spawn --project NAME` route to the project's `.git`.
+
+See `decisions/0009`, `0010`, `0011`.
+
 ## Commands (top-level)
 
 ```bash
@@ -67,7 +80,11 @@ npm run brain:adr     "decision title"           # scaffold ADR
 npm run brain:work    -- start ...               # workstream lifecycle
 npm run brain:orchestrate -- --concurrency 3 ... # multi-agent spawn
 npm run brain:worktree -- spawn --count N ...    # parallel branches
-npm test                                         # 45 unit tests
+npm test                                         # 88 unit tests
+# Fleet mode (only when 2+ sibling projects discovered):
+npm run brain:edges                              # list cross-project edges
+npm run brain:edges -- --detect                  # force-rerun all detectors
+npm run brain:projects                           # projects + edge counts
 ```
 
 ## Retrieval hints
