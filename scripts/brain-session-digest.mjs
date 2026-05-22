@@ -43,8 +43,22 @@ function readStdinSync() {
 const TAG_RE = /^##\s+(Decided|Memory|Followup):\s*(.+)$/gim
 
 function extractTags(transcriptPath) {
-  if (!transcriptPath || !existsSync(transcriptPath)) return []
-  const lines = readFileSync(transcriptPath, 'utf8').split('\n').filter(Boolean)
+  if (!transcriptPath) {
+    process.stderr.write('[brain:digest] no transcript_path in hook payload\n')
+    return []
+  }
+  if (!existsSync(transcriptPath)) {
+    process.stderr.write(`[brain:digest] transcript not found: ${transcriptPath}\n`)
+    return []
+  }
+  let raw
+  try {
+    raw = readFileSync(transcriptPath, 'utf8')
+  } catch (error) {
+    process.stderr.write(`[brain:digest] transcript read failed: ${error.message || error}\n`)
+    return []
+  }
+  const lines = raw.split('\n').filter(Boolean)
   const hits = []
   for (const line of lines) {
     let entry
@@ -75,8 +89,8 @@ function main() {
   let payload = {}
   try {
     payload = raw ? JSON.parse(raw) : {}
-  } catch {
-    // Hook fired with no JSON — bail quietly.
+  } catch (error) {
+    process.stderr.write(`[brain:digest] hook payload parse failed: ${error.message || error}\n`)
     emitContinue()
   }
 
@@ -87,13 +101,17 @@ function main() {
   const hits = extractTags(transcriptPath)
   if (hits.length === 0) emitContinue()
 
-  mkdirSync(SESSIONS_DIR, { recursive: true })
   const date = new Date().toISOString().slice(0, 10)
   const target = join(SESSIONS_DIR, `${date}-digest.md`)
-  const header = existsSync(target)
-    ? `\n## ${event} ${new Date().toISOString().slice(11, 16)} — session ${sessionId.slice(0, 8)}\n`
-    : `# Session digests — ${date}\n\n## ${event} ${new Date().toISOString().slice(11, 16)} — session ${sessionId.slice(0, 8)}\n`
-  appendFileSync(target, header + hits.join('\n') + '\n')
+  try {
+    mkdirSync(SESSIONS_DIR, { recursive: true })
+    const header = existsSync(target)
+      ? `\n## ${event} ${new Date().toISOString().slice(11, 16)} — session ${sessionId.slice(0, 8)}\n`
+      : `# Session digests — ${date}\n\n## ${event} ${new Date().toISOString().slice(11, 16)} — session ${sessionId.slice(0, 8)}\n`
+    appendFileSync(target, header + hits.join('\n') + '\n')
+  } catch (error) {
+    process.stderr.write(`[brain:digest] digest write failed (${target}): ${error.message || error}\n`)
+  }
 
   emitContinue()
 }
