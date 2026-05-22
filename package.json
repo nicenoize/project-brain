@@ -32,6 +32,8 @@
     "brain:install-cursor-hooks": "node scripts/install-cursor-hooks.mjs",
     "brain:install-hooks": "bash bin/install-hooks.sh",
     "brain:update-skill": "bash bin/update.sh",
+    "brain:edges": "node scripts/brain-edges.mjs",
+    "brain:projects": "node scripts/brain-projects.mjs",
     "test": "node --test tests/*.test.mjs tests/**/*.test.mjs"
   },
   "dependencies": {

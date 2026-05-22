@@ -72,6 +72,15 @@ export function discoverProjects(root, opts = {}) {
     if (explicitSet.size && !explicitSet.has(entry.name)) continue;
 
     const absDir = path.join(root, entry.name);
+    // Reject symlinks that resolve to the fleet root itself or to an ancestor —
+    // these are self-loops (e.g. a `project-brain -> .` symlink) and would
+    // cause discoverProjects to report the host repo as its own subproject.
+    if (entry.isSymbolicLink()) {
+      let real;
+      try { real = fs.realpathSync(absDir); } catch { continue; }
+      const rootReal = fs.realpathSync(root);
+      if (real === rootReal || rootReal.startsWith(real + path.sep)) continue;
+    }
     const kinds = projectKindsForDir(absDir);
     if (!kinds.length) continue;
 

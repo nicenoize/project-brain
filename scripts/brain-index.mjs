@@ -6,6 +6,8 @@ import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
 import { loadTsSemanticContext } from './ts-graph.mjs';
 import { discoverProjects, isFleetMode } from './projects.mjs';
+import { runDetectors } from './edges/index.mjs';
+import { candidateToRecord } from './edges/materialize.mjs';
 import {
   buildAggregateSummaryTexts,
   buildPackageSummary,
@@ -213,6 +215,10 @@ if (isFastMode()) {
   if (fleetMode) await rebuildRepoSummaries(store, embedder, { dirtyProjects });
 }
 
+if (fleetMode && !isFastMode()) {
+  await rebuildCrossProjectEdges(store, embedder, { forceRebuild, dirtyProjects });
+}
+
 /**
  * Emit one chunk:-7 repo-summary record per fleet project. Aggregates
  * the project's package.json/go.mod/Chart.yaml metadata, README first
@@ -268,6 +274,39 @@ async function rebuildRepoSummaries(store, embedder, opts = {}) {
     });
   }
   if (newRecords.length) await store.upsert(newRecords);
+}
+
+/**
+ * Run all edge detectors, materialize candidates as chunk:-9 records, and
+ * incrementally upsert. Detectors emit per-project; we delete existing
+ * cross-project-edge records where either endpoint is dirty before
+ * writing the fresh set so removed edges don't linger.
+ */
+async function rebuildCrossProjectEdges(store, embedder, opts = {}) {
+  const { forceRebuild = false, dirtyProjects = new Set() } = opts;
+  const allRecords = await store.getAll();
+  const dirty = forceRebuild ? new Set(projects.map(p => p.name)) : dirtyProjects;
+  const staleIds = allRecords
+    .filter(r => r.type === 'cross-project-edge' && (forceRebuild || dirty.has(r.edgeFrom) || dirty.has(r.edgeTo)))
+    .map(r => r.id);
+  if (staleIds.length) await store.delete(staleIds);
+
+  const candidates = await runDetectors({
+    ROOT,
+    projects,
+    dirtyProjects: dirty,
+    useCache: !forceRebuild
+  });
+  if (!candidates.length) return;
+
+  const newRecords = [];
+  for (const c of candidates) {
+    const record = candidateToRecord(c, []);
+    record.vector = await embedder.embed(record.embeddingText);
+    newRecords.push(record);
+  }
+  await store.upsert(newRecords);
+  console.log(`Project Brain: cross-project edges — ${candidates.length} candidate${candidates.length === 1 ? '' : 's'} materialized.`);
 }
 
 function inferFeatureFromPath(file) {
