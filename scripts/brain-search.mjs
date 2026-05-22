@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { JSON_INDEX, MANIFEST, read } from './common.mjs';
+import { JSON_INDEX, MANIFEST, read, takeFlag, takeOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
@@ -88,17 +88,3 @@ function toJsonResult(record) {
   };
 }
 
-function takeFlag(args, flag) {
-  const index = args.indexOf(flag);
-  if (index === -1) return false;
-  args.splice(index, 1);
-  return true;
-}
-
-function takeOption(args, name) {
-  const index = args.indexOf(name);
-  if (index === -1) return '';
-  const value = args[index + 1] || '';
-  args.splice(index, 2);
-  return value;
-}

@@ -22,7 +22,7 @@ export function chunkMarkdown(text, opts = {}) {
 export async function chunkCode(text, filePath, opts = {}) {
   const maxChars = opts.maxChars || DEFAULT_MAX_CHARS;
   const tsSemantics = opts.tsSemantics || null;
-  const symbols = await findSymbols(text, filePath);
+  const symbols = await findSymbols(text, filePath, tsSemantics);
   const imports = findImports(text);
   const importedNames = findImportedNames(text);
   if (!symbols.length) {
@@ -136,7 +136,10 @@ function splitMarkdownSections(text) {
   return sections.filter(section => section.text);
 }
 
-async function findSymbols(text, filePath) {
+async function findSymbols(text, filePath, tsSemantics = null) {
+  // Reuse declared symbols from the ts-graph pass when available — avoids
+  // a second `import('typescript')` and a duplicate AST walk per file.
+  if (tsSemantics?.declaredSymbols?.length) return tsSemantics.declaredSymbols;
   const ast = await findSymbolsAst(text, filePath);
   return ast.length ? ast : findSymbolsRegex(text);
 }

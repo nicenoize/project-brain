@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { execSync } from 'node:child_process';
-import { BRAIN_DIR, ROOT, ensureDir, read, sha256, slugify, write } from './common.mjs';
+import { BRAIN_DIR, ROOT, ensureDir, read, sha256, slugify, write, takeOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
 import { packPrompt } from './brain-pack.mjs';
@@ -12,14 +12,6 @@ const DEFAULT_QUERY =
   'Resume workstream: goals, architecture, open decisions, next concrete implementation steps, key file paths and symbols.';
 
 const args = process.argv.slice(2);
-
-function takeOption(name) {
-  const i = args.indexOf(name);
-  if (i === -1) return '';
-  const v = args[i + 1] || '';
-  args.splice(i, v ? 2 : 1);
-  return v;
-}
 
 function sh(cmd) {
   try {
@@ -127,11 +119,11 @@ async function main() {
     }
   }
 
-  const maxTokens = Number(takeOption('--max-tokens') || process.env.BRAIN_COMPACT_MAX_TOKENS || 1200);
-  const taskId = takeOption('--task') || process.env.BRAIN_TASK || '';
-  const actor = takeOption('--actor') || process.env.BRAIN_ACTOR || '';
+  const maxTokens = Number(takeOption(args, '--max-tokens') || process.env.BRAIN_COMPACT_MAX_TOKENS || 1200);
+  const taskId = takeOption(args, '--task') || process.env.BRAIN_TASK || '';
+  const actor = takeOption(args, '--actor') || process.env.BRAIN_ACTOR || '';
   const tool =
-    takeOption('--tool') ||
+    takeOption(args, '--tool') ||
     process.env.BRAIN_TOOL ||
     process.env.BRAIN_COMPACT_TOOL ||
     process.env.BRAIN_WORKTREE_TOOL ||

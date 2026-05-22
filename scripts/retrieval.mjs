@@ -6,17 +6,26 @@ export async function retrieve(query, store, embedder, opts = {}) {
   const candidates = Number(opts.candidates || Math.max(topK * 8, 32));
   const filter = opts.filter || {};
   const queryVector = await embedder.embed(query);
-  const dense = await store.search(queryVector, candidates, filter);
-  const all = (await store.getAll()).filter(record => recordMatches(record, filter));
+  const dense = (await store.search(queryVector, candidates, filter))
+    .filter(record => recordMatches(record, filter));
+
+  // Default: score only over dense candidates (fast, O(candidates) not O(N)).
+  // BRAIN_BROAD_CANDIDATES=1 falls back to full corpus scan for cases where
+  // keyword/symbol relevance may live outside the top-K dense neighborhood.
+  const broad = opts.broadCandidates ?? (process.env.BRAIN_BROAD_CANDIDATES === '1');
+  const pool = broad
+    ? (await store.getAll()).filter(record => recordMatches(record, filter))
+    : dense;
+
   const denseScores = new Map(dense.map(record => [record.id, record.score]));
-  const keyword = tfidfScore(query, all);
-  const symbol = symbolScore(query, all, opts);
+  const keyword = tfidfScore(query, pool);
+  const symbol = symbolScore(query, pool, opts);
   const maxKeyword = Math.max(1, ...keyword.values());
   const context = retrievalContext({ ...opts, query });
   const alpha = Number(opts.alpha || process.env.BRAIN_HYBRID_ALPHA || 0.7);
   const keywordScale = keywordScaleForContext(context);
 
-  return all
+  const scored = pool
     .map(record => {
       const denseScore = denseScores.get(record.id) || 0;
       const keywordScore = ((keyword.get(record.id) || 0) / maxKeyword) * keywordScale;
@@ -31,24 +40,74 @@ export async function retrieve(query, store, embedder, opts = {}) {
         score: hybridScore(denseScore, keywordScore, symbolMatchScore, metadataScore, alpha)
       };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK);
+    .sort((a, b) => b.score - a.score);
+
+  return limitChunksPerFile(scored, opts).slice(0, topK);
 }
 
+/**
+ * Cap non-summary chunks per file so a single long file can't occupy
+ * multiple top-K slots with near-duplicate content. Summaries (chunk: -1)
+ * are always kept. Default 2; override via opts.maxChunksPerFile or
+ * BRAIN_MAX_CHUNKS_PER_FILE. Set to 0 or Infinity to disable.
+ */
+function limitChunksPerFile(records, opts) {
+  const limit = Number(
+    opts.maxChunksPerFile ??
+    process.env.BRAIN_MAX_CHUNKS_PER_FILE ??
+    2
+  );
+  if (!Number.isFinite(limit) || limit <= 0) return records;
+  const seen = new Map();
+  const out = [];
+  for (const record of records) {
+    if (record.isSummary) {
+      out.push(record);
+      continue;
+    }
+    const key = record.file || record.id;
+    const count = seen.get(key) || 0;
+    if (count >= limit) continue;
+    seen.set(key, count + 1);
+    out.push(record);
+  }
+  return out;
+}
+
+/**
+ * BM25 keyword score with document-length normalization.
+ * k1 controls term-frequency saturation (default 1.2); b controls length
+ * normalization (default 0.75, full length normalization). Pluses one to
+ * the idf term to keep all scores non-negative even when df > N/2.
+ */
 export function tfidfScore(query, records) {
   const queryTokens = tokenize(query);
+  if (!records.length || !queryTokens.length) return new Map();
+  const k1 = Number(process.env.BRAIN_BM25_K1 || 1.2);
+  const b = Number(process.env.BRAIN_BM25_B || 0.75);
   const df = new Map();
-  const docs = records.map(record => new Set(tokenize(recordText(record))));
-  for (const doc of docs) for (const token of doc) df.set(token, (df.get(token) || 0) + 1);
-
+  const docTokens = records.map(record => tokenize(recordText(record)));
+  for (const tokens of docTokens) {
+    const seen = new Set(tokens);
+    for (const token of seen) df.set(token, (df.get(token) || 0) + 1);
+  }
+  const totalLen = docTokens.reduce((sum, tokens) => sum + tokens.length, 0);
+  const avgdl = totalLen / docTokens.length || 1;
+  const N = records.length;
   const scores = new Map();
   for (let i = 0; i < records.length; i++) {
+    const tokens = docTokens[i];
+    const dl = tokens.length || 1;
     let score = 0;
-    const textTokens = tokenize(recordText(records[i]));
+    const tfCache = new Map();
+    for (const token of tokens) tfCache.set(token, (tfCache.get(token) || 0) + 1);
     for (const token of queryTokens) {
-      const tf = textTokens.filter(t => t === token).length;
+      const tf = tfCache.get(token) || 0;
       if (!tf) continue;
-      score += tf * (Math.log((records.length + 1) / ((df.get(token) || 0) + 1)) + 1);
+      const dfT = df.get(token) || 0;
+      const idf = Math.log(1 + (N - dfT + 0.5) / (dfT + 0.5));
+      const norm = tf + k1 * (1 - b + b * (dl / avgdl));
+      score += idf * (tf * (k1 + 1)) / norm;
     }
     scores.set(records[i].id, score);
   }
@@ -72,9 +131,18 @@ export function symbolScore(query, records, opts = {}) {
   return scores;
 }
 
+// hybridScore = base * (1 + symbol_boost) + clamped_metadata, capped in [0, 2].
+// base = α·dense + (1-α)·kw keeps dense/keyword on a normalized 0..1 line.
+// Symbol acts as a multiplier so a strong symbol match amplifies an already
+// relevant chunk without letting symbol alone outrank a perfect dense hit.
+// Metadata is a small additive nudge, clamped so boosts/penalties cannot drown
+// the underlying relevance signal.
 export function hybridScore(dense, keyword, symbol, metadata, alpha) {
   const symbolWeight = Number(process.env.BRAIN_SYMBOL_WEIGHT || 0.6);
-  return alpha * dense + (1 - alpha) * keyword + symbolWeight * symbol + metadata;
+  const base = alpha * dense + (1 - alpha) * keyword;
+  const meta = Math.max(-0.5, Math.min(0.5, metadata));
+  const raw = base * (1 + symbolWeight * symbol) + meta;
+  return Math.max(0, Math.min(2, raw));
 }
 
 export function tokenize(text) {

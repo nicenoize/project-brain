@@ -1,7 +1,12 @@
+import fs from 'node:fs';
 import path from 'node:path';
-import { BRAIN_DIR, exists, read, write } from './common.mjs';
+import { BRAIN_DIR, ensureDir, exists, read, write } from './common.mjs';
 
 export const ACTIVE_STATE = path.join(BRAIN_DIR, 'active_state.md');
+const LOCK_PATH = path.join(BRAIN_DIR, '.active_state.lock');
+const STALE_LOCK_MS = Number(process.env.BRAIN_STATE_LOCK_STALE_MS || 60_000);
+const LOCK_WAIT_MS = Number(process.env.BRAIN_STATE_LOCK_WAIT_MS || 10_000);
+const LOCK_POLL_MS = 50;
 
 export function ensureActiveState() {
   if (exists(ACTIVE_STATE)) return;
@@ -13,33 +18,86 @@ export function readActiveState() {
   return read(ACTIVE_STATE);
 }
 
+/**
+ * Run fn under an exclusive lock on `.active_state.lock`. Prevents the
+ * read→filter→write race when multiple agents update workstreams/leases.
+ * Stale locks (older than STALE_LOCK_MS) are taken over.
+ */
+export function withStateLock(fn) {
+  ensureDir(path.dirname(LOCK_PATH));
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let fd;
+  while (true) {
+    try {
+      fd = fs.openSync(LOCK_PATH, 'wx');
+      const payload = JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() });
+      fs.writeSync(fd, payload);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (tryStealStaleLock()) continue;
+      if (Date.now() > deadline) throw new Error(`active_state lock contention: ${LOCK_PATH} held > ${LOCK_WAIT_MS}ms`);
+      sleepSync(LOCK_POLL_MS);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { if (fd !== undefined) fs.closeSync(fd); } catch {}
+    try { fs.unlinkSync(LOCK_PATH); } catch {}
+  }
+}
+
+function tryStealStaleLock() {
+  try {
+    const stat = fs.statSync(LOCK_PATH);
+    if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
+      fs.unlinkSync(LOCK_PATH);
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 export function addWorkstream({ taskId, owner = '', tool = '', branch = '', scope = '', status = 'active' }) {
-  const row = [taskId, owner, tool, branch, scope, status];
-  const text = updateTable(readActiveState(), 'Workstreams', ['task_id', 'owner', 'tool', 'branch', 'scope / links', 'status'], row, 0);
-  write(ACTIVE_STATE, text);
+  withStateLock(() => {
+    const row = [taskId, owner, tool, branch, scope, status];
+    const text = updateTable(readActiveState(), 'Workstreams', ['task_id', 'owner', 'tool', 'branch', 'scope / links', 'status'], row, 0);
+    write(ACTIVE_STATE, text);
+  });
 }
 
 export function endWorkstream(taskId, status = 'done') {
-  const rows = parseTable(section(readActiveState(), 'Workstreams')).rows;
-  const nextRows = rows.map(row => row[0] === taskId ? [...row.slice(0, 5), status] : row);
-  write(ACTIVE_STATE, replaceTable(readActiveState(), 'Workstreams', ['task_id', 'owner', 'tool', 'branch', 'scope / links', 'status'], nextRows));
+  withStateLock(() => {
+    const rows = parseTable(section(readActiveState(), 'Workstreams')).rows;
+    const nextRows = rows.map(row => row[0] === taskId ? [...row.slice(0, 5), status] : row);
+    write(ACTIVE_STATE, replaceTable(readActiveState(), 'Workstreams', ['task_id', 'owner', 'tool', 'branch', 'scope / links', 'status'], nextRows));
+  });
 }
 
 export function addLease({ target, lockedBy = '', until = '', notes = '' }) {
-  const row = [target, lockedBy, until, notes];
-  const text = updateTable(readActiveState(), 'File Leases', ['path glob or file', 'locked_by', 'until', 'notes'], row, 0);
-  write(ACTIVE_STATE, text);
+  withStateLock(() => {
+    const row = [target, lockedBy, until, notes];
+    const text = updateTable(readActiveState(), 'File Leases', ['path glob or file', 'locked_by', 'until', 'notes'], row, 0);
+    write(ACTIVE_STATE, text);
+  });
 }
 
 export function releaseLeases({ taskId = '', lockedBy = '', target = '' }) {
-  const rows = parseTable(section(readActiveState(), 'File Leases')).rows;
-  const nextRows = rows.filter(row => {
-    if (target && row[0] === target) return false;
-    if (lockedBy && row[1] === lockedBy) return false;
-    if (taskId && row.join(' ').includes(taskId)) return false;
-    return true;
+  withStateLock(() => {
+    const rows = parseTable(section(readActiveState(), 'File Leases')).rows;
+    const nextRows = rows.filter(row => {
+      if (target && row[0] === target) return false;
+      if (lockedBy && row[1] === lockedBy) return false;
+      if (taskId && row.join(' ').includes(taskId)) return false;
+      return true;
+    });
+    write(ACTIVE_STATE, replaceTable(readActiveState(), 'File Leases', ['path glob or file', 'locked_by', 'until', 'notes'], nextRows));
   });
-  write(ACTIVE_STATE, replaceTable(readActiveState(), 'File Leases', ['path glob or file', 'locked_by', 'until', 'notes'], nextRows));
 }
 
 export function activeStateJson() {

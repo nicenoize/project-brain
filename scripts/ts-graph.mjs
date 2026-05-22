@@ -281,12 +281,35 @@ function analyzeSourceFile(ts, program, checker, sourceFile, rootNorm) {
 
   walk(sourceFile);
 
+  const declaredSymbols = collectTopLevelDeclarations(ts, sourceFile);
+
   return {
     resolvedImports: [...resolvedImports].slice(0, MAX_RESOLVED_IMPORTS),
     rawImports: [...new Set(rawImports)].slice(0, MAX_IMPORT_STRINGS),
     spans,
-    crossFileRefs
+    crossFileRefs,
+    declaredSymbols
   };
+}
+
+/** Top-level declared symbols (functions, classes, consts, types) for chunk slicing. */
+function collectTopLevelDeclarations(ts, sourceFile) {
+  const out = [];
+  for (const node of sourceFile.statements || []) {
+    const exported = Boolean(ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export);
+    const index = node.getStart(sourceFile);
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node)) && node.name) {
+      out.push({ name: node.name.text, kind: ts.SyntaxKind[node.kind], exported, index });
+    } else if (ts.isVariableStatement(node)) {
+      for (const decl of node.declarationList.declarations) {
+        if (decl?.name && ts.isIdentifier(decl.name)) {
+          out.push({ name: decl.name.text, kind: 'VariableStatement', exported, index });
+          break;
+        }
+      }
+    }
+  }
+  return out.sort((a, b) => a.index - b.index);
 }
 
 function isExternalOrLibDeclaration(decl) {

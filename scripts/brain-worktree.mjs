@@ -158,9 +158,20 @@ function fixBrainSymlinkInWorktree(wtPath, sourceTarget, { force = false } = {})
   try { st = fs.lstatSync(wtLink); } catch { return 'skipped:no-symlink'; }
   if (!st.isSymbolicLink()) return 'skipped:not-symlink';
 
-  // Does the symlink currently resolve from the worktree's perspective?
-  const resolves = fs.existsSync(path.join(wtLink, 'SKILL.md')) || fs.existsSync(path.join(wtLink, 'scripts'));
-  if (resolves && !force) return 'ok';
+  // Cheap precise check: if the symlink already points at the canonical
+  // source target (after resolving) and resolves to a working brain dir,
+  // skip the rewrite entirely. Saves the rename + log noise when called
+  // repeatedly (e.g. fixBrainSymlinkInWorktree invoked per worktree on
+  // every orchestrate cycle).
+  if (!force) {
+    let currentTarget = '';
+    try { currentTarget = fs.readlinkSync(wtLink); } catch {}
+    const canonical = path.resolve(path.dirname(wtLink), currentTarget);
+    const desired = path.resolve(sourceTarget);
+    const resolves = fs.existsSync(path.join(wtLink, 'SKILL.md')) || fs.existsSync(path.join(wtLink, 'scripts'));
+    if (resolves && canonical === desired) return 'ok';
+    if (resolves) return 'ok'; // works but points elsewhere — preserve old lenient behavior
+  }
 
   try {
     // Atomic replace: write to a sibling temp link, then rename over.
