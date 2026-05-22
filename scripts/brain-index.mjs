@@ -5,6 +5,14 @@ import { dispatchChunker } from './chunk.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
 import { loadTsSemanticContext } from './ts-graph.mjs';
+import {
+  buildAggregateSummaryTexts,
+  buildPackageSummary,
+  decisionGroupKeys,
+  discoverPackages,
+  groupSummariesByPackage,
+  readDirReadmeLead
+} from './aggregate.mjs';
 
 const force = process.argv.includes('--force');
 const changedEnv = splitEnv('BRAIN_CHANGED_FILES');
@@ -215,7 +223,7 @@ async function rebuildModuleSummaries(store, embedder, opts = {}) {
     const { text, embeddingText } = buildAggregateSummaryTexts({
       title: `${dir} module`,
       key: dir,
-      readmeLeadParagraph: readDirReadmeLead(dir),
+      readmeLeadParagraph: readDirReadmeLead(ROOT, dir),
       children: summaries
     });
     const vector = await embedder.embed(embeddingText);
@@ -240,77 +248,18 @@ async function rebuildModuleSummaries(store, embedder, opts = {}) {
 }
 
 /**
- * Build human-readable and embed-ready text for an aggregate summary record.
- * - `text` is verbose (full child concat) — shown to humans via brain:pack.
- * - `embeddingText` is intent-dense (~800-1000 chars) — what the vector encodes.
- *
- * For embedding we keep: the title, optional README lead paragraph, a one-line
- * per-child digest (title + first sentence of intent), and a flat union of
- * exported symbol names. List-y concatenation of full child summaries used to
- * overflow MiniLM's 256-token context and waste recall on long modules.
- */
-function buildAggregateSummaryTexts({ title, key, readmeLeadParagraph = '', children }) {
-  const verbose = children.map(record => `## ${record.heading || record.file}\n${record.text}`).join('\n\n');
-  const childLines = [];
-  const symbolUnion = new Set();
-  const headings = new Set();
-  const sliceCap = 20;
-  const sorted = [...children].sort((a, b) => String(a.file).localeCompare(String(b.file)));
-  for (const record of sorted.slice(0, sliceCap)) {
-    const intent = firstSentenceOfChild(record);
-    const childTitle = record.heading || path.basename(record.file || '');
-    if (intent) childLines.push(`- ${childTitle}: ${intent}`);
-    else if (childTitle) childLines.push(`- ${childTitle}`);
-    for (const sym of (record.symbols || []).slice(0, 8)) symbolUnion.add(sym);
-    if (record.heading) headings.add(record.heading);
-  }
-  const remainder = children.length - sliceCap;
-  if (remainder > 0) childLines.push(`- … +${remainder} more`);
-
-  const embedSections = [
-    `# ${title}`,
-    `Key: ${key}`,
-    readmeLeadParagraph ? `Readme: ${readmeLeadParagraph}` : '',
-    childLines.length ? `Children:\n${childLines.join('\n')}` : '',
-    symbolUnion.size ? `Exports: ${[...symbolUnion].slice(0, 60).join(', ')}` : ''
-  ].filter(Boolean);
-
-  let embeddingText = embedSections.join('\n');
-  // MiniLM context is ~256 tokens (~1000 chars after path noise). Hard cap so
-  // the tail of a huge module doesn't silently drop out of the vector.
-  if (embeddingText.length > 1100) embeddingText = embeddingText.slice(0, 1080) + ' …';
-  return { text: verbose, embeddingText };
-}
-
-/** Pull the first sentence/line of a child summary's text (drops the `# Title` / `File:` boilerplate). */
-function firstSentenceOfChild(record) {
-  const lines = String(record.text || '').split('\n').map(l => l.trim()).filter(Boolean);
-  for (const line of lines) {
-    if (line.startsWith('# ')) continue;
-    if (line.startsWith('File: ')) continue;
-    if (line.startsWith('Exports') || line.startsWith('Imports') || line.startsWith('Resolved ') || line.startsWith('Cross-file')) continue;
-    if (line.startsWith('Headings:')) continue;
-    if (line.startsWith('No exported') || line.startsWith('No headings')) continue;
-    // First non-boilerplate line: cut at a sentence break.
-    const match = line.match(/^[^.?!]+[.?!]?/);
-    return (match ? match[0] : line).slice(0, 180);
-  }
-  return '';
-}
-
-/**
  * For monorepos: emit one `chunk:-5 type:package-summary` per detected
  * package under `packages/*` and `apps/*` (configurable via
- * BRAIN_PACKAGE_GLOBS, comma/newline separated, default
- * "packages/*,apps/*"). Each summary aggregates the package.json
- * metadata, README lead paragraph, top exports from src/index.ts, and
- * the list of child file summary titles — embedded as one intent-dense
- * record so "what does @scope/x do" queries hit a single, accurate
- * vector instead of scattered file summaries.
+ * BRAIN_PACKAGE_GLOBS). Each summary aggregates the package.json metadata,
+ * README lead paragraph, top exports from src/index.ts, and the list of
+ * child file summary titles — embedded as one intent-dense record so
+ * "what does @scope/x do" queries hit a single, accurate vector instead
+ * of scattered file summaries.
  */
 async function rebuildPackageSummaries(store, embedder, opts = {}) {
   const { all: rebuildAll = false, dirtyDirs = new Set() } = opts;
-  const packageDirs = discoverPackages();
+  const globs = splitEnv('BRAIN_PACKAGE_GLOBS');
+  const packageDirs = discoverPackages(ROOT, globs.length ? globs : undefined);
   if (!packageDirs.length) return;
 
   // Identify and drop stale package-summary records for dirty packages only.
@@ -332,6 +281,7 @@ async function rebuildPackageSummaries(store, embedder, opts = {}) {
     const dirty = rebuildAll || [...dirtyDirs].some(dir => dir === pkgDir || dir.startsWith(`${pkgDir}/`));
     if (!dirty) continue;
     const summary = buildPackageSummary({
+      root: ROOT,
       pkgDir,
       childSummaries: childSummariesByDir.get(pkgDir) || []
     });
@@ -428,149 +378,6 @@ async function rebuildDecisionClusters(store, embedder, opts = {}) {
     });
   }
   if (newRecords.length) await store.upsert(newRecords);
-}
-
-function decisionGroupKeys(record) {
-  const out = [];
-  if (record.module) out.push({ kind: 'module', key: record.module });
-  if (record.feature) out.push({ kind: 'feature', key: record.feature });
-  return out;
-}
-
-function discoverPackages() {
-  const globs = splitEnv('BRAIN_PACKAGE_GLOBS');
-  const patterns = globs.length ? globs : ['packages/*', 'apps/*'];
-  const found = new Set();
-  for (const pattern of patterns) {
-    const base = pattern.replace(/\/\*$/, '');
-    const baseDir = path.join(ROOT, base);
-    if (!fs.existsSync(baseDir)) continue;
-    for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
-      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-      const pkgDir = `${base}/${entry.name}`;
-      if (fs.existsSync(path.join(ROOT, pkgDir, 'package.json'))) found.add(pkgDir);
-    }
-  }
-  return [...found].sort();
-}
-
-function groupSummariesByPackage(records, packageDirs) {
-  const sorted = [...packageDirs].sort((a, b) => b.length - a.length); // longest-prefix match
-  const byPkg = new Map();
-  for (const record of records) {
-    if (!record.isSummary) continue;
-    if (record.isModuleSummary || record.isProjectSummary || record.type === 'package-summary') continue;
-    if (record.type === 'session' || record.type === 'auto-compact' || record.type === 'feature-summary') continue;
-    const pkg = sorted.find(p => record.file === p || record.file.startsWith(`${p}/`));
-    if (!pkg) continue;
-    if (!byPkg.has(pkg)) byPkg.set(pkg, []);
-    byPkg.get(pkg).push(record);
-  }
-  return byPkg;
-}
-
-function buildPackageSummary({ pkgDir, childSummaries }) {
-  let pkgJson;
-  try {
-    pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, pkgDir, 'package.json'), 'utf8'));
-  } catch {
-    return null;
-  }
-  const name = pkgJson.name || pkgDir;
-  const description = pkgJson.description || '';
-  const keywords = Array.isArray(pkgJson.keywords) ? pkgJson.keywords.filter(Boolean).slice(0, 12) : [];
-  const deps = [...Object.keys(pkgJson.dependencies || {}), ...Object.keys(pkgJson.peerDependencies || {})].slice(0, 24);
-  const readmeLead = readDirReadmeLead(pkgDir);
-  const topExports = readTopLevelExports(pkgDir);
-
-  const childTitles = childSummaries
-    .map(record => record.heading || path.basename(record.file || ''))
-    .filter(Boolean)
-    .slice(0, 24);
-  const childIntents = childSummaries
-    .slice(0, 12)
-    .map(record => {
-      const intent = firstSentenceOfChild(record);
-      const t = record.heading || path.basename(record.file || '');
-      return intent ? `- ${t}: ${intent}` : (t ? `- ${t}` : '');
-    })
-    .filter(Boolean);
-
-  const embedSections = [
-    `# ${name} package`,
-    `Path: ${pkgDir}`,
-    description ? `Description: ${description}` : '',
-    keywords.length ? `Keywords: ${keywords.join(', ')}` : '',
-    readmeLead ? `Readme: ${readmeLead}` : '',
-    topExports.length ? `Exports: ${topExports.join(', ')}` : '',
-    childIntents.length ? `Files:\n${childIntents.join('\n')}` : '',
-    deps.length ? `Deps: ${deps.join(', ')}` : ''
-  ].filter(Boolean);
-  let embeddingText = embedSections.join('\n');
-  if (embeddingText.length > 1100) embeddingText = embeddingText.slice(0, 1080) + ' …';
-
-  const text = [
-    `# ${name}`,
-    `Path: ${pkgDir}`,
-    description && `> ${description}`,
-    keywords.length && `**Keywords:** ${keywords.join(', ')}`,
-    readmeLead && `**Readme:** ${readmeLead}`,
-    topExports.length && `**Top-level exports:** ${topExports.join(', ')}`,
-    childTitles.length && `**Files (${childSummaries.length}):** ${childTitles.join(', ')}`,
-    deps.length && `**Dependencies:** ${deps.join(', ')}`
-  ].filter(Boolean).join('\n\n');
-
-  const signature = sha256([name, description, keywords.join(','), readmeLead, topExports.join(','), deps.join(','), childTitles.join(',')].join('|'));
-  return { name, text, embeddingText, signature };
-}
-
-function readTopLevelExports(pkgDir) {
-  const candidates = ['src/index.ts', 'src/index.tsx', 'src/index.js', 'index.ts', 'index.tsx', 'index.js', 'index.mjs', 'src/index.mjs'];
-  for (const rel of candidates) {
-    const full = path.join(ROOT, pkgDir, rel);
-    if (!fs.existsSync(full)) continue;
-    try {
-      const text = fs.readFileSync(full, 'utf8');
-      const names = new Set();
-      // export { a, b } from '…' / export { a, b }
-      for (const m of text.matchAll(/^\s*export\s*\{([^}]+)\}/gm)) {
-        for (const part of m[1].split(',')) {
-          const local = part.trim().split(/\s+as\s+/).pop()?.trim();
-          if (local && /^[A-Za-z_$][\w$]*$/.test(local)) names.add(local);
-        }
-      }
-      // export function/class/const/let/var/type/interface/enum NAME
-      for (const m of text.matchAll(/^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm)) {
-        names.add(m[1]);
-      }
-      // export * from '…/foo'  → list "* from foo"
-      for (const m of text.matchAll(/^\s*export\s*\*\s*from\s+['"]([^'"]+)['"]/gm)) {
-        names.add(`*from:${path.basename(m[1])}`);
-      }
-      if (names.size) return [...names].slice(0, 32);
-    } catch {}
-  }
-  return [];
-}
-
-/** Read the first paragraph of `<dir>/README.md` (case-insensitive), or ''. */
-function readDirReadmeLead(dir) {
-  const candidates = ['README.md', 'readme.md', 'Readme.md', 'README.MD'];
-  for (const name of candidates) {
-    const full = path.join(ROOT, dir, name);
-    if (!fs.existsSync(full)) continue;
-    try {
-      const text = fs.readFileSync(full, 'utf8');
-      // Drop frontmatter, then take first non-heading paragraph.
-      const body = text.replace(/^---\n[\s\S]*?\n---\n/, '');
-      const paragraphs = body.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
-      for (const p of paragraphs) {
-        if (p.startsWith('#')) continue;
-        return p.slice(0, 280).replace(/\s+/g, ' ');
-      }
-    } catch {}
-  }
-  return '';
 }
 
 async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords, opts = {}) {
