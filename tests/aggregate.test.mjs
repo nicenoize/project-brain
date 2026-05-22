@@ -13,6 +13,7 @@ import {
   readTopLevelExports,
   buildPackageSummary,
   buildRepoSummary,
+  buildFleetSummary,
   extractProjectContracts
 } from '../scripts/aggregate.mjs';
 import { extractCodeIntent } from '../scripts/chunk.mjs';
@@ -298,6 +299,41 @@ test('buildRepoSummary: produces text + embeddingText, caps at 1100 chars', () =
   assert.ok(result.embeddingText.includes('Readme: The backend serves'));
   assert.ok(result.embeddingText.includes('Files:'));
   assert.ok(result.embeddingText.length <= 1100);
+});
+
+// ---------- buildFleetSummary (F4) ----------
+
+test('buildFleetSummary: produces text + embeddingText capped at 1100 chars', () => {
+  const projects = [
+    { name: 'backend', kinds: ['node', 'docker'] },
+    { name: 'workers', kinds: ['python'] },
+    { name: 'k8s', kinds: ['helm'] }
+  ];
+  const repoSummaries = [
+    { project: 'backend', heading: 'backend', text: '# backend project\nHandles API + auth.\nExports: a, b', id: 'r1' },
+    { project: 'workers', heading: 'workers', text: '# workers project\nProcesses background jobs.', id: 'r2' },
+    { project: 'k8s', heading: 'k8s', text: '# k8s project\nDeploys backend + workers.', id: 'r3' }
+  ];
+  const edgeRecords = [
+    { edgeFrom: 'k8s', edgeTo: 'backend', edgeKind: 'k8s-image', id: 'e1' },
+    { edgeFrom: 'k8s', edgeTo: 'workers', edgeKind: 'k8s-image', id: 'e2' },
+    { edgeFrom: 'backend', edgeTo: 'workers', edgeKind: 'pubsub', id: 'e3' }
+  ];
+  const result = buildFleetSummary({ projects, repoSummaries, edgeRecords });
+  assert.ok(result.embeddingText.length <= 1100);
+  assert.ok(result.embeddingText.includes('Projects (3): backend, workers, k8s'));
+  assert.ok(result.embeddingText.includes('Handles API'));
+  assert.ok(result.embeddingText.includes('k8s → backend via k8s-image'));
+  assert.ok(result.embeddingText.includes('backend → workers via pubsub'));
+});
+
+test('buildFleetSummary: empty edge list omits Edges section', () => {
+  const result = buildFleetSummary({
+    projects: [{ name: 'a', kinds: ['node'] }, { name: 'b', kinds: ['go'] }],
+    repoSummaries: [],
+    edgeRecords: []
+  });
+  assert.ok(!result.embeddingText.includes('Edges'));
 });
 
 test('groupSummariesByPackage: assigns by longest-prefix match, ignores non-summary', () => {

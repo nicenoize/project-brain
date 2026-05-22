@@ -57,6 +57,62 @@ export function firstSentenceOfChild(record) {
   return '';
 }
 
+/**
+ * Build one chunk:-8 fleet-summary record per fleet brain. Aggregates every
+ * project's intent and the cross-project edge graph into a single
+ * intent-dense vector (≤1080 chars). Answers "describe the fleet" /
+ * "what does this system do" / "how do the pieces fit together" queries
+ * with one retrieval hit instead of stitching repo summaries together.
+ */
+export function buildFleetSummary({ projects, repoSummaries = [], edgeRecords = [] }) {
+  const projectLines = projects.map(p => {
+    const repo = repoSummaries.find(r => r.project === p.name || r.heading === p.name);
+    const intent = repo ? firstSentenceOfChild(repo) : '';
+    const kinds = p.kinds?.length ? ` (${p.kinds.join(',')})` : '';
+    return intent ? `- ${p.name}${kinds}: ${intent}` : `- ${p.name}${kinds}`;
+  });
+
+  // Group edges by (from→to), keep up to 3 example kinds per pair.
+  const pairGroups = new Map();
+  for (const e of edgeRecords) {
+    if (!e.edgeFrom || !e.edgeTo) continue;
+    const key = `${e.edgeFrom} → ${e.edgeTo}`;
+    if (!pairGroups.has(key)) pairGroups.set(key, { kinds: new Map() });
+    const ks = pairGroups.get(key).kinds;
+    ks.set(e.edgeKind, (ks.get(e.edgeKind) || 0) + 1);
+  }
+  const edgeLines = [];
+  for (const [pair, { kinds }] of pairGroups) {
+    const kindStr = [...kinds.entries()].map(([k, n]) => n > 1 ? `${k}×${n}` : k).join(', ');
+    edgeLines.push(`- ${pair} via ${kindStr}`);
+  }
+
+  const sections = [
+    `# Fleet summary`,
+    `Projects (${projects.length}): ${projects.map(p => p.name).join(', ')}`,
+    projectLines.length ? `Project intents:\n${projectLines.slice(0, 12).join('\n')}` : '',
+    edgeLines.length ? `Edges (${edgeRecords.length}, ${pairGroups.size} pair${pairGroups.size === 1 ? '' : 's'}):\n${edgeLines.slice(0, 20).join('\n')}` : ''
+  ].filter(Boolean);
+
+  let embeddingText = sections.join('\n');
+  if (embeddingText.length > 1100) embeddingText = embeddingText.slice(0, 1080) + ' …';
+
+  const text = [
+    `# Fleet summary`,
+    `**Projects (${projects.length}):** ${projects.map(p => p.name).join(', ')}`,
+    projectLines.length && projectLines.join('\n'),
+    edgeLines.length && `## Edges (${edgeRecords.length})\n${edgeLines.join('\n')}`
+  ].filter(Boolean).join('\n\n');
+
+  const sig = crypto.createHash('sha256').update([
+    projects.map(p => p.name).sort().join(','),
+    repoSummaries.map(r => r.id).sort().join(','),
+    edgeRecords.map(e => e.id).sort().join(',')
+  ].join('|')).digest('hex');
+
+  return { text, embeddingText, signature: sig };
+}
+
 /** Frontmatter-derived cluster keys for an ADR file-summary record. */
 export function decisionGroupKeys(record) {
   const out = [];
