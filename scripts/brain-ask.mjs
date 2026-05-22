@@ -1,3 +1,11 @@
+/**
+ * Top-level query router for agents.
+ *
+ * Classifies the question (architectural vs code-symbol vs free-form),
+ * picks the right brain:search / brain:pack mode, and prints the answer
+ * (or the packed context) in one shot so an agent doesn't have to chain
+ * commands manually.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';

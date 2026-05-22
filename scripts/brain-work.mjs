@@ -1,3 +1,11 @@
+/**
+ * Single-workstream lifecycle: start / end an agent's work on one issue.
+ *
+ * `start` writes a row into active_state.md (workstreams table) and
+ * optionally adds file leases. `end` flips status to done/blocked and
+ * releases that workstream's leases. Other agents see live state via
+ * the active_state lock + retrieval boost on task/actor frontmatter.
+ */
 import { execSync, spawnSync } from 'node:child_process';
 import { addWorkstream, activeStateJson, endWorkstream, releaseLeases } from './active-state.mjs';
 import { slugify } from './common.mjs';

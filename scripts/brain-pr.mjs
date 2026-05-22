@@ -1,3 +1,9 @@
+/**
+ * PR-body assembler: synthesizes a structured PR description from the
+ * current branch's commits, the workstream row in active_state.md, and
+ * the issue (if linked). Writes the body to a file or stdout so the
+ * developer/agent can paste or `gh pr create --body-file`.
+ */
 import fs from 'node:fs';
 import { execSync, spawnSync } from 'node:child_process';
 import { activeStateJson } from './active-state.mjs';

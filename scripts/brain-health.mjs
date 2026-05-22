@@ -1,3 +1,11 @@
+/**
+ * Read-only health report for the local brain index.
+ *
+ * Checks the index for ghost paths (files missing on disk), drift
+ * between the JSON mirror and the live store, stale root brain docs
+ * (BRAIN_STALE_DOC_DAYS), and broken `lib/foo.ts`-style code refs
+ * inside brain markdown (--check-brain-refs).
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';

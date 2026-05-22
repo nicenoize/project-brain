@@ -1,3 +1,11 @@
+/**
+ * Token-budgeted prompt packing for agent context windows.
+ *
+ * Runs brain:search behind the scenes, then assembles a Markdown blob
+ * that fits within --max-tokens (default 2600). Modes: full | resume
+ * (current task only) | minimal (architecture map). Drives `brain:ask`
+ * and the auto-compact resume slice.
+ */
 import fs from 'node:fs';
 import { BRAIN_DIR, read, takeFlag, takeOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
