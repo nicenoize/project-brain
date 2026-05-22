@@ -14,9 +14,10 @@ import { findTsWorkspaceReferences } from './ts-graph.mjs';
 const GLOBAL_REFS = new Set(['JSON', 'String', 'Number', 'Boolean', 'Array', 'Object', 'Map', 'Set', 'Math', 'Date', 'Error', 'Promise']);
 const args = process.argv.slice(2);
 const json = takeFlag(args, '--json');
+const crossProject = takeFlag(args, '--cross-project');
 const symbol = args[0];
 if (!symbol) {
-  console.error('Usage: npm run brain:impact -- SymbolName [--json]');
+  console.error('Usage: npm run brain:impact -- SymbolName [--cross-project] [--json]');
   process.exit(1);
 }
 
@@ -24,7 +25,7 @@ const embedder = openEmbedder();
 const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
 const records = await store.getAll();
 const indexable = await listIndexableFiles();
-const impact = await buildImpact(symbol, records, store, embedder, { root: ROOT, indexable });
+const impact = await buildImpact(symbol, records, store, embedder, { root: ROOT, indexable, crossProject });
 await store.close();
 
 if (json) console.log(JSON.stringify(impact, null, 2));
@@ -45,6 +46,9 @@ export async function buildImpact(symbol, records, store, embedder, options = {}
     filter: {}
   });
   const typescript = await resolveTypeScriptImpact(symbol, options);
+  const crossProjectEdges = options.crossProject !== false
+    ? findCrossProjectEdges(definitionRecords, records)
+    : { fromOwner: [], toOwner: [] };
   return {
     symbol,
     definitions: summarizeRecords(definitionRecords),
@@ -53,7 +57,34 @@ export async function buildImpact(symbol, records, store, embedder, options = {}
     tests: summarizeRecords(tests),
     decisions: summarizeRecords(decisions),
     related: summarizeRecords(related),
-    typescript
+    typescript,
+    crossProjectEdges
+  };
+}
+
+/**
+ * Given the symbol's definition records, find any cross-project-edge records
+ * touching the owning project(s). Returns edges grouped by direction so
+ * "rename this symbol → who calls me / who do I call across projects" is one
+ * lookup.
+ */
+function findCrossProjectEdges(definitionRecords, records) {
+  const ownerProjects = unique(definitionRecords.map(r => r.project).filter(Boolean));
+  if (!ownerProjects.length) return { ownerProjects: [], fromOwner: [], toOwner: [] };
+  const edges = records.filter(r => r.type === 'cross-project-edge');
+  return {
+    ownerProjects,
+    fromOwner: edges.filter(e => ownerProjects.includes(e.edgeFrom)).map(summarizeEdge),
+    toOwner: edges.filter(e => ownerProjects.includes(e.edgeTo)).map(summarizeEdge)
+  };
+}
+
+function summarizeEdge(record) {
+  return {
+    from: record.edgeFrom,
+    to: record.edgeTo,
+    kind: record.edgeKind,
+    confidence: record.edgeConfidence
   };
 }
 
@@ -122,6 +153,21 @@ function printImpact(impact) {
   printGroup('Tests', impact.tests);
   printGroup('Decisions', impact.decisions);
   printGroup('Related retrieval', impact.related);
+  printCrossProjectSection(impact.crossProjectEdges);
+}
+
+function printCrossProjectSection(cpe) {
+  if (!cpe || (!cpe.fromOwner?.length && !cpe.toOwner?.length)) return;
+  console.log('\n## Cross-project edges');
+  if (cpe.ownerProjects?.length) console.log(`- Owning project(s): ${cpe.ownerProjects.join(', ')}`);
+  if (cpe.fromOwner?.length) {
+    console.log('### Outbound (owner → other)');
+    for (const e of cpe.fromOwner) console.log(`- ${e.from} → ${e.to} via ${e.kind} (${e.confidence})`);
+  }
+  if (cpe.toOwner?.length) {
+    console.log('### Inbound (other → owner) — these break if symbol changes shape');
+    for (const e of cpe.toOwner) console.log(`- ${e.from} → ${e.to} via ${e.kind} (${e.confidence})`);
+  }
 }
 
 function printTypeScriptSection(ts) {
