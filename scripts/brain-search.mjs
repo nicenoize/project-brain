@@ -1,3 +1,11 @@
+/**
+ * Hybrid semantic search over the local Project Brain index.
+ *
+ * Embeds the query, hits the configured vector store (lance/qdrant/json),
+ * then re-scores candidates with BM25 + symbol matching + metadata boosts
+ * (see retrieval.mjs). Filters: --summary-only, --modules-only,
+ * --type code|doc|module-summary|…, --file path, --symbol name.
+ */
 import fs from 'node:fs';
 import { JSON_INDEX, MANIFEST, read, takeFlag, takeOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';

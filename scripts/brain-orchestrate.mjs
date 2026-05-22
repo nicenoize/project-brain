@@ -1,3 +1,13 @@
+/**
+ * Multi-agent backlog orchestrator.
+ *
+ * Pulls runnable issues from GitHub (or --from-file), sizes them into
+ * work packages, and assigns parallel worker slots up to --concurrency.
+ * Optionally --spawn-worktrees (one git worktree per slot) and
+ * --launch-runners (one detached agent process per worktree). Honors
+ * the active_state lock + per-slot orchestration lease so concurrent
+ * orchestrators never over-spawn.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
