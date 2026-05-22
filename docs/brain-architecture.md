@@ -4,28 +4,54 @@ Project Brain has one reusable package and many project brains.
 
 ```mermaid
 flowchart TD
-  Global["Global Project Brain repo<br/>/Users/seebo/Coding/project-brain"] --> Skill["Reusable skill<br/>SKILL.md"]
-  Global --> Scripts["Reusable scripts<br/>brain:guard, brain:index, brain:sync, brain:maintain"]
-  Global --> Templates["Reusable templates<br/>PR template, GitHub workflow, Git hooks"]
-  Global --> Conventions["Global conventions<br/>GitFlow, code rules, Cavemem + Caveman policy"]
+  Global["Global Project Brain repo"] --> Skill["Reusable skill<br/>SKILL.md + scripts/"]
+  Global --> Scripts["brain:index, brain:sync, brain:search, brain:ask, brain:pack,<br/>brain:guard, brain:health, brain:maintain,<br/>brain:session, brain:compact, brain:digest, brain:prune,<br/>brain:worktree, brain:orchestrate, brain:work, brain:ticket,<br/>brain:adr, brain:lint-conventions, brain:link-check, brain:eval"]
+  Global --> Templates["Templates<br/>PR template, GitHub workflows, Git + Cursor hooks,<br/>conventions.example.json, agents/, brain/"]
+  Global --> Conventions["GitFlow, code conventions, Cavemem + Caveman policy"]
 
-  App["Application repo<br/>club-ops or another app"] --> AppBrain["Project memory<br/>.project-brain/*.md"]
+  App["Application repo"] --> AppBrain["Project memory<br/>.project-brain/*.md"]
   App --> Link["skills/project-brain<br/>symlink/submodule/checkout"]
   Link --> Global
 
-  AppBrain --> Index["Local generated index<br/>LanceDB + JSON mirror<br/>search_index.json"]
+  AppBrain --> Index["Local index<br/>LanceDB or JSON mirror<br/>search_index.json + index_manifest.json"]
   Scripts --> Index
-  Scripts --> Maintain["npm run brain:maintain<br/>sync, health, optional eval"]
+  Scripts --> Maintain["brain:maintain<br/>sync + health + optional eval"]
   Maintain --> Index
-  Scripts --> Guard["Guard checks<br/>branch, PR target, secrets, brain files"]
+  Scripts --> Guard["brain:guard<br/>branch base, PR target, oversized context, brain link-check"]
   Templates --> CI["GitHub Actions<br/>brain:maintain --ci, brain:guard"]
-  Templates --> Hooks["Local Git hooks<br/>update skill + maintain on pull/checkout"]
+  Templates --> Hooks["Git hooks (pre-commit, post-merge, post-checkout)<br/>+ Cursor preCompact/stop<br/>+ Claude Code PreCompact/Stop → brain:digest, brain:prune"]
 
   Dev["Developer / agent"] --> App
-  Cavemem["Cavemem<br/>local/session recall"] --> AppBrain
-  Cavemem -. "durable facts get promoted" .-> AppBrain
+  Cavemem["Cavemem<br/>local/session recall"] -. "durable facts promoted" .-> AppBrain
   Caveman["Caveman<br/>low-token communication"] -. "compresses agent chatter only" .-> Dev
 ```
+
+## Retrieval data flow
+
+```mermaid
+flowchart LR
+  Source["Source files<br/>.project-brain/**/*.md + selected code"] --> Chunk["chunk.mjs<br/>markdown sections / AST symbol slicing"]
+  Chunk --> TsGraph["ts-graph.mjs<br/>declared symbols, imports, cross-file refs"]
+  TsGraph --> Chunk
+  Chunk --> Embed["embed.mjs<br/>local MiniLM or OpenAI (with 429/5xx backoff)"]
+  Embed --> Store["store.mjs<br/>BRAIN_STORE = auto | json | lance | qdrant"]
+  Store --> JsonMirror[".project-brain/search_index.json<br/>(mirror)"]
+
+  Query["Query (brain:search / brain:ask / brain:pack)"] --> EmbedQ["embed.mjs"]
+  EmbedQ --> Store
+  Store --> Dense["dense candidates (topK*8)"]
+  Dense --> Retrieve["retrieval.mjs<br/>BM25 + symbol + hybridScore + metadata boost"]
+  Retrieve --> Dedup["limitChunksPerFile<br/>BRAIN_MAX_CHUNKS_PER_FILE (default 2)"]
+  Dedup --> Out["Top-K records"]
+```
+
+Key invariants:
+
+- `retrieve()` defaults to scoring **only over dense candidates** (the topK*8 returned by the vector store) — not the full corpus. `BRAIN_BROAD_CANDIDATES=1` restores a full scan.
+- `hybridScore` is `(α·dense + (1-α)·kw) * (1 + sw·sym) + clamp(metadata, ±0.5)`, capped in `[0, 2]`. Symbol acts as a multiplier so it cannot drown a perfect dense hit.
+- Keyword scoring is BM25 (`BRAIN_BM25_K1`, `BRAIN_BM25_B`), not raw TF·IDF.
+- Module/feature/project summaries are only rebuilt when a child file under them actually changed (`--force` for a full rebuild).
+- `active_state.md` mutations go through `withStateLock` (`.project-brain/.active_state.lock` with PID + ISO timestamp).
 
 ## Source Of Truth
 
