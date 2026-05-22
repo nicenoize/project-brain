@@ -413,6 +413,63 @@ Rules:
 - Capture handoffs in `.project-brain/sessions/` when work is interrupted or handed off between tools or people.
 - Update the brain before opening a PR.
 
+## Fleet mode
+
+When `scripts/projects.mjs#discoverProjects(ROOT)` finds ≥ 2 sibling projects under one fleet root (or `BRAIN_FLEET_MODE=1` forces it), the brain switches to **fleet mode** automatically — same install path, same `brain:update-skill`, no flag needed for the common case.
+
+A typical fleet:
+
+```
+fleet-root/
+├── .project-brain/         (the fleet brain)
+├── skills/project-brain →  (global skill, symlink)
+├── backend/                (Node/TS API, own .git)
+├── workers/                (Python / Go pods, own .git)
+├── k8s-orchestration/      (Helm + kustomize, own .git)
+├── frontend/               (Next.js, own .git)
+└── shared-schemas/         (.proto / openapi.yml, own .git)
+```
+
+What changes:
+
+- Every indexed record carries `project: <name>` (single-project mode keeps `''`).
+- Three new record kinds: `repo-summary` (`chunk:-7`), `fleet-summary` (`chunk:-8`), `cross-project-edge` (`chunk:-9`).
+- 11 pluggable edge detectors under `scripts/edges/` populate the cross-project graph: `k8s-image`, `http-client`, `grpc-client`, `proto-schema`, `openapi-schema`, `env-var`, `pubsub` (Kafka/RabbitMQ/Redis/SQS/PubSub), `db-shared`, `package-dep`, `go-replace` (+ `image-registry` registrar).
+- `active_state.md` gets a `project` column on both workstreams + leases tables (legacy 6-/4-column files keep parsing).
+
+CLI surface:
+
+```bash
+npm run brain:projects                       # list discovered projects + edge counts
+npm run brain:edges                          # list materialized cross-project edges
+npm run brain:edges -- --detect              # force-rerun every detector
+npm run brain:edges -- --detector k8s-image  # run one detector (debug)
+npm run brain:edges -- --min-confidence high
+
+# every existing `brain:*` command accepts --project NAME (comma-list for OR):
+npm run brain:search -- "X" --project backend
+npm run brain:pack   -- "X" --project workers --mode resume
+npm run brain:ask    -- "X" --project frontend,backend
+npm run brain:work     -- start --project backend --issue 123 --slug auth
+npm run brain:lease    -- add lib/auth.ts --project backend --task issue-123
+npm run brain:worktree -- spawn --project backend --count 3 --base develop
+npm run brain:impact   -- ChargeCard --cross-project
+```
+
+Configuration:
+
+```
+BRAIN_FLEET_MODE=0|1                      force off / on
+BRAIN_FLEET_PROJECTS=backend,workers      discovery whitelist
+BRAIN_FLEET_EXCLUDE=tooling,scripts       discovery blacklist
+BRAIN_FLEET_SERVICE_URLS=backend=https://backend.svc,...
+                                          high-confidence http-client resolution
+BRAIN_EDGE_TIMEOUT_MS=30000               per-detector budget
+BRAIN_AUTO_RECOVER=1                      Lance schema migration on first fleet index
+```
+
+See `modules/fleet.md` for the full module overview and `decisions/0009`–`0011` for the rationale.
+
 ## Response behavior
 
 When using this skill, be direct and operational. Prefer concrete file updates, commands, and checks over abstract explanation. If facts are uncertain, mark them as `Needs Review` instead of inventing them.

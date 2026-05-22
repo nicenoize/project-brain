@@ -86,3 +86,56 @@ Open an issue at <https://github.com/nicenoize/project-brain/issues> with:
 - `node --version`, OS, and store backend (`BRAIN_STORE`).
 - Full output with `BRAIN_QUIET=` unset.
 - The `package.json` snippet showing `brain:*` script entries.
+
+## Writing a new cross-project edge detector
+
+Fleet mode (see `modules/fleet.md`) hosts a pluggable detector subsystem under `scripts/edges/`. Adding a new detector is one file plus one line in the runner registry.
+
+Detector contract (`scripts/edges/types.mjs` — JSDoc only):
+
+```js
+// detector(context) -> AsyncIterable<EdgeCandidate>
+// context = {
+//   ROOT, projects, projectDirs, dirtyProjects,
+//   facts: Map,          // shared with earlier detectors (e.g. imageRegistry, grpcServices)
+//   cache, logger, signal
+// }
+// EdgeCandidate = { from, to, kind, evidence[], confidence, detector, meta? }
+```
+
+Template (`scripts/edges/<kind>.mjs`):
+
+```js
+import fs from 'node:fs';
+import path from 'node:path';
+
+const NAME = '<kind>';
+
+async function* detect(ctx) {
+  for (const project of ctx.projects) {
+    if (ctx.dirtyProjects.size && !ctx.dirtyProjects.has(project.name)) continue;
+    const projAbs = ctx.projectDirs.get(project.name);
+    if (!projAbs) continue;
+    // …scan, resolve, yield EdgeCandidate…
+  }
+}
+
+export default { name: NAME, detect };
+```
+
+Rules:
+
+1. **Async generator, no batch return.** The runner streams + dedupes; large fleets won't hold all candidates in memory.
+2. **`from` and `to` must be project names** discovered by `discoverProjects`. Self-edges (`from === to`) are filtered out by `dedupeCandidates`.
+3. **Evidence is `'fleet-relative-path:line'` lines.** Cap at the 5 most useful per candidate; `dedupeCandidates` will merge across detectors.
+4. **Confidence tagging is required.**
+   - `high`: parser-level certainty (parsed YAML / JSON / proto / go.mod).
+   - `medium`: regex-level certainty with a plausible heuristic.
+   - `low`: best-effort match (e.g. localhost), filterable via `brain:edges --min-confidence`.
+5. **Honor `ctx.dirtyProjects`.** Skip clean projects; the runner replays cached candidates for them.
+6. **No I/O outside `ctx.projectDirs`** unless you have a strong reason; the per-detector timeout is 30s.
+7. **Add a registry entry** in `scripts/edges/index.mjs#DETECTORS` in the right phase (registrars before consumers).
+8. **Tests**: `tests/edges/<kind>.test.mjs` with a tmpdir fixture. Use the `consume(asyncIter)` helper pattern already in `tests/edges/k8s-image.test.mjs`.
+9. **Document** the detector in `modules/fleet.md`'s detector table.
+
+If your detector publishes shared state (a name registry, a service map), set it on `ctx.facts` under a documented key (e.g. `imageRegistry`, `grpcServices`, `openapiServices`, `envKeysByProject`). Downstream detectors should treat missing facts as "no relevant data" rather than throwing.
