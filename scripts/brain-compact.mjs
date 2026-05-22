@@ -1,3 +1,13 @@
+/**
+ * Auto-compact: writes a bounded resume slice for the current session
+ * into .project-brain/sessions/…__auto-compact__….md.
+ *
+ * Runs brain:pack in `resume` mode with a tight budget (default 1200
+ * tokens), tags the file with task_id/actor/tool frontmatter, and
+ * (with BRAIN_COMPACT_EMBED_INDEX=1) embeds it into the index so the
+ * next session can retrieve it. Excluded from indexing by default to
+ * avoid recursive compact-of-compact noise.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';

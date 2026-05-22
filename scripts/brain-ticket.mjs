@@ -1,3 +1,11 @@
+/**
+ * Splits a large task into N work packages a single agent can finish
+ * in one session. Optionally creates the GitHub issue + sub-issues.
+ *
+ * Sizes each package by file count / domain breadth, emits
+ * .project-brain/work-packages/<id>.md, and (with --github) opens
+ * paired issues so an orchestrator run can pick them up later.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';

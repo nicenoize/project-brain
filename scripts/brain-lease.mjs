@@ -1,3 +1,11 @@
+/**
+ * CLI for `## File Leases` in active_state.md.
+ *
+ * `add <path> --task <id> --actor <label>` reserves a glob/file for one
+ * worker; other agents see it before they touch the same file.
+ * `list` prints the live lease table. `release` drops one or all
+ * leases for a task/actor. All mutations go through withStateLock.
+ */
 import { addLease, activeStateJson, releaseLeases } from './active-state.mjs';
 
 const args = process.argv.slice(2);

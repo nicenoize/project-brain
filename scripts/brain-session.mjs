@@ -1,3 +1,11 @@
+/**
+ * Session handoff markdown lifecycle: start/end/list/clean.
+ *
+ * `start --task --actor --tool` writes a sessions/<branch>-<task>-<ts>.md
+ * with frontmatter that retrieval uses for task/actor boosts. `end`
+ * marks the file done. `clean` drops expired (BRAIN_SESSION_TTL_HOURS)
+ * session files from disk and from the index.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';

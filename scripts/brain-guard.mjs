@@ -1,3 +1,11 @@
+/**
+ * Pre-commit / CI guard for GitFlow + brain hygiene.
+ *
+ * Verifies the current branch's base is allowed (develop|dev|epic/<n>),
+ * warns when context_index.md exceeds BRAIN_CONTEXT_INDEX_WARN_TOKENS,
+ * runs brain:link-check on staged brain docs, and fails the commit
+ * (with --strict) on any block-severity convention rule hit.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';

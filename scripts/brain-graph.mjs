@@ -1,3 +1,9 @@
+/**
+ * Exports a JSON or Mermaid graph of the indexed brain:
+ * file → module → feature → decision → symbol → import edges.
+ * `--format mermaid` is human-inspectable; `--format json` is machine-
+ * consumable for follow-up tooling.
+ */
 import { peekOption } from './common.mjs';
 import { openStore } from './store.mjs';
 

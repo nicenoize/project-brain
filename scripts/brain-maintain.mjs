@@ -1,3 +1,11 @@
+/**
+ * One-shot brain maintenance: sync the index when stale, then health-check.
+ *
+ * Flags: --hook (run minimally on git hook), --ci (strict, fail on warn),
+ * --strict (fail on health warnings), --clean-session-files (drop expired
+ * session markdown). The recommended automation entry point — wraps
+ * brain:sync + brain:health + optional brain:eval in one command.
+ */
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ROOT, BRAIN_DIR, JSON_INDEX, exists, read, staleIndexFromRecords, isFastMode } from './common.mjs';

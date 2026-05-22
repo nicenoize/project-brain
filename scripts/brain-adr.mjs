@@ -1,3 +1,8 @@
+/**
+ * ADR scaffolder: creates .project-brain/decisions/NNNN-<slug>.md from
+ * a title, pre-filled with frontmatter (`module:`, `feature:`, status)
+ * so decision-cluster aggregation (chunk:-6) can group it later.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, BRAIN_DIR, ensureDir, exists, read, slugify } from './common.mjs';

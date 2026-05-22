@@ -7,3 +7,4 @@ node_modules/
 .project-brain/sessions/
 .project-brain/.sync-state.json
 .worktrees/
+project-brain

@@ -449,6 +449,17 @@ export function matchesFilter(record, filter = {}) {
 function normalizeList(value) {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
   if (!value) return [];
+  // Arrow Vector (Lance returns list<string> columns as `apache-arrow` Vectors,
+  // not plain arrays). Detect by .toArray() availability so we don't go through
+  // String() coercion, which renders Vectors as JSON-like `"[a, b, c]"` and
+  // pollutes the first/last elements with stray brackets after a split.
+  if (typeof value.toArray === 'function') {
+    return value.toArray().map(String).filter(Boolean);
+  }
+  // Generic iterable fallback (covers anything else that's array-like).
+  if (typeof value[Symbol.iterator] === 'function' && typeof value !== 'string') {
+    return [...value].map(String).filter(Boolean);
+  }
   return String(value).split(/[,\n]/).map(item => item.trim()).filter(Boolean);
 }
 
