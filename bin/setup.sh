@@ -14,7 +14,15 @@ node skills/project-brain/scripts/setup-package.mjs
 npm install
 npm run brain:init
 npm run brain:install-hooks
-npm run brain:index || true
+
+# brain:index can legitimately fail on a fresh, empty repo with no source files,
+# but a hard failure here usually means a misconfigured embedder or store and
+# the user needs to see it. Surface non-zero exit codes rather than swallowing.
+if ! npm run brain:index; then
+  echo "WARN: brain:index failed. Review the output above; re-run with --force after fixing config."
+  exit 1
+fi
+
 npm run brain:health
 
 echo ""
