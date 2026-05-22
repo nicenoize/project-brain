@@ -1,4 +1,4 @@
-import { ROOT, listIndexableFiles } from './common.mjs';
+import { ROOT, listIndexableFiles, takeFlag } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
@@ -169,9 +169,3 @@ function normalize(value) {
 }
 
 
-function takeFlag(args, flag) {
-  const index = args.indexOf(flag);
-  if (index === -1) return false;
-  args.splice(index, 1);
-  return true;
-}

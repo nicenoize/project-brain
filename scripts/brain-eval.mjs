@@ -1,11 +1,11 @@
 import fs from 'node:fs';
-import { BRAIN_DIR, read } from './common.mjs';
+import { BRAIN_DIR, read, peekOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
 
-const file = takeOption(process.argv, '--file') || `${BRAIN_DIR}/eval.json`;
-const topK = Number(takeOption(process.argv, '--top-k') || process.env.BRAIN_EVAL_TOP_K || 8);
+const file = peekOption(process.argv, '--file') || `${BRAIN_DIR}/eval.json`;
+const topK = Number(peekOption(process.argv, '--top-k') || process.env.BRAIN_EVAL_TOP_K || 8);
 const cases = loadCases(file);
 if (!cases.length) {
   console.error(`No eval cases found. Create ${file} with [{"query":"...","expectedFiles":["..."]}].`);
@@ -126,8 +126,3 @@ function normalize(value) {
   return String(value).toLowerCase();
 }
 
-function takeOption(argv, name) {
-  const index = argv.indexOf(name);
-  if (index === -1) return '';
-  return argv[index + 1] || '';
-}

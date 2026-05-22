@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexableFiles, parseDoc, isFastMode, truthyFrontmatter, filterGitignoredRelativePaths } from './common.mjs';
+import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexableFiles, parseDoc, isFastMode, truthyFrontmatter, filterGitignoredRelativePaths, splitEnv } from './common.mjs';
 import { dispatchChunker } from './chunk.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
@@ -242,9 +242,6 @@ async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords)
   if (aggregateRecords.length) await store.upsert(aggregateRecords);
 }
 
-function splitEnv(name) {
-  return (process.env[name] || '').split(/[,\n]/).map(s => s.trim()).filter(Boolean);
-}
 
 function sessionCoordFields(file, data) {
   if (!file.includes('/sessions/')) return {};

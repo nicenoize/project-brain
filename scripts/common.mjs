@@ -245,6 +245,35 @@ export function filterGitignoredRelativePaths(paths) {
   return paths.filter((p) => !ignored.has(p));
 }
 
+/** Remove a boolean flag from argv (in-place). Returns true if present. */
+export function takeFlag(args, name) {
+  const i = args.indexOf(name);
+  if (i === -1) return false;
+  args.splice(i, 1);
+  return true;
+}
+
+/** Remove `--name value` from argv (in-place). Returns the value or ''. */
+export function takeOption(args, name) {
+  const i = args.indexOf(name);
+  if (i === -1) return '';
+  const value = args[i + 1] || '';
+  args.splice(i, value ? 2 : 1);
+  return value;
+}
+
+/** Read `--name value` from argv without mutating. Returns the value or ''. */
+export function peekOption(args, name) {
+  const i = args.indexOf(name);
+  if (i === -1) return '';
+  return args[i + 1] || '';
+}
+
+/** Split a comma/newline-delimited env var into trimmed non-empty entries. */
+export function splitEnv(name) {
+  return (process.env[name] || '').split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+}
+
 export function cosine(a, b) {
   let dot = 0, na = 0, nb = 0;
   for (let i = 0; i < Math.min(a.length, b.length); i++) {
