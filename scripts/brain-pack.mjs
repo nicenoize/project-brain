@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { BRAIN_DIR, read } from './common.mjs';
+import { BRAIN_DIR, read, takeFlag, takeOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
@@ -139,17 +139,3 @@ function trimStr(v) {
   return String(v ?? '').trim();
 }
 
-function takeFlag(args, name) {
-  const index = args.indexOf(name);
-  if (index === -1) return false;
-  args.splice(index, 1);
-  return true;
-}
-
-function takeOption(args, name) {
-  const index = args.indexOf(name);
-  if (index === -1) return '';
-  const value = args[index + 1] || '';
-  args.splice(index, 2);
-  return value;
-}

@@ -1,6 +1,7 @@
+import { peekOption } from './common.mjs';
 import { openStore } from './store.mjs';
 
-const format = takeOption(process.argv, '--format') || 'json';
+const format = peekOption(process.argv, '--format') || 'json';
 const store = await openStore();
 const records = await store.getAll();
 await store.close();
@@ -91,8 +92,3 @@ function label(id) {
   return id.replace(/^(file|module|feature|decision|symbol|import):/, '').replace(/"/g, "'");
 }
 
-function takeOption(argv, name) {
-  const index = argv.indexOf(name);
-  if (index === -1) return '';
-  return argv[index + 1] || '';
-}

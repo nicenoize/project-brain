@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { BRAIN_DIR, ROOT, ensureDir, slugify, write } from './common.mjs';
-import { activeStateJson, addWorkstream } from './active-state.mjs';
+import { activeStateJson, addWorkstream, addLease, releaseLeases } from './active-state.mjs';
 
 const args = process.argv.slice(2);
 const opts = parseArgs(args);
@@ -300,41 +300,62 @@ function renderIssuePackagePlan(issue, plan) {
 
 function spawnWorktrees(plan) {
   const spawned = [];
+  const lockedBy = `orchestrator:${process.pid}`;
   for (const slot of plan.workerSlots) {
+    // Re-read active_state immediately before each spawn. Another orchestrator
+    // (or any agent) may have claimed slots since the plan was built, so we
+    // honor the concurrency cap on live state, not the stale snapshot.
+    const liveActive = activeWorkstreams(activeStateJson());
+    if (plan.concurrency && liveActive.length >= plan.concurrency) {
+      console.log(`brain:orchestrate: concurrency cap (${plan.concurrency}) reached before slot ${slot.slot}; stopping further spawns.`);
+      break;
+    }
     const a = slot.assignment;
     const issue = a.issueNumber || '';
     const slug = slugify(a.issueTitle).slice(0, 48);
-    const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-      'run', 'brain:worktree', '--', 'spawn',
-      '--count', '1',
-      '--base', plan.base,
-      '--type', 'feature',
-      ...(issue ? ['--issue', String(issue)] : []),
-      '--slug', `${slug}-wp${slot.slot}`,
-      '--tool', plan.tool,
-      '--json'
-    ], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
-    if (result.status) process.exit(result.status);
-    const parsed = parseJsonFromOutput(result.stdout || '{}');
-    const worker = parsed.workers?.[0];
-    if (worker) {
-      a.branch = worker.branch;
-      slot.runnerPrompt = runnerPrompt(a, slot.actor, plan.tool);
-      for (const issuePlan of plan.issues) {
-        const pkg = issuePlan.workPackages.find(candidate => candidate.taskId === a.taskId);
-        if (pkg) pkg.branch = worker.branch;
+    // Hold an orchestration-slot lease so a concurrent orchestrator sees this
+    // slot as taken even though the workstream row isn't written yet.
+    const slotTarget = `orchestration-slot/${slot.slot}`;
+    addLease({ target: slotTarget, lockedBy, until: '', notes: `spawning ${a.taskId || 'unassigned'}` });
+    try {
+      const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+        'run', 'brain:worktree', '--', 'spawn',
+        '--count', '1',
+        '--base', plan.base,
+        '--type', 'feature',
+        ...(issue ? ['--issue', String(issue)] : []),
+        '--slug', `${slug}-wp${slot.slot}`,
+        '--tool', plan.tool,
+        '--json'
+      ], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+      if (result.status) {
+        releaseLeases({ target: slotTarget });
+        process.exit(result.status);
       }
-      spawned.push({
-        slot: slot.slot,
-        path: worker.path,
-        branch: worker.branch,
-        task: a.taskId,
-        actor: slot.actor,
-        tool: plan.tool,
-        issueNumber: a.issueNumber || '',
-        title: a.issueTitle
-      });
-      console.log(`Spawned worker ${slot.slot}: ${worker.path}`);
+      const parsed = parseJsonFromOutput(result.stdout || '{}');
+      const worker = parsed.workers?.[0];
+      if (worker) {
+        a.branch = worker.branch;
+        slot.runnerPrompt = runnerPrompt(a, slot.actor, plan.tool);
+        for (const issuePlan of plan.issues) {
+          const pkg = issuePlan.workPackages.find(candidate => candidate.taskId === a.taskId);
+          if (pkg) pkg.branch = worker.branch;
+        }
+        spawned.push({
+          slot: slot.slot,
+          path: worker.path,
+          branch: worker.branch,
+          task: a.taskId,
+          actor: slot.actor,
+          tool: plan.tool,
+          issueNumber: a.issueNumber || '',
+          title: a.issueTitle
+        });
+        console.log(`Spawned worker ${slot.slot}: ${worker.path}`);
+      }
+    } finally {
+      // Workstream row (added by recordSpawnedWorkstreams) supersedes the lease.
+      releaseLeases({ target: slotTarget });
     }
   }
   return spawned;
