@@ -81,9 +81,18 @@ export function symbolScore(query, records, opts = {}) {
   return scores;
 }
 
+// hybridScore = base * (1 + symbol_boost) + clamped_metadata, capped in [0, 2].
+// base = α·dense + (1-α)·kw keeps dense/keyword on a normalized 0..1 line.
+// Symbol acts as a multiplier so a strong symbol match amplifies an already
+// relevant chunk without letting symbol alone outrank a perfect dense hit.
+// Metadata is a small additive nudge, clamped so boosts/penalties cannot drown
+// the underlying relevance signal.
 export function hybridScore(dense, keyword, symbol, metadata, alpha) {
   const symbolWeight = Number(process.env.BRAIN_SYMBOL_WEIGHT || 0.6);
-  return alpha * dense + (1 - alpha) * keyword + symbolWeight * symbol + metadata;
+  const base = alpha * dense + (1 - alpha) * keyword;
+  const meta = Math.max(-0.5, Math.min(0.5, metadata));
+  const raw = base * (1 + symbolWeight * symbol) + meta;
+  return Math.max(0, Math.min(2, raw));
 }
 
 export function tokenize(text) {
