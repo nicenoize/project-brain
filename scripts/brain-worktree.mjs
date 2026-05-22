@@ -9,7 +9,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { slugify } from './common.mjs';
+import { slugify, ROOT as ROOT_CWD } from './common.mjs';
+import { discoverProjects } from './projects.mjs';
 
 const argv = process.argv.slice(2);
 if (argv[0] === 'help' || argv[0] === '-h' || argv[0] === '--help') {
@@ -42,9 +43,9 @@ function sh(cmd, opts = {}) {
   return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim();
 }
 
-function repoRoot() {
+function repoRoot(cwd) {
   try {
-    return sh('git rev-parse --show-toplevel');
+    return sh('git rev-parse --show-toplevel', cwd ? { cwd } : undefined);
   } catch {
     return '';
   }
@@ -90,6 +91,7 @@ function parseSpawnFlags(args) {
     if (a === '--tool') { f.tool = val; i += val ? 2 : 1; continue; }
     if (a === '--json') { f.json = true; i++; continue; }
     if (a === '--dir') { f.dir = val; i += val ? 2 : 1; continue; }
+    if (a === '--project') { f.project = val; i += val ? 2 : 1; continue; }
     if (a === 'spawn') { i++; continue; }
     i++;
   }
@@ -129,9 +131,29 @@ function q(p) {
   return `'${p.replace(/'/g, `'\\''`)}'`;
 }
 
-const root = repoRoot();
+// In fleet mode + --project NAME, resolve to the named project's git root so
+// `worktree add` operates on the right repo. Falls back to cwd's git root.
+let root;
+{
+  const opts = command === 'spawn' ? parseSpawnFlags(rest) : { project: '' };
+  if (opts.project) {
+    const projectsList = discoverProjects(ROOT_CWD);
+    const found = projectsList.find(p => p.name === opts.project);
+    if (!found) {
+      console.error(`brain:worktree: project "${opts.project}" not in fleet (have: ${projectsList.map(p => p.name).join(', ') || 'none'})`);
+      process.exit(1);
+    }
+    root = repoRoot(path.join(ROOT_CWD, found.dir));
+    if (!root) {
+      console.error(`brain:worktree: project "${opts.project}" has no .git tree.`);
+      process.exit(1);
+    }
+  } else {
+    root = repoRoot();
+  }
+}
 if (!root) {
-  console.error('brain:worktree must run inside a Git repository.');
+  console.error('brain:worktree must run inside a Git repository (or pass --project NAME in fleet mode).');
   process.exit(1);
 }
 

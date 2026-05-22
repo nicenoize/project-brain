@@ -7,8 +7,10 @@
  * the active_state lock + retrieval boost on task/actor frontmatter.
  */
 import { execSync, spawnSync } from 'node:child_process';
+import path from 'node:path';
 import { addWorkstream, activeStateJson, endWorkstream, releaseLeases } from './active-state.mjs';
-import { slugify } from './common.mjs';
+import { ROOT, slugify, gitRootOf } from './common.mjs';
+import { discoverProjects, isFleetMode } from './projects.mjs';
 
 const args = process.argv.slice(2);
 const command = args.shift() || 'status';
@@ -16,7 +18,7 @@ const opts = parseArgs(args);
 
 if (opts.help || !['start', 'status', 'end'].includes(command)) {
   console.log(`Usage:
-  npm run brain:work -- start --issue 123 --slug auth-hardening --actor codex --tool codex [--files lib/auth.ts,app/login.tsx] [--no-branch]
+  npm run brain:work -- start --issue 123 --slug auth-hardening --actor codex --tool codex [--project backend] [--files lib/auth.ts,app/login.tsx] [--no-branch]
   npm run brain:work -- status [--json]
   npm run brain:work -- end --task issue-123-auth-hardening
 `);
@@ -42,15 +44,18 @@ if (command === 'start') {
   const task = opts.task || (issue ? `issue-${issue}-${slug}` : `${slug}-${dateSlug()}`);
   const actor = opts.actor || process.env.BRAIN_ACTOR || 'agent';
   const tool = normalizeTool(opts.tool || process.env.BRAIN_TOOL || 'codex');
+  const project = opts.project || process.env.BRAIN_PROJECT || '';
   const branchType = opts.type || 'feature';
   const branch = opts.branch || (issue ? `${branchType}/${issue}-${slug}` : `${branchType}/${slug}-${dateSlug()}`);
   const scope = opts.scope || (issue ? `#${issue} ${slug}` : slug);
-  if (!opts.noBranch) ensureBranch(branch, opts.base || defaultBase());
+  if (!opts.noBranch) ensureBranch(branch, opts.base || defaultBase(), project);
   runNpm(['run', 'brain:session', '--', 'start', '--task', task, '--actor', actor, '--tool', tool]);
-  addWorkstream({ taskId: task, owner: actor, tool, branch, scope, status: 'active' });
+  addWorkstream({ taskId: task, owner: actor, tool, project, branch, scope, status: 'active' });
   const files = splitList(opts.files);
   for (const target of files) {
-    runNpm(['run', 'brain:lease', '--', 'add', target, '--task', task, '--actor', actor, '--notes', `branch=${branch}`]);
+    const leaseArgs = ['run', 'brain:lease', '--', 'add', target, '--task', task, '--actor', actor, '--notes', `branch=${branch}`];
+    if (project) leaseArgs.push('--project', project);
+    runNpm(leaseArgs);
   }
   const query = opts.query || `${slug} ${files.join(' ')}`.trim();
   const pack = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'brain:pack', '--', query, '--mode', 'resume', '--max-tokens', opts.maxTokens || '1200', '--task', task, '--actor', actor], {
@@ -80,16 +85,35 @@ if (command === 'end') {
   console.log(`Ended workstream ${task}.`);
 }
 
-function ensureBranch(branch, base) {
-  const current = sh('git rev-parse --abbrev-ref HEAD');
+function ensureBranch(branch, base, project = '') {
+  const cwd = resolveProjectCwd(project);
+  const current = sh('git rev-parse --abbrev-ref HEAD', cwd);
   if (current === branch) return;
-  const branches = sh('git branch --list').split('\n').map(line => line.replace(/^\*?\s+/, '').trim());
+  const branches = sh('git branch --list', cwd).split('\n').map(line => line.replace(/^\*?\s+/, '').trim());
   if (branches.includes(branch)) {
-    execSync(`git switch ${q(branch)}`, { stdio: 'inherit' });
+    execSync(`git switch ${q(branch)}`, { stdio: 'inherit', cwd });
     return;
   }
-  execSync(`git switch ${q(base)}`, { stdio: 'inherit' });
-  execSync(`git switch -c ${q(branch)}`, { stdio: 'inherit' });
+  execSync(`git switch ${q(base)}`, { stdio: 'inherit', cwd });
+  execSync(`git switch -c ${q(branch)}`, { stdio: 'inherit', cwd });
+}
+
+/**
+ * Resolve the git working directory for the named fleet project. Falls
+ * back to process.cwd() when there's no project, no fleet, or the project
+ * is somehow unresolvable.
+ */
+function resolveProjectCwd(projectName) {
+  if (!projectName) return process.cwd();
+  const projects = discoverProjects(ROOT);
+  if (!isFleetMode(projects)) return process.cwd();
+  const project = projects.find(p => p.name === projectName);
+  if (!project) {
+    console.error(`brain:work: project "${projectName}" not in fleet (have: ${projects.map(p => p.name).join(', ')})`);
+    process.exit(1);
+  }
+  const absProj = path.join(ROOT, project.dir);
+  return gitRootOf(absProj) || absProj;
 }
 
 function defaultBase() {
@@ -129,6 +153,7 @@ function parseArgs(argv) {
     if (a === '--query') { opts.query = val; i += val ? 1 : 0; continue; }
     if (a === '--max-tokens') { opts.maxTokens = val; i += val ? 1 : 0; continue; }
     if (a === '--status') { opts.status = val; i += val ? 1 : 0; continue; }
+    if (a === '--project') { opts.project = val; i += val ? 1 : 0; continue; }
     positional.push(a);
   }
   opts.title ||= positional.join(' ').trim();
@@ -147,8 +172,8 @@ function normalizeTool(value) {
   return v ? 'other' : 'codex';
 }
 
-function sh(cmd) {
-  try { return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
+function sh(cmd, cwd) {
+  try { return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], ...(cwd ? { cwd } : {}) }).trim(); }
   catch { return ''; }
 }
 
