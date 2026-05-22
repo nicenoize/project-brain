@@ -37,8 +37,9 @@ export function staleIndexFromRecords(records = []) {
     // exist on disk; they are derived from indexed children, not from a source file.
     if (record.file.startsWith('.project-brain/project-summary')) continue;
     if (record.file.includes('.project-brain/decisions/__cluster__/')) continue;
+    if (record.file.includes('.project-brain/fleet/edges/')) continue;
     if (record.type?.endsWith('-summary')) continue;
-    if (record.type === 'decision-cluster') continue;
+    if (record.type === 'decision-cluster' || record.type === 'repo-summary' || record.type === 'fleet-summary' || record.type === 'cross-project-edge') continue;
     if (seen.has(record.file)) continue;
     seen.add(record.file);
     const full = path.isAbsolute(record.file) ? record.file : path.join(ROOT, record.file);
@@ -94,6 +95,17 @@ export function gitBranchSafe() {
   } catch { return ''; }
 }
 
+/** Resolve the git toplevel for an arbitrary directory (used by fleet per-project git ops). */
+export function gitRootOf(dir) {
+  try {
+    return execSync('git rev-parse --show-toplevel', {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+  } catch { return ''; }
+}
+
 export function mergePackageScripts(pkg) {
   pkg.scripts ||= {};
   const scripts = {
@@ -125,7 +137,9 @@ export function mergePackageScripts(pkg) {
     'brain:link-check': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-link-check.mjs',
     'brain:install-cursor-hooks': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/install-cursor-hooks.mjs',
     'brain:install-hooks': 'bash skills/project-brain/bin/install-hooks.sh',
-    'brain:update-skill': 'bash skills/project-brain/bin/update.sh'
+    'brain:update-skill': 'bash skills/project-brain/bin/update.sh',
+    'brain:edges': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-edges.mjs',
+    'brain:projects': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-projects.mjs'
   };
   for (const [k, v] of Object.entries(scripts)) {
     if (!pkg.scripts[k] || pkg.scripts[k].includes('skills/project-brain/')) pkg.scripts[k] = v;
@@ -148,7 +162,8 @@ export function mergePackageDeps(pkg) {
   return pkg;
 }
 
-export async function listIndexableFiles() {
+export async function listIndexableFiles(opts = {}) {
+  const root = opts.root || ROOT;
   const { default: fg } = await import('fast-glob');
   const patterns = [
     '.project-brain/**/*.md',
@@ -184,7 +199,7 @@ export async function listIndexableFiles() {
     .map((s) => s.trim())
     .filter(Boolean);
   return fg([...patterns, ...extra], {
-    cwd: ROOT,
+    cwd: root,
     dot: true,
     onlyFiles: true,
     ignore: [
@@ -236,11 +251,12 @@ export function truthyFrontmatter(value) {
  * Drop paths ignored by Git (uses repo .gitignore / exclude). Opt-in: BRAIN_INDEX_GITIGNORE=1.
  * Cheap batch: `git check-ignore -z --stdin`.
  */
-export function filterGitignoredRelativePaths(paths) {
+export function filterGitignoredRelativePaths(paths, opts = {}) {
   if (process.env.BRAIN_INDEX_GITIGNORE !== '1' || !paths.length) return paths;
+  const cwd = opts.root || ROOT;
   const input = Buffer.from(paths.join('\0') + '\0', 'utf8');
   const r = spawnSync('git', ['check-ignore', '-z', '--stdin'], {
-    cwd: ROOT,
+    cwd,
     input,
     encoding: 'utf8',
     maxBuffer: Math.max(8 * 1024 * 1024, paths.length * 256)

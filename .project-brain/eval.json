@@ -122,5 +122,48 @@
     "query": "what hooks does Claude Code wire up automatically",
     "expectedFiles": [".project-brain/modules/hooks.md", "scripts/setup-claude-settings.mjs"],
     "expectedTypes": ["module", "code"]
+  },
+  {
+    "query": "how does fleet mode auto-activate across sibling projects",
+    "expectedFiles": ["scripts/projects.mjs", ".project-brain/decisions/0009-fleet-mode-discovery.md"],
+    "expectedSymbols": ["discoverProjects", "isFleetMode"],
+    "expectedTypes": ["code", "decision"]
+  },
+  {
+    "query": "where are cross-project edge detectors registered",
+    "expectedFiles": ["scripts/edges/index.mjs"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "what does the k8s-image detector resolve",
+    "expectedFiles": ["scripts/edges/k8s-image.mjs"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "how is the cross-project edge record stored",
+    "expectedFiles": ["scripts/edges/materialize.mjs", ".project-brain/decisions/0010-cross-project-edge-detection.md"],
+    "expectedSymbols": ["candidateToRecord"],
+    "expectedTypes": ["code", "decision"]
+  },
+  {
+    "query": "what fleet env var enables high-confidence http resolution",
+    "expectedFiles": ["scripts/edges/http-client.mjs", ".project-brain/modules/fleet.md"],
+    "expectedTypes": ["code", "module"]
+  },
+  {
+    "query": "how does the active_state project column work",
+    "expectedFiles": ["scripts/active-state.mjs", ".project-brain/decisions/0011-fleet-active-state-coordination.md"],
+    "expectedTypes": ["code", "decision"]
+  },
+  {
+    "query": "where is the fleet summary record built",
+    "expectedFiles": ["scripts/aggregate.mjs"],
+    "expectedSymbols": ["buildFleetSummary"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "what does brain edges --detect do",
+    "expectedFiles": ["scripts/brain-edges.mjs"],
+    "expectedTypes": ["code"]
   }
 ]

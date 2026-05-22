@@ -126,6 +126,68 @@ The same Markdown brain is shared by **humans**, **Cursor agents**, **Claude**, 
 
 **LanceDB note:** coordination fields live on index records. If a `brain:session` or index upsert fails with a Lance schema mismatch after upgrading this package, remove `.project-brain/vector-db/` and run `npm run brain:index -- --force` once per machine (see root `README.md`).
 
+## Fleet Mode (multi-project brain)
+
+When `discoverProjects(ROOT)` detects ≥ 2 sibling projects, fleet mode auto-activates. One brain spans the whole fleet; every record carries `project: <name>`; cross-project relationships materialize as `chunk:-9 cross-project-edge` records.
+
+```mermaid
+flowchart TD
+  ROOT["Fleet root"] --> P1["backend/"]
+  ROOT --> P2["workers/"]
+  ROOT --> P3["k8s-orchestration/"]
+  ROOT --> P4["frontend/"]
+  ROOT --> P5["shared-schemas/"]
+  ROOT --> PB[".project-brain/"]
+
+  P1 -- "index per project" --> IDX["brain-index.mjs<br/>fleet loop"]
+  P2 --> IDX
+  P3 --> IDX
+  P4 --> IDX
+  P5 --> IDX
+
+  IDX --> RS["chunk:-7 repo-summary<br/>one per project"]
+  IDX --> DETECT["scripts/edges/*<br/>11 detectors"]
+  DETECT -- "EdgeCandidate stream" --> MAT["materialize.mjs<br/>candidateToRecord"]
+  MAT --> XPE["chunk:-9 cross-project-edge"]
+  RS --> FS["chunk:-8 fleet-summary"]
+  XPE --> FS
+
+  Q["brain:search / brain:edges /<br/>brain:impact --cross-project"] --> STORE["vector store"]
+  STORE -.-> Q
+  RS --> STORE
+  XPE --> STORE
+  FS --> STORE
+```
+
+Detector pipeline (order matters — registrars first, consumers after):
+
+```mermaid
+flowchart LR
+  IR["image-registry<br/>(no emit)"] --> PROTO["proto-schema"]
+  IR --> OPENAPI["openapi-schema"]
+  PROTO -- "facts.grpcServices" --> GRPC["grpc-client"]
+  OPENAPI -- "facts.openapiServices" --> HTTP["http-client"]
+  IR -- "facts.imageRegistry" --> K8S["k8s-image"]
+  ENV["env-var"] -- "facts.envKeysByProject" --> DB["db-shared"]
+  ENV -.-> PS["pubsub"]
+  PKG["package-dep"]
+  GR["go-replace"]
+
+  K8S --> M["dedupe + materialize"]
+  PROTO --> M
+  OPENAPI --> M
+  GRPC --> M
+  HTTP --> M
+  ENV --> M
+  PS --> M
+  DB --> M
+  PKG --> M
+  GR --> M
+  M --> S["store.upsert<br/>(chunk:-9 records)"]
+```
+
+See `modules/fleet.md` and ADRs `0009`–`0011` for activation rules, detector contract, and per-project coordination.
+
 ## Update Flow
 
 ```mermaid

@@ -5,9 +5,14 @@ import { dispatchChunker } from './chunk.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
 import { loadTsSemanticContext } from './ts-graph.mjs';
+import { discoverProjects, isFleetMode } from './projects.mjs';
+import { runDetectors } from './edges/index.mjs';
+import { candidateToRecord } from './edges/materialize.mjs';
 import {
   buildAggregateSummaryTexts,
+  buildFleetSummary,
   buildPackageSummary,
+  buildRepoSummary,
   decisionGroupKeys,
   discoverPackages,
   groupSummariesByPackage,
@@ -36,12 +41,46 @@ if (oldManifest.model && oldManifest.model !== embedder.modelName) {
 }
 
 const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
-const files = filterGitignoredRelativePaths(await listIndexableFiles());
+
+// Fleet discovery: if ≥ 2 sibling projects (and BRAIN_FLEET_MODE doesn't
+// override), build the file list as the union of per-project listings and
+// remember which project each file belongs to so records get tagged.
+const projects = discoverProjects(ROOT);
+const fleetMode = isFleetMode(projects);
+const projectByFile = new Map();
+let files;
+if (fleetMode) {
+  const all = [];
+  for (const project of projects) {
+    const projAbs = path.join(ROOT, project.dir);
+    const projFiles = filterGitignoredRelativePaths(
+      await listIndexableFiles({ root: projAbs }),
+      { root: projAbs }
+    );
+    for (const f of projFiles) {
+      const fleetRel = path.posix.join(project.dir, f);
+      all.push(fleetRel);
+      projectByFile.set(fleetRel, project.name);
+    }
+  }
+  files = all;
+  if (!process.env.BRAIN_QUIET) {
+    console.log(`Project Brain: fleet mode — ${projects.length} projects (${projects.map(p => p.name).join(', ')})`);
+  }
+} else {
+  files = filterGitignoredRelativePaths(await listIndexableFiles());
+}
+
 const indexableSet = new Set(files);
 let tsContext = null;
 try {
-  tsContext = await loadTsSemanticContext(ROOT, indexableSet);
-  if (tsContext) console.log('Project Brain: TypeScript semantic graph enabled for indexing.');
+  // In fleet mode, ts-graph is invoked per-project lazily by brain:impact
+  // when --cross-project is requested. The single-program initial load only
+  // makes sense for a single tsconfig root.
+  if (!fleetMode) {
+    tsContext = await loadTsSemanticContext(ROOT, indexableSet);
+    if (tsContext) console.log('Project Brain: TypeScript semantic graph enabled for indexing.');
+  }
 } catch (error) {
   console.warn(`Project Brain: TS graph disabled (${error.message || error}).`);
 }
@@ -111,6 +150,7 @@ for (const file of changedFiles) {
       module: inferModule(file, doc.data),
       feature: inferFeature(file, doc.data),
       decision: inferDecision(file, doc.data),
+      project: doc.data.project || projectByFile.get(file) || '',
       sourceKind: inferSourceKind(file),
       ...meta,
       mtime: stat.mtime.toISOString(),
@@ -148,18 +188,159 @@ for (const file of dirtyFiles) {
   if (file.startsWith('.project-brain/decisions/')) dirtyDecisions.add(path.basename(file, path.extname(file)));
 }
 
+const dirtyProjects = new Set();
+if (fleetMode) {
+  for (const file of dirtyFiles) {
+    const p = projectByFile.get(file);
+    if (p) dirtyProjects.add(p);
+  }
+  // First index in fleet mode → all projects dirty.
+  if (forceRebuild || existingRecords.length === 0) {
+    for (const p of projects) dirtyProjects.add(p.name);
+  }
+}
+
 if (isFastMode()) {
   console.log('Project Brain: fast mode — skipping module/feature/project summary rebuilds.');
 } else if (forceRebuild) {
   await rebuildModuleSummaries(store, embedder, { all: true });
   await rebuildPackageSummaries(store, embedder, { all: true });
   await rebuildDecisionClusters(store, embedder, { all: true });
-} else if (dirtyDirs.size === 0 && dirtyFeatures.size === 0 && dirtyDecisions.size === 0) {
+  if (fleetMode) await rebuildRepoSummaries(store, embedder, { all: true });
+} else if (dirtyDirs.size === 0 && dirtyFeatures.size === 0 && dirtyDecisions.size === 0 && dirtyProjects.size === 0) {
   console.log('Project Brain: no changes — module/feature/project/decision summaries left intact.');
 } else {
   await rebuildModuleSummaries(store, embedder, { dirtyDirs, dirtyFeatures });
   await rebuildPackageSummaries(store, embedder, { dirtyDirs });
   await rebuildDecisionClusters(store, embedder, { dirtyDecisions, dirtyFeatures, dirtyDirs });
+  if (fleetMode) await rebuildRepoSummaries(store, embedder, { dirtyProjects });
+}
+
+if (fleetMode && !isFastMode()) {
+  await rebuildCrossProjectEdges(store, embedder, { forceRebuild, dirtyProjects });
+  await rebuildFleetSummary(store, embedder);
+}
+
+/**
+ * Emit one chunk:-7 repo-summary record per fleet project. Aggregates
+ * the project's package.json/go.mod/Chart.yaml metadata, README first
+ * paragraph, top-level exports, k8s services, Dockerfile images, and
+ * child file-summary intent lines into a single intent-dense vector.
+ */
+async function rebuildRepoSummaries(store, embedder, opts = {}) {
+  const { all: rebuildAll = false, dirtyProjects = new Set() } = opts;
+  const allRecords = await store.getAll();
+
+  // Stale: drop repo-summary records for dirty projects (or all on --force).
+  const staleIds = allRecords
+    .filter(r => r.type === 'repo-summary' && (rebuildAll || dirtyProjects.has(r.project)))
+    .map(r => r.id);
+  if (staleIds.length) await store.delete(staleIds);
+
+  const refreshed = await store.getAll();
+  const childByProject = new Map();
+  for (const r of refreshed) {
+    if (!r.isSummary || r.type === 'repo-summary' || r.type === 'session' || r.type === 'auto-compact') continue;
+    if (r.isModuleSummary || r.isProjectSummary) continue;
+    if (r.type === 'feature-summary' || r.type === 'package-summary' || r.type === 'decision-cluster') continue;
+    if (!r.project) continue;
+    if (!childByProject.has(r.project)) childByProject.set(r.project, []);
+    childByProject.get(r.project).push(r);
+  }
+
+  const newRecords = [];
+  for (const project of projects) {
+    if (!rebuildAll && !dirtyProjects.has(project.name)) continue;
+    const summary = buildRepoSummary({
+      root: ROOT,
+      project,
+      childSummaries: childByProject.get(project.name) || []
+    });
+    if (!summary) continue;
+    newRecords.push({
+      id: sha256(`repo:${project.name}:${summary.signature}`),
+      file: project.dir,
+      chunk: -7,
+      title: `${summary.name} project summary`,
+      type: 'repo-summary',
+      heading: summary.name,
+      text: summary.text,
+      embeddingText: summary.embeddingText,
+      isSummary: true,
+      isModuleSummary: false,
+      isProjectSummary: false,
+      project: project.name,
+      projectKinds: project.kinds,
+      module: project.dir,
+      vector: await embedder.embed(summary.embeddingText)
+    });
+  }
+  if (newRecords.length) await store.upsert(newRecords);
+}
+
+/**
+ * Run all edge detectors, materialize candidates as chunk:-9 records, and
+ * incrementally upsert. Detectors emit per-project; we delete existing
+ * cross-project-edge records where either endpoint is dirty before
+ * writing the fresh set so removed edges don't linger.
+ */
+async function rebuildCrossProjectEdges(store, embedder, opts = {}) {
+  const { forceRebuild = false, dirtyProjects = new Set() } = opts;
+  const allRecords = await store.getAll();
+  const dirty = forceRebuild ? new Set(projects.map(p => p.name)) : dirtyProjects;
+  const staleIds = allRecords
+    .filter(r => r.type === 'cross-project-edge' && (forceRebuild || dirty.has(r.edgeFrom) || dirty.has(r.edgeTo)))
+    .map(r => r.id);
+  if (staleIds.length) await store.delete(staleIds);
+
+  const candidates = await runDetectors({
+    ROOT,
+    projects,
+    dirtyProjects: dirty,
+    useCache: !forceRebuild
+  });
+  if (!candidates.length) return;
+
+  const newRecords = [];
+  for (const c of candidates) {
+    const record = candidateToRecord(c, []);
+    record.vector = await embedder.embed(record.embeddingText);
+    newRecords.push(record);
+  }
+  await store.upsert(newRecords);
+  console.log(`Project Brain: cross-project edges — ${candidates.length} candidate${candidates.length === 1 ? '' : 's'} materialized.`);
+}
+
+/**
+ * One chunk:-8 fleet-summary record. Aggregates every repo-summary's
+ * intent line + the cross-project edge graph into a single vector so
+ * "describe this fleet" queries hit one record.
+ */
+async function rebuildFleetSummary(store, embedder) {
+  const all = await store.getAll();
+  const repoSummaries = all.filter(r => r.type === 'repo-summary');
+  const edgeRecords = all.filter(r => r.type === 'cross-project-edge');
+  // Drop any prior fleet-summary record before writing the fresh one.
+  const stale = all.filter(r => r.type === 'fleet-summary').map(r => r.id);
+  if (stale.length) await store.delete(stale);
+
+  if (!repoSummaries.length) return; // nothing to aggregate yet
+  const summary = buildFleetSummary({ projects, repoSummaries, edgeRecords });
+  await store.upsert([{
+    id: sha256(`fleet:${summary.signature}`),
+    file: '.project-brain/fleet/fleet-summary.md',
+    chunk: -8,
+    title: 'Fleet summary',
+    type: 'fleet-summary',
+    heading: 'fleet',
+    text: summary.text,
+    embeddingText: summary.embeddingText,
+    isSummary: true,
+    isModuleSummary: false,
+    isProjectSummary: false,
+    project: '',
+    vector: await embedder.embed(summary.embeddingText)
+  }]);
 }
 
 function inferFeatureFromPath(file) {
