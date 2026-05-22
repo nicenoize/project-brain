@@ -1,3 +1,11 @@
+/**
+ * Incremental re-index based on file-content hash diff.
+ *
+ * Compares the current indexable file set against index_manifest.json,
+ * computes changed + deleted paths, and invokes brain-index with
+ * BRAIN_CHANGED_FILES / BRAIN_DELETED_FILES so only the affected files
+ * re-embed. `--force` triggers a full rebuild.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';

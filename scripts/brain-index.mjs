@@ -5,6 +5,14 @@ import { dispatchChunker } from './chunk.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
 import { loadTsSemanticContext } from './ts-graph.mjs';
+import {
+  buildAggregateSummaryTexts,
+  buildPackageSummary,
+  decisionGroupKeys,
+  discoverPackages,
+  groupSummariesByPackage,
+  readDirReadmeLead
+} from './aggregate.mjs';
 
 const force = process.argv.includes('--force');
 const changedEnv = splitEnv('BRAIN_CHANGED_FILES');
@@ -135,14 +143,23 @@ for (const record of records) {
   if (record.feature) dirtyFeatures.add(record.feature);
 }
 
+const dirtyDecisions = new Set();
+for (const file of dirtyFiles) {
+  if (file.startsWith('.project-brain/decisions/')) dirtyDecisions.add(path.basename(file, path.extname(file)));
+}
+
 if (isFastMode()) {
   console.log('Project Brain: fast mode — skipping module/feature/project summary rebuilds.');
 } else if (forceRebuild) {
   await rebuildModuleSummaries(store, embedder, { all: true });
-} else if (dirtyDirs.size === 0 && dirtyFeatures.size === 0) {
-  console.log('Project Brain: no changes — module/feature/project summaries left intact.');
+  await rebuildPackageSummaries(store, embedder, { all: true });
+  await rebuildDecisionClusters(store, embedder, { all: true });
+} else if (dirtyDirs.size === 0 && dirtyFeatures.size === 0 && dirtyDecisions.size === 0) {
+  console.log('Project Brain: no changes — module/feature/project/decision summaries left intact.');
 } else {
   await rebuildModuleSummaries(store, embedder, { dirtyDirs, dirtyFeatures });
+  await rebuildPackageSummaries(store, embedder, { dirtyDirs });
+  await rebuildDecisionClusters(store, embedder, { dirtyDecisions, dirtyFeatures, dirtyDirs });
 }
 
 function inferFeatureFromPath(file) {
@@ -203,8 +220,13 @@ async function rebuildModuleSummaries(store, embedder, opts = {}) {
   for (const [dir, summaries] of groups) {
     if (summaries.length < 2) continue;
     if (!rebuildAll && !dirtyDirs.has(dir)) continue;
-    const text = summaries.map(record => `## ${record.file}\n${record.text}`).join('\n\n');
-    const vector = await embedder.embed(`${dir}\n${text}`);
+    const { text, embeddingText } = buildAggregateSummaryTexts({
+      title: `${dir} module`,
+      key: dir,
+      readmeLeadParagraph: readDirReadmeLead(ROOT, dir),
+      children: summaries
+    });
+    const vector = await embedder.embed(embeddingText);
     moduleRecords.push({
       id: sha256(`module:${dir}:${summaries.map(record => record.id).sort().join(':')}`),
       file: dir,
@@ -213,7 +235,7 @@ async function rebuildModuleSummaries(store, embedder, opts = {}) {
       type: 'module-summary',
       heading: dir,
       text,
-      embeddingText: `${dir}\n${text}`,
+      embeddingText,
       isSummary: true,
       isModuleSummary: true,
       isProjectSummary: false,
@@ -223,6 +245,139 @@ async function rebuildModuleSummaries(store, embedder, opts = {}) {
   }
   if (moduleRecords.length) await store.upsert(moduleRecords);
   await rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords, { rebuildAll, dirtyFeatures });
+}
+
+/**
+ * For monorepos: emit one `chunk:-5 type:package-summary` per detected
+ * package under `packages/*` and `apps/*` (configurable via
+ * BRAIN_PACKAGE_GLOBS). Each summary aggregates the package.json metadata,
+ * README lead paragraph, top exports from src/index.ts, and the list of
+ * child file summary titles — embedded as one intent-dense record so
+ * "what does @scope/x do" queries hit a single, accurate vector instead
+ * of scattered file summaries.
+ */
+async function rebuildPackageSummaries(store, embedder, opts = {}) {
+  const { all: rebuildAll = false, dirtyDirs = new Set() } = opts;
+  const globs = splitEnv('BRAIN_PACKAGE_GLOBS');
+  const packageDirs = discoverPackages(ROOT, globs.length ? globs : undefined);
+  if (!packageDirs.length) return;
+
+  // Identify and drop stale package-summary records for dirty packages only.
+  const allRecords = await store.getAll();
+  const staleIds = allRecords
+    .filter(record => {
+      if (record.type !== 'package-summary') return false;
+      if (rebuildAll) return true;
+      return [...dirtyDirs].some(dir => dir === record.file || dir.startsWith(`${record.file}/`));
+    })
+    .map(record => record.id);
+  if (staleIds.length) await store.delete(staleIds);
+
+  const refreshedRecords = await store.getAll();
+  const childSummariesByDir = groupSummariesByPackage(refreshedRecords, packageDirs);
+
+  const newRecords = [];
+  for (const pkgDir of packageDirs) {
+    const dirty = rebuildAll || [...dirtyDirs].some(dir => dir === pkgDir || dir.startsWith(`${pkgDir}/`));
+    if (!dirty) continue;
+    const summary = buildPackageSummary({
+      root: ROOT,
+      pkgDir,
+      childSummaries: childSummariesByDir.get(pkgDir) || []
+    });
+    if (!summary) continue;
+    newRecords.push({
+      id: sha256(`package:${pkgDir}:${summary.signature}`),
+      file: pkgDir,
+      chunk: -5,
+      title: `${summary.name || pkgDir} package summary`,
+      type: 'package-summary',
+      heading: summary.name || pkgDir,
+      text: summary.text,
+      embeddingText: summary.embeddingText,
+      isSummary: true,
+      isModuleSummary: false,
+      isProjectSummary: false,
+      module: pkgDir,
+      vector: await embedder.embed(summary.embeddingText)
+    });
+  }
+  if (newRecords.length) await store.upsert(newRecords);
+}
+
+/**
+ * Group ADRs (`.project-brain/decisions/*.md`) by `module:` or `feature:` in
+ * their frontmatter and emit one `chunk:-6 type:decision-cluster` per group
+ * with ≥2 decisions. Cross-decision queries ("all auth decisions") hit one
+ * synthesized vector instead of grepping individual ADRs.
+ */
+async function rebuildDecisionClusters(store, embedder, opts = {}) {
+  const { all: rebuildAll = false, dirtyDecisions = new Set(), dirtyFeatures = new Set(), dirtyDirs = new Set() } = opts;
+  const allRecords = await store.getAll();
+  const decisionFileSummaries = allRecords.filter(record =>
+    record.isSummary && record.type === 'decision'
+  );
+
+  const groups = new Map(); // key -> { kind, key, records }
+  for (const record of decisionFileSummaries) {
+    const keys = decisionGroupKeys(record);
+    for (const { kind, key } of keys) {
+      const fullKey = `${kind}:${key}`;
+      if (!groups.has(fullKey)) groups.set(fullKey, { kind, key, records: [] });
+      groups.get(fullKey).records.push(record);
+    }
+  }
+
+  // Stale identification: only the clusters whose key touches the dirty set.
+  const dirtyKeys = new Set();
+  if (!rebuildAll) {
+    for (const decision of dirtyDecisions) dirtyKeys.add(decision);
+    for (const feature of dirtyFeatures) dirtyKeys.add(feature);
+    for (const dir of dirtyDirs) dirtyKeys.add(dir);
+  }
+
+  const staleIds = allRecords
+    .filter(record => {
+      if (record.type !== 'decision-cluster') return false;
+      if (rebuildAll) return true;
+      const k = record.heading || '';
+      return [...dirtyKeys].some(dirty => k === dirty || k.endsWith(`:${dirty}`));
+    })
+    .map(record => record.id);
+  if (staleIds.length) await store.delete(staleIds);
+
+  const newRecords = [];
+  for (const [, group] of groups) {
+    if (group.records.length < 2) continue;
+    if (!rebuildAll) {
+      const touched = group.records.some(record => dirtyDecisions.has(record.decision || ''));
+      const groupKeyTouched = dirtyKeys.has(group.key);
+      if (!touched && !groupKeyTouched) continue;
+    }
+    const { text, embeddingText } = buildAggregateSummaryTexts({
+      title: `${group.kind}:${group.key} decisions`,
+      key: `${group.kind}:${group.key}`,
+      children: group.records
+    });
+    const sigSource = group.records.map(record => record.id).sort().join(':');
+    newRecords.push({
+      id: sha256(`decision-cluster:${group.kind}:${group.key}:${sigSource}`),
+      file: `.project-brain/decisions/__cluster__/${group.kind}-${group.key}.md`,
+      chunk: -6,
+      title: `${group.kind}:${group.key} decision cluster`,
+      type: 'decision-cluster',
+      heading: `${group.kind}:${group.key}`,
+      text,
+      embeddingText,
+      isSummary: true,
+      isModuleSummary: false,
+      isProjectSummary: false,
+      module: group.kind === 'module' ? group.key : '',
+      feature: group.kind === 'feature' ? group.key : '',
+      vector: await embedder.embed(embeddingText)
+    });
+  }
+  if (newRecords.length) await store.upsert(newRecords);
 }
 
 async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords, opts = {}) {
@@ -240,7 +395,11 @@ async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords,
   for (const [feature, records] of featureGroups) {
     if (records.length < 1) continue;
     if (!rebuildAll && !dirtyFeatures.has(feature)) continue;
-    const text = records.map(record => `## ${record.file}\n${record.text}`).join('\n\n');
+    const { text, embeddingText } = buildAggregateSummaryTexts({
+      title: `${feature} feature`,
+      key: feature,
+      children: records
+    });
     aggregateRecords.push({
       id: sha256(`feature:${feature}:${records.map(record => record.id).sort().join(':')}`),
       file: `.project-brain/features/${feature}.md`,
@@ -249,18 +408,22 @@ async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords,
       type: 'feature-summary',
       heading: feature,
       text,
-      embeddingText: `${feature}\n${text}`,
+      embeddingText,
       isSummary: true,
       isModuleSummary: false,
       isProjectSummary: false,
       feature,
-      vector: await embedder.embed(`${feature}\n${text}`)
+      vector: await embedder.embed(embeddingText)
     });
   }
 
   const projectInputs = moduleRecords.length ? moduleRecords : summaries;
   if (projectInputs.length >= 2) {
-    const text = projectInputs.map(record => `## ${record.heading || record.file}\n${record.text}`).join('\n\n');
+    const { text, embeddingText } = buildAggregateSummaryTexts({
+      title: 'Project',
+      key: 'project',
+      children: projectInputs
+    });
     aggregateRecords.push({
       id: sha256(`project:${projectInputs.map(record => record.id).sort().join(':')}`),
       file: '.project-brain/project-summary',
@@ -269,11 +432,11 @@ async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords,
       type: 'project-summary',
       heading: 'project',
       text,
-      embeddingText: `project\n${text}`,
+      embeddingText,
       isSummary: true,
       isModuleSummary: false,
       isProjectSummary: true,
-      vector: await embedder.embed(`project\n${text}`)
+      vector: await embedder.embed(embeddingText)
     });
   }
   if (aggregateRecords.length) await store.upsert(aggregateRecords);

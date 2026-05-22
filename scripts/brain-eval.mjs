@@ -1,3 +1,9 @@
+/**
+ * Retrieval-quality eval: runs a list of {query, expectedFiles/Symbols}
+ * cases from .project-brain/eval.json (or built-in smoke set) and
+ * reports recall@K + a per-case pass/fail line. Used to baseline
+ * retrieval tuning before/after changes.
+ */
 import fs from 'node:fs';
 import { BRAIN_DIR, read, peekOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';

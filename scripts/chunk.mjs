@@ -82,7 +82,11 @@ export function chunkSummary(text, filePath, docData = {}, tsSemantics = null) {
   if (isCodeExt(ext)) {
     const symbols = findSymbolsRegex(text).map(symbol => symbol.name).slice(0, 40);
     const imports = findImports(text).slice(0, 40);
-    const comment = (text.match(/\/\*\*([\s\S]*?)\*\//) || [])[1]?.replace(/^\s*\*\s?/gm, '').trim() || '';
+    // Intent sentence: prefer the file's leading JSDoc, then the first exported
+    // symbol's JSDoc, then the first non-empty // line at the top of the file.
+    // Embedding a real sentence beats embedding a bag of identifiers — most of
+    // the dense-recall benefit on code files lives in this one line.
+    const intent = extractCodeIntent(text);
     const resolved = tsSemantics?.resolvedImports?.length
       ? `Resolved modules: ${tsSemantics.resolvedImports.slice(0, 32).join(', ')}`
       : '';
@@ -90,7 +94,7 @@ export function chunkSummary(text, filePath, docData = {}, tsSemantics = null) {
       ? `Cross-file refs: ${[...tsSemantics.crossFileRefs].slice(0, 40).join(', ')}`
       : '';
     return {
-      text: [`# ${title}`, `File: ${filePath}`, comment, symbols.length ? `Exports/symbols: ${symbols.join(', ')}` : 'No exported symbols detected.', imports.length ? `Imports: ${imports.join(', ')}` : '', resolved, cross].filter(Boolean).join('\n'),
+      text: [`# ${title}`, `File: ${filePath}`, intent, symbols.length ? `Exports/symbols: ${symbols.join(', ')}` : 'No exported symbols detected.', imports.length ? `Imports: ${imports.join(', ')}` : '', resolved, cross].filter(Boolean).join('\n'),
       heading: title,
       isSummary: true,
       symbols,
@@ -183,6 +187,50 @@ async function findSymbolsAst(text, filePath) {
   function hasExport(node) {
     return Boolean(ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export);
   }
+}
+
+/** Pull a one-sentence intent description out of a code file. */
+export function extractCodeIntent(text) {
+  // 1. File-level JSDoc: the first /** */ block at the very top of the file
+  //    (before any non-whitespace content other than `'use strict';` etc).
+  const fileJsDoc = text.match(/^\s*(?:['"]use strict['"];?\s*)?(\/\*\*([\s\S]*?)\*\/)/);
+  if (fileJsDoc) {
+    const cleaned = stripJsDocStars(fileJsDoc[2]);
+    if (cleaned) return cleaned;
+  }
+  // 2. JSDoc immediately preceding the first `export` declaration.
+  const exportJsDoc = text.match(/\/\*\*([\s\S]*?)\*\/\s*export\s+(?:async\s+)?(?:default\s+)?(?:function|class|const|let|var|interface|type|enum)\b/);
+  if (exportJsDoc) {
+    const cleaned = stripJsDocStars(exportJsDoc[1]);
+    if (cleaned) return cleaned;
+  }
+  // 3. Leading line comments (//) at the top of the file.
+  const lines = text.split('\n');
+  const commentBuf = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (commentBuf.length) break;
+      continue;
+    }
+    if (trimmed.startsWith('//')) {
+      commentBuf.push(trimmed.replace(/^\/\/\s?/, ''));
+      continue;
+    }
+    break;
+  }
+  if (commentBuf.length) return commentBuf.join(' ').trim();
+  return '';
+}
+
+function stripJsDocStars(raw) {
+  return String(raw)
+    .replace(/^\s*\*\s?/gm, '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('@')) // drop @param/@returns/@throws/etc.
+    .join(' ')
+    .trim();
 }
 
 function findSymbolsRegex(text) {

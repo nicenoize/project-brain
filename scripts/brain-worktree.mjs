@@ -1,3 +1,11 @@
+/**
+ * Git worktree manager for parallel agent sessions.
+ *
+ * Spawns N worktrees with GitFlow-shaped branch names
+ * (feature/<issue>-<slug>-wp<N>) and keeps each worktree's
+ * skills/project-brain symlink pointing at the canonical source,
+ * so every worker sees the same brain. Subcommands: spawn, list, repair.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';

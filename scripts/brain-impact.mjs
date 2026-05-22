@@ -1,3 +1,10 @@
+/**
+ * Symbol impact analyzer: for one identifier, retrieves its definitions,
+ * direct callers/callees, tests, related ADRs, and adjacent brain
+ * chunks — so an agent can answer "what breaks if I rename X" without
+ * grepping. Uses ts-graph workspace references when `typescript` is
+ * installed, regex fallback otherwise.
+ */
 import { ROOT, listIndexableFiles, takeFlag } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { retrieve } from './retrieval.mjs';
