@@ -31,9 +31,11 @@ if (command === 'add') {
   }
   const actor = opts.actor || process.env.BRAIN_ACTOR || '';
   const task = opts.task || process.env.BRAIN_TASK || '';
+  const project = opts.project || process.env.BRAIN_PROJECT || '';
   for (const target of targets) {
     addLease({
       target,
+      project,
       lockedBy: actor || task || 'Needs Review',
       until: opts.until || '',
       notes: [task ? `task=${task}` : '', opts.notes || ''].filter(Boolean).join(' ')
@@ -43,7 +45,12 @@ if (command === 'add') {
 }
 
 if (command === 'release') {
-  releaseLeases({ taskId: opts.task || process.env.BRAIN_TASK || '', lockedBy: opts.actor || process.env.BRAIN_ACTOR || '', target: opts.target || '' });
+  releaseLeases({
+    taskId: opts.task || process.env.BRAIN_TASK || '',
+    lockedBy: opts.actor || process.env.BRAIN_ACTOR || '',
+    project: opts.project || process.env.BRAIN_PROJECT || '',
+    target: opts.target || ''
+  });
   console.log('Released matching lease(s).');
 }
 
@@ -72,6 +79,7 @@ function parseArgs(argv) {
     if (a === '--target') { opts.target = val; i += val ? 1 : 0; continue; }
     if (a === '--until') { opts.until = val; i += val ? 1 : 0; continue; }
     if (a === '--notes') { opts.notes = val; i += val ? 1 : 0; continue; }
+    if (a === '--project') { opts.project = val; i += val ? 1 : 0; continue; }
     positional.push(a);
   }
   if (!opts.target && positional.length) opts.target = positional.join(' ');
