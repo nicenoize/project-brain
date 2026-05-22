@@ -10,6 +10,7 @@ import { runDetectors } from './edges/index.mjs';
 import { candidateToRecord } from './edges/materialize.mjs';
 import {
   buildAggregateSummaryTexts,
+  buildFleetSummary,
   buildPackageSummary,
   buildRepoSummary,
   decisionGroupKeys,
@@ -217,6 +218,7 @@ if (isFastMode()) {
 
 if (fleetMode && !isFastMode()) {
   await rebuildCrossProjectEdges(store, embedder, { forceRebuild, dirtyProjects });
+  await rebuildFleetSummary(store, embedder);
 }
 
 /**
@@ -307,6 +309,38 @@ async function rebuildCrossProjectEdges(store, embedder, opts = {}) {
   }
   await store.upsert(newRecords);
   console.log(`Project Brain: cross-project edges — ${candidates.length} candidate${candidates.length === 1 ? '' : 's'} materialized.`);
+}
+
+/**
+ * One chunk:-8 fleet-summary record. Aggregates every repo-summary's
+ * intent line + the cross-project edge graph into a single vector so
+ * "describe this fleet" queries hit one record.
+ */
+async function rebuildFleetSummary(store, embedder) {
+  const all = await store.getAll();
+  const repoSummaries = all.filter(r => r.type === 'repo-summary');
+  const edgeRecords = all.filter(r => r.type === 'cross-project-edge');
+  // Drop any prior fleet-summary record before writing the fresh one.
+  const stale = all.filter(r => r.type === 'fleet-summary').map(r => r.id);
+  if (stale.length) await store.delete(stale);
+
+  if (!repoSummaries.length) return; // nothing to aggregate yet
+  const summary = buildFleetSummary({ projects, repoSummaries, edgeRecords });
+  await store.upsert([{
+    id: sha256(`fleet:${summary.signature}`),
+    file: '.project-brain/fleet/fleet-summary.md',
+    chunk: -8,
+    title: 'Fleet summary',
+    type: 'fleet-summary',
+    heading: 'fleet',
+    text: summary.text,
+    embeddingText: summary.embeddingText,
+    isSummary: true,
+    isModuleSummary: false,
+    isProjectSummary: false,
+    project: '',
+    vector: await embedder.embed(summary.embeddingText)
+  }]);
 }
 
 function inferFeatureFromPath(file) {
