@@ -6,17 +6,26 @@ export async function retrieve(query, store, embedder, opts = {}) {
   const candidates = Number(opts.candidates || Math.max(topK * 8, 32));
   const filter = opts.filter || {};
   const queryVector = await embedder.embed(query);
-  const dense = await store.search(queryVector, candidates, filter);
-  const all = (await store.getAll()).filter(record => recordMatches(record, filter));
+  const dense = (await store.search(queryVector, candidates, filter))
+    .filter(record => recordMatches(record, filter));
+
+  // Default: score only over dense candidates (fast, O(candidates) not O(N)).
+  // BRAIN_BROAD_CANDIDATES=1 falls back to full corpus scan for cases where
+  // keyword/symbol relevance may live outside the top-K dense neighborhood.
+  const broad = opts.broadCandidates ?? (process.env.BRAIN_BROAD_CANDIDATES === '1');
+  const pool = broad
+    ? (await store.getAll()).filter(record => recordMatches(record, filter))
+    : dense;
+
   const denseScores = new Map(dense.map(record => [record.id, record.score]));
-  const keyword = tfidfScore(query, all);
-  const symbol = symbolScore(query, all, opts);
+  const keyword = tfidfScore(query, pool);
+  const symbol = symbolScore(query, pool, opts);
   const maxKeyword = Math.max(1, ...keyword.values());
   const context = retrievalContext({ ...opts, query });
   const alpha = Number(opts.alpha || process.env.BRAIN_HYBRID_ALPHA || 0.7);
   const keywordScale = keywordScaleForContext(context);
 
-  return all
+  return pool
     .map(record => {
       const denseScore = denseScores.get(record.id) || 0;
       const keywordScore = ((keyword.get(record.id) || 0) / maxKeyword) * keywordScale;
