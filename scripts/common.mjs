@@ -248,11 +248,12 @@ export function truthyFrontmatter(value) {
  * Drop paths ignored by Git (uses repo .gitignore / exclude). Opt-in: BRAIN_INDEX_GITIGNORE=1.
  * Cheap batch: `git check-ignore -z --stdin`.
  */
-export function filterGitignoredRelativePaths(paths) {
+export function filterGitignoredRelativePaths(paths, opts = {}) {
   if (process.env.BRAIN_INDEX_GITIGNORE !== '1' || !paths.length) return paths;
+  const cwd = opts.root || ROOT;
   const input = Buffer.from(paths.join('\0') + '\0', 'utf8');
   const r = spawnSync('git', ['check-ignore', '-z', '--stdin'], {
-    cwd: ROOT,
+    cwd,
     input,
     encoding: 'utf8',
     maxBuffer: Math.max(8 * 1024 * 1024, paths.length * 256)

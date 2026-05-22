@@ -5,6 +5,7 @@ import { dispatchChunker } from './chunk.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
 import { loadTsSemanticContext } from './ts-graph.mjs';
+import { discoverProjects, isFleetMode } from './projects.mjs';
 import {
   buildAggregateSummaryTexts,
   buildPackageSummary,
@@ -36,12 +37,46 @@ if (oldManifest.model && oldManifest.model !== embedder.modelName) {
 }
 
 const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
-const files = filterGitignoredRelativePaths(await listIndexableFiles());
+
+// Fleet discovery: if ≥ 2 sibling projects (and BRAIN_FLEET_MODE doesn't
+// override), build the file list as the union of per-project listings and
+// remember which project each file belongs to so records get tagged.
+const projects = discoverProjects(ROOT);
+const fleetMode = isFleetMode(projects);
+const projectByFile = new Map();
+let files;
+if (fleetMode) {
+  const all = [];
+  for (const project of projects) {
+    const projAbs = path.join(ROOT, project.dir);
+    const projFiles = filterGitignoredRelativePaths(
+      await listIndexableFiles({ root: projAbs }),
+      { root: projAbs }
+    );
+    for (const f of projFiles) {
+      const fleetRel = path.posix.join(project.dir, f);
+      all.push(fleetRel);
+      projectByFile.set(fleetRel, project.name);
+    }
+  }
+  files = all;
+  if (!process.env.BRAIN_QUIET) {
+    console.log(`Project Brain: fleet mode — ${projects.length} projects (${projects.map(p => p.name).join(', ')})`);
+  }
+} else {
+  files = filterGitignoredRelativePaths(await listIndexableFiles());
+}
+
 const indexableSet = new Set(files);
 let tsContext = null;
 try {
-  tsContext = await loadTsSemanticContext(ROOT, indexableSet);
-  if (tsContext) console.log('Project Brain: TypeScript semantic graph enabled for indexing.');
+  // In fleet mode, ts-graph is invoked per-project lazily by brain:impact
+  // when --cross-project is requested. The single-program initial load only
+  // makes sense for a single tsconfig root.
+  if (!fleetMode) {
+    tsContext = await loadTsSemanticContext(ROOT, indexableSet);
+    if (tsContext) console.log('Project Brain: TypeScript semantic graph enabled for indexing.');
+  }
 } catch (error) {
   console.warn(`Project Brain: TS graph disabled (${error.message || error}).`);
 }
@@ -111,6 +146,7 @@ for (const file of changedFiles) {
       module: inferModule(file, doc.data),
       feature: inferFeature(file, doc.data),
       decision: inferDecision(file, doc.data),
+      project: doc.data.project || projectByFile.get(file) || '',
       sourceKind: inferSourceKind(file),
       ...meta,
       mtime: stat.mtime.toISOString(),
