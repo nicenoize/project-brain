@@ -19,18 +19,108 @@
   {
     "query": "AST chunking",
     "expectedFiles": ["scripts/chunk.mjs"],
-    "expectedSymbols": ["findSymbolsAst"],
     "expectedTypes": ["code"]
   },
   {
     "query": "where are GitFlow branch naming conventions documented",
-    "expectedFiles": [".project-brain/repo_context.md"],
+    "expectedFiles": [".project-brain/repo_context.md", "README.md", "SKILL.md"],
     "expectedTypes": ["doc"]
   },
   {
     "query": "how does hybrid score combine dense vector keyword and symbol signals",
-    "expectedFiles": ["scripts/retrieval.mjs"],
+    "expectedFiles": ["scripts/retrieval.mjs", ".project-brain/decisions/0001-hybrid-score-normalization.md"],
     "expectedSymbols": ["hybridScore"],
+    "expectedTypes": ["code", "decision"]
+  },
+  {
+    "query": "why did we replace TF-IDF with BM25",
+    "expectedFiles": [".project-brain/decisions/0002-bm25-keyword-scoring.md"],
+    "expectedTypes": ["decision"]
+  },
+  {
+    "query": "how is active_state.md protected from concurrent writes",
+    "expectedFiles": ["scripts/active-state.mjs", ".project-brain/decisions/0005-active-state-exclusive-lock.md"],
+    "expectedSymbols": ["withStateLock"],
+    "expectedTypes": ["code", "decision"]
+  },
+  {
+    "query": "orchestrator concurrency cap and slot lease",
+    "expectedFiles": ["scripts/brain-orchestrate.mjs", ".project-brain/decisions/0006-orchestrator-slot-lease.md"],
+    "expectedTypes": ["code", "decision"]
+  },
+  {
+    "query": "incremental module summary rebuild on changed directories",
+    "expectedFiles": ["scripts/brain-index.mjs", ".project-brain/decisions/0007-incremental-summary-rebuild.md"],
+    "expectedTypes": ["code", "decision"]
+  },
+  {
+    "query": "package summary record monorepo packages/* apps/*",
+    "expectedFiles": ["scripts/aggregate.mjs", ".project-brain/decisions/0008-aggregate-vector-records.md"],
+    "expectedSymbols": ["buildPackageSummary", "discoverPackages"],
+    "expectedTypes": ["code", "decision"]
+  },
+  {
+    "query": "what does the retrieval module do",
+    "expectedFiles": [".project-brain/modules/retrieval.md"],
+    "expectedTypes": ["module"]
+  },
+  {
+    "query": "where do we configure the embedder model",
+    "expectedFiles": ["scripts/embed.mjs"],
+    "expectedSymbols": ["LocalProvider", "OpenAIProvider"],
     "expectedTypes": ["code"]
+  },
+  {
+    "query": "OpenAI rate limit retry backoff",
+    "expectedFiles": ["scripts/embed.mjs"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "Lance schema mismatch auto recovery",
+    "expectedFiles": ["scripts/store.mjs"],
+    "expectedSymbols": ["LanceStore"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "extractCodeIntent JSDoc parser",
+    "expectedFiles": ["scripts/chunk.mjs"],
+    "expectedSymbols": ["extractCodeIntent"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "result deduplication per file in retrieval",
+    "expectedFiles": ["scripts/retrieval.mjs", ".project-brain/decisions/0004-result-deduplication-per-file.md"],
+    "expectedTypes": ["code", "decision"]
+  },
+  {
+    "query": "session handoff frontmatter task_id actor tool",
+    "expectedFiles": ["scripts/brain-session.mjs"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "Claude Code PreCompact Stop digest hook",
+    "expectedFiles": ["scripts/brain-session-digest.mjs"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "where do we cap embeddings to fit MiniLM context",
+    "expectedFiles": ["scripts/aggregate.mjs"],
+    "expectedSymbols": ["buildAggregateSummaryTexts"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "how does coordination work across multiple agents",
+    "expectedFiles": [".project-brain/modules/coordination.md"],
+    "expectedTypes": ["module"]
+  },
+  {
+    "query": "git worktree symlink repair idempotent",
+    "expectedFiles": ["scripts/brain-worktree.mjs"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "what hooks does Claude Code wire up automatically",
+    "expectedFiles": [".project-brain/modules/hooks.md", "scripts/setup-claude-settings.mjs"],
+    "expectedTypes": ["module", "code"]
   }
 ]

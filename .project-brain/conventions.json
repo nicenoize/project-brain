@@ -1,0 +1,50 @@
+{
+  "$schema-note": "Project-brain repo's own convention rules. Each rule blocks Edit/Write/MultiEdit at the PreToolUse hook and is also checked by `npm run brain:lint-conventions -- --scan` in pre-commit/CI. Cite the ADR or module doc that owns each rule in the message.",
+  "rules": [
+    {
+      "name": "no-duplicate-cli-helpers",
+      "match": ["scripts/brain-*.mjs"],
+      "exclude": ["scripts/common.mjs"],
+      "forbid": "^function\\s+(takeFlag|takeOption|peekOption|splitEnv)\\s*\\(",
+      "message": "Import takeFlag/takeOption/peekOption/splitEnv from './common.mjs' — do not redefine them. See CONTRIBUTING.md 'no duplicate helpers'.",
+      "severity": "block"
+    },
+    {
+      "name": "no-bare-fs-on-active-state",
+      "match": ["scripts/**/*.mjs"],
+      "exclude": ["scripts/active-state.mjs", "tests/**"],
+      "forbid": "writeFileSync\\([^)]*active_state\\.md",
+      "message": "active_state.md must be mutated via withStateLock helpers in active-state.mjs (addWorkstream/addLease/...). See decisions/0005-active-state-exclusive-lock.md.",
+      "severity": "block"
+    },
+    {
+      "name": "no-silent-shell-failures-in-setup",
+      "match": ["bin/setup.sh", "bin/install-hooks.sh", "bin/update.sh"],
+      "forbid": "\\|\\|\\s*true(\\s|$)",
+      "message": "Setup shell scripts must propagate non-zero exits so half-initialized state is visible. See the post-audit hardening commit (P3.5).",
+      "severity": "block"
+    },
+    {
+      "name": "no-relative-skill-paths",
+      "match": ["scripts/**/*.mjs", "bin/*.sh"],
+      "exclude": ["tests/**"],
+      "forbid": "\\.\\./\\.\\./skills/project-brain",
+      "message": "Build paths from ROOT / SKILL_DIR in common.mjs — no '../../skills/project-brain' relative paths.",
+      "severity": "block"
+    },
+    {
+      "name": "aggregate-summaries-via-helper",
+      "match": ["scripts/brain-index.mjs"],
+      "forbid": "embeddingText:\\s*`\\$\\{[^}]+\\}\\\\n\\$\\{text\\}`",
+      "message": "Aggregate (module/feature/project/package/cluster) embeddingText must go through buildAggregateSummaryTexts in aggregate.mjs to honor the MiniLM context cap. See decisions/0008-aggregate-vector-records.md.",
+      "severity": "warn"
+    },
+    {
+      "name": "hook-errors-on-stderr",
+      "match": ["scripts/brain-session-digest.mjs", "scripts/install-cursor-hooks.mjs"],
+      "forbid": "}\\s*catch\\s*\\(\\s*\\)\\s*\\{\\s*\\}",
+      "message": "Hook scripts must log failures to process.stderr before exiting — never swallow with empty catch. See decisions/0005 + the brain-session-digest P1.5 commit.",
+      "severity": "warn"
+    }
+  ]
+}
