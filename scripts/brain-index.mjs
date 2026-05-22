@@ -135,16 +135,23 @@ for (const record of records) {
   if (record.feature) dirtyFeatures.add(record.feature);
 }
 
+const dirtyDecisions = new Set();
+for (const file of dirtyFiles) {
+  if (file.startsWith('.project-brain/decisions/')) dirtyDecisions.add(path.basename(file, path.extname(file)));
+}
+
 if (isFastMode()) {
   console.log('Project Brain: fast mode — skipping module/feature/project summary rebuilds.');
 } else if (forceRebuild) {
   await rebuildModuleSummaries(store, embedder, { all: true });
   await rebuildPackageSummaries(store, embedder, { all: true });
-} else if (dirtyDirs.size === 0 && dirtyFeatures.size === 0) {
-  console.log('Project Brain: no changes — module/feature/project summaries left intact.');
+  await rebuildDecisionClusters(store, embedder, { all: true });
+} else if (dirtyDirs.size === 0 && dirtyFeatures.size === 0 && dirtyDecisions.size === 0) {
+  console.log('Project Brain: no changes — module/feature/project/decision summaries left intact.');
 } else {
   await rebuildModuleSummaries(store, embedder, { dirtyDirs, dirtyFeatures });
   await rebuildPackageSummaries(store, embedder, { dirtyDirs });
+  await rebuildDecisionClusters(store, embedder, { dirtyDecisions, dirtyFeatures, dirtyDirs });
 }
 
 function inferFeatureFromPath(file) {
@@ -346,6 +353,88 @@ async function rebuildPackageSummaries(store, embedder, opts = {}) {
     });
   }
   if (newRecords.length) await store.upsert(newRecords);
+}
+
+/**
+ * Group ADRs (`.project-brain/decisions/*.md`) by `module:` or `feature:` in
+ * their frontmatter and emit one `chunk:-6 type:decision-cluster` per group
+ * with ≥2 decisions. Cross-decision queries ("all auth decisions") hit one
+ * synthesized vector instead of grepping individual ADRs.
+ */
+async function rebuildDecisionClusters(store, embedder, opts = {}) {
+  const { all: rebuildAll = false, dirtyDecisions = new Set(), dirtyFeatures = new Set(), dirtyDirs = new Set() } = opts;
+  const allRecords = await store.getAll();
+  const decisionFileSummaries = allRecords.filter(record =>
+    record.isSummary && record.type === 'decision'
+  );
+
+  const groups = new Map(); // key -> { kind, key, records }
+  for (const record of decisionFileSummaries) {
+    const keys = decisionGroupKeys(record);
+    for (const { kind, key } of keys) {
+      const fullKey = `${kind}:${key}`;
+      if (!groups.has(fullKey)) groups.set(fullKey, { kind, key, records: [] });
+      groups.get(fullKey).records.push(record);
+    }
+  }
+
+  // Stale identification: only the clusters whose key touches the dirty set.
+  const dirtyKeys = new Set();
+  if (!rebuildAll) {
+    for (const decision of dirtyDecisions) dirtyKeys.add(decision);
+    for (const feature of dirtyFeatures) dirtyKeys.add(feature);
+    for (const dir of dirtyDirs) dirtyKeys.add(dir);
+  }
+
+  const staleIds = allRecords
+    .filter(record => {
+      if (record.type !== 'decision-cluster') return false;
+      if (rebuildAll) return true;
+      const k = record.heading || '';
+      return [...dirtyKeys].some(dirty => k === dirty || k.endsWith(`:${dirty}`));
+    })
+    .map(record => record.id);
+  if (staleIds.length) await store.delete(staleIds);
+
+  const newRecords = [];
+  for (const [, group] of groups) {
+    if (group.records.length < 2) continue;
+    if (!rebuildAll) {
+      const touched = group.records.some(record => dirtyDecisions.has(record.decision || ''));
+      const groupKeyTouched = dirtyKeys.has(group.key);
+      if (!touched && !groupKeyTouched) continue;
+    }
+    const { text, embeddingText } = buildAggregateSummaryTexts({
+      title: `${group.kind}:${group.key} decisions`,
+      key: `${group.kind}:${group.key}`,
+      children: group.records
+    });
+    const sigSource = group.records.map(record => record.id).sort().join(':');
+    newRecords.push({
+      id: sha256(`decision-cluster:${group.kind}:${group.key}:${sigSource}`),
+      file: `.project-brain/decisions/__cluster__/${group.kind}-${group.key}.md`,
+      chunk: -6,
+      title: `${group.kind}:${group.key} decision cluster`,
+      type: 'decision-cluster',
+      heading: `${group.kind}:${group.key}`,
+      text,
+      embeddingText,
+      isSummary: true,
+      isModuleSummary: false,
+      isProjectSummary: false,
+      module: group.kind === 'module' ? group.key : '',
+      feature: group.kind === 'feature' ? group.key : '',
+      vector: await embedder.embed(embeddingText)
+    });
+  }
+  if (newRecords.length) await store.upsert(newRecords);
+}
+
+function decisionGroupKeys(record) {
+  const out = [];
+  if (record.module) out.push({ kind: 'module', key: record.module });
+  if (record.feature) out.push({ kind: 'feature', key: record.feature });
+  return out;
 }
 
 function discoverPackages() {
