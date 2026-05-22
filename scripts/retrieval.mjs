@@ -25,7 +25,7 @@ export async function retrieve(query, store, embedder, opts = {}) {
   const alpha = Number(opts.alpha || process.env.BRAIN_HYBRID_ALPHA || 0.7);
   const keywordScale = keywordScaleForContext(context);
 
-  return pool
+  const scored = pool
     .map(record => {
       const denseScore = denseScores.get(record.id) || 0;
       const keywordScore = ((keyword.get(record.id) || 0) / maxKeyword) * keywordScale;
@@ -40,8 +40,38 @@ export async function retrieve(query, store, embedder, opts = {}) {
         score: hybridScore(denseScore, keywordScore, symbolMatchScore, metadataScore, alpha)
       };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK);
+    .sort((a, b) => b.score - a.score);
+
+  return limitChunksPerFile(scored, opts).slice(0, topK);
+}
+
+/**
+ * Cap non-summary chunks per file so a single long file can't occupy
+ * multiple top-K slots with near-duplicate content. Summaries (chunk: -1)
+ * are always kept. Default 2; override via opts.maxChunksPerFile or
+ * BRAIN_MAX_CHUNKS_PER_FILE. Set to 0 or Infinity to disable.
+ */
+function limitChunksPerFile(records, opts) {
+  const limit = Number(
+    opts.maxChunksPerFile ??
+    process.env.BRAIN_MAX_CHUNKS_PER_FILE ??
+    2
+  );
+  if (!Number.isFinite(limit) || limit <= 0) return records;
+  const seen = new Map();
+  const out = [];
+  for (const record of records) {
+    if (record.isSummary) {
+      out.push(record);
+      continue;
+    }
+    const key = record.file || record.id;
+    const count = seen.get(key) || 0;
+    if (count >= limit) continue;
+    seen.set(key, count + 1);
+    out.push(record);
+  }
+  return out;
 }
 
 export function tfidfScore(query, records) {
