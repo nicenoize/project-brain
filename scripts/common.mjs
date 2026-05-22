@@ -37,8 +37,9 @@ export function staleIndexFromRecords(records = []) {
     // exist on disk; they are derived from indexed children, not from a source file.
     if (record.file.startsWith('.project-brain/project-summary')) continue;
     if (record.file.includes('.project-brain/decisions/__cluster__/')) continue;
+    if (record.file.includes('.project-brain/fleet/edges/')) continue;
     if (record.type?.endsWith('-summary')) continue;
-    if (record.type === 'decision-cluster') continue;
+    if (record.type === 'decision-cluster' || record.type === 'repo-summary' || record.type === 'fleet-summary' || record.type === 'cross-project-edge') continue;
     if (seen.has(record.file)) continue;
     seen.add(record.file);
     const full = path.isAbsolute(record.file) ? record.file : path.join(ROOT, record.file);

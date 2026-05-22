@@ -147,6 +147,258 @@ export function readTopLevelExports(root, pkgDir) {
  * Build the synthesized package-summary record for one package directory.
  * Returns null if package.json is missing or unparseable.
  */
+/**
+ * Synthesize one repo-summary record per fleet project (chunk: -7).
+ * Returns { name, text, embeddingText, signature } or null when no
+ * contracts can be extracted.
+ *
+ * Repo summaries differ from package summaries: they cover any language
+ * (Node / Go / Python / Helm / kustomize / Docker), not just JS packages.
+ * They aggregate the project's high-signal anchors (package.json name +
+ * description, go.mod module path, Chart.yaml metadata, README first
+ * paragraph, top-level exports, k8s service names, Dockerfile-built
+ * image refs) into a single intent-dense vector per project.
+ */
+export function buildRepoSummary({ root, project, childSummaries = [] }) {
+  const contracts = extractProjectContracts(root, project);
+  const readmeLead = readDirReadmeLead(root, project.dir);
+  const name = contracts.name || project.name;
+  const description = contracts.description || '';
+  const kinds = project.kinds || [];
+
+  const childTitles = childSummaries
+    .map(r => r.heading || path.basename(r.file || ''))
+    .filter(Boolean)
+    .slice(0, 18);
+  const childIntents = childSummaries
+    .slice(0, 10)
+    .map(r => {
+      const intent = firstSentenceOfChild(r);
+      const t = r.heading || path.basename(r.file || '');
+      return intent ? `- ${t}: ${intent}` : (t ? `- ${t}` : '');
+    })
+    .filter(Boolean);
+
+  const embedSections = [
+    `# ${name} project`,
+    `Path: ${project.dir}`,
+    kinds.length ? `Kinds: ${kinds.join(', ')}` : '',
+    description ? `Description: ${description}` : '',
+    readmeLead ? `Readme: ${readmeLead}` : '',
+    contracts.routes?.length ? `Routes: ${contracts.routes.slice(0, 12).join(', ')}` : '',
+    contracts.services?.length ? `Services: ${contracts.services.slice(0, 12).join(', ')}` : '',
+    contracts.images?.length ? `Images: ${contracts.images.slice(0, 8).join(', ')}` : '',
+    contracts.topExports?.length ? `Exports: ${contracts.topExports.slice(0, 24).join(', ')}` : '',
+    contracts.binaries?.length ? `Binaries: ${contracts.binaries.slice(0, 8).join(', ')}` : '',
+    childIntents.length ? `Files:\n${childIntents.join('\n')}` : '',
+    contracts.deps?.length ? `Deps: ${contracts.deps.slice(0, 18).join(', ')}` : ''
+  ].filter(Boolean);
+  let embeddingText = embedSections.join('\n');
+  if (embeddingText.length > 1100) embeddingText = embeddingText.slice(0, 1080) + ' …';
+
+  const text = [
+    `# ${name}`,
+    `Path: ${project.dir}`,
+    kinds.length && `**Kinds:** ${kinds.join(', ')}`,
+    description && `> ${description}`,
+    readmeLead && `**Readme:** ${readmeLead}`,
+    contracts.routes?.length && `**Routes:** ${contracts.routes.join(', ')}`,
+    contracts.services?.length && `**Services:** ${contracts.services.join(', ')}`,
+    contracts.images?.length && `**Images:** ${contracts.images.join(', ')}`,
+    contracts.topExports?.length && `**Exports:** ${contracts.topExports.join(', ')}`,
+    contracts.binaries?.length && `**Binaries:** ${contracts.binaries.join(', ')}`,
+    childTitles.length && `**Files (${childSummaries.length}):** ${childTitles.join(', ')}`,
+    contracts.deps?.length && `**Deps:** ${contracts.deps.join(', ')}`
+  ].filter(Boolean).join('\n\n');
+
+  const sig = crypto.createHash('sha256').update([
+    name, description, kinds.join(','), readmeLead,
+    (contracts.routes || []).join(','), (contracts.services || []).join(','),
+    (contracts.images || []).join(','), (contracts.topExports || []).join(','),
+    (contracts.binaries || []).join(','), (contracts.deps || []).join(','),
+    childTitles.join(',')
+  ].join('|')).digest('hex');
+
+  return { name, text, embeddingText, signature: sig };
+}
+
+/** Pulls contracts (routes, services, images, etc.) from a project dir. */
+export function extractProjectContracts(root, project) {
+  const projAbs = path.join(root, project.dir);
+  const out = {
+    name: project.name, description: '',
+    routes: [], services: [], images: [], topExports: [],
+    binaries: [], deps: []
+  };
+
+  if (project.kinds?.includes('node')) {
+    Object.assign(out, mergeContracts(out, extractNodeContracts(projAbs)));
+  }
+  if (project.kinds?.includes('go')) {
+    Object.assign(out, mergeContracts(out, extractGoContracts(projAbs)));
+  }
+  if (project.kinds?.includes('python')) {
+    Object.assign(out, mergeContracts(out, extractPythonContracts(projAbs)));
+  }
+  if (project.kinds?.includes('helm') || project.kinds?.includes('kustomize')) {
+    Object.assign(out, mergeContracts(out, extractK8sContracts(projAbs)));
+  }
+  if (project.kinds?.includes('docker')) {
+    Object.assign(out, mergeContracts(out, extractDockerContracts(projAbs, project)));
+  }
+  if (project.kinds?.includes('proto')) {
+    Object.assign(out, mergeContracts(out, extractProtoContracts(projAbs)));
+  }
+  return out;
+}
+
+function mergeContracts(prev, next) {
+  return {
+    name: next.name || prev.name,
+    description: next.description || prev.description,
+    routes: [...(prev.routes || []), ...(next.routes || [])],
+    services: [...(prev.services || []), ...(next.services || [])],
+    images: [...(prev.images || []), ...(next.images || [])],
+    topExports: [...(prev.topExports || []), ...(next.topExports || [])],
+    binaries: [...(prev.binaries || []), ...(next.binaries || [])],
+    deps: [...(prev.deps || []), ...(next.deps || [])]
+  };
+}
+
+function extractNodeContracts(projAbs) {
+  const out = { topExports: [], routes: [], deps: [] };
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(projAbs, 'package.json'), 'utf8'));
+    out.name = pkg.name;
+    out.description = pkg.description || '';
+    out.deps = [...Object.keys(pkg.dependencies || {}), ...Object.keys(pkg.peerDependencies || {})];
+    out.topExports = readTopLevelExports(projAbs, '');
+  } catch {}
+  // Route discovery: app/api/**/route.ts (Next.js) + src/routes/*.ts (express-ish).
+  for (const pattern of [['app', 'api'], ['src', 'routes'], ['pages', 'api']]) {
+    const dir = path.join(projAbs, ...pattern);
+    if (!fs.existsSync(dir)) continue;
+    walkShallow(dir, projAbs, 4, (rel) => {
+      if (/\.(t|j)sx?$/.test(rel)) out.routes.push(rel.replace(/\\/g, '/'));
+    });
+  }
+  return out;
+}
+
+function extractGoContracts(projAbs) {
+  const out = { binaries: [], deps: [] };
+  try {
+    const mod = fs.readFileSync(path.join(projAbs, 'go.mod'), 'utf8');
+    const m = mod.match(/^module\s+(\S+)/m);
+    if (m) out.name = m[1];
+    out.deps = [...mod.matchAll(/^\s*([^\s/]+\.[^\s/]+\/\S+)\s+v/gm)].map(x => x[1]).slice(0, 24);
+  } catch {}
+  const cmdDir = path.join(projAbs, 'cmd');
+  if (fs.existsSync(cmdDir)) {
+    try {
+      for (const entry of fs.readdirSync(cmdDir, { withFileTypes: true })) {
+        if (entry.isDirectory()) out.binaries.push(entry.name);
+      }
+    } catch {}
+  }
+  return out;
+}
+
+function extractPythonContracts(projAbs) {
+  const out = {};
+  const pyproject = path.join(projAbs, 'pyproject.toml');
+  if (fs.existsSync(pyproject)) {
+    try {
+      const text = fs.readFileSync(pyproject, 'utf8');
+      const name = text.match(/^\s*name\s*=\s*['"]([^'"]+)['"]/m);
+      const desc = text.match(/^\s*description\s*=\s*['"]([^'"]+)['"]/m);
+      if (name) out.name = name[1];
+      if (desc) out.description = desc[1];
+    } catch {}
+  }
+  return out;
+}
+
+function extractK8sContracts(projAbs) {
+  const out = { services: [], images: [] };
+  // Chart.yaml metadata
+  try {
+    const chart = fs.readFileSync(path.join(projAbs, 'Chart.yaml'), 'utf8');
+    const name = chart.match(/^\s*name:\s*([^\n#]+)/m);
+    const desc = chart.match(/^\s*description:\s*([^\n#]+)/m);
+    if (name) out.name = name[1].trim();
+    if (desc) out.description = desc[1].trim();
+  } catch {}
+  // Walk YAML files for kind: Service / Deployment + image: refs.
+  walkShallow(projAbs, projAbs, 4, (rel) => {
+    if (!/\.(ya?ml)$/.test(rel)) return;
+    try {
+      const text = fs.readFileSync(path.join(projAbs, rel), 'utf8');
+      // Service names from `kind: Service` blocks
+      const blocks = text.split(/^---\s*$/m);
+      for (const block of blocks) {
+        if (/^\s*kind:\s*Service\b/m.test(block)) {
+          const name = block.match(/^\s*name:\s*([^\n#]+)/m);
+          if (name) out.services.push(name[1].trim());
+        }
+      }
+      // Image refs
+      for (const m of text.matchAll(/^\s*image:\s*['"]?([^\s'"]+)['"]?/gm)) {
+        const img = m[1].replace(/^\{\{.*?\}\}$/, '').trim();
+        if (img && !img.startsWith('{{')) out.images.push(img);
+      }
+    } catch {}
+  });
+  out.services = uniqueStrings(out.services).slice(0, 12);
+  out.images = uniqueStrings(out.images).slice(0, 12);
+  return out;
+}
+
+function extractDockerContracts(projAbs, project) {
+  const out = { images: [] };
+  try {
+    fs.readFileSync(path.join(projAbs, 'Dockerfile'), 'utf8');
+    // Derive image name: sibling package.json#name or project.dir basename.
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(projAbs, 'package.json'), 'utf8'));
+      if (pkg.name) out.images.push(pkg.name);
+    } catch {}
+    if (!out.images.length) out.images.push(project.name);
+  } catch {}
+  return out;
+}
+
+function extractProtoContracts(projAbs) {
+  const out = { services: [] };
+  walkShallow(projAbs, projAbs, 3, (rel) => {
+    if (!rel.endsWith('.proto')) return;
+    try {
+      const text = fs.readFileSync(path.join(projAbs, rel), 'utf8');
+      for (const m of text.matchAll(/^\s*service\s+([A-Za-z_][A-Za-z0-9_]*)/gm)) {
+        out.services.push(m[1]);
+      }
+    } catch {}
+  });
+  out.services = uniqueStrings(out.services).slice(0, 12);
+  return out;
+}
+
+function walkShallow(dir, root, depth, onFile) {
+  if (depth < 0) return;
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walkShallow(full, root, depth - 1, onFile);
+    else if (entry.isFile()) onFile(path.relative(root, full));
+  }
+}
+
+function uniqueStrings(list) {
+  return [...new Set(list.map(String).filter(Boolean))];
+}
+
 export function buildPackageSummary({ root, pkgDir, childSummaries }) {
   let pkgJson;
   try {

@@ -9,6 +9,7 @@ import { discoverProjects, isFleetMode } from './projects.mjs';
 import {
   buildAggregateSummaryTexts,
   buildPackageSummary,
+  buildRepoSummary,
   decisionGroupKeys,
   discoverPackages,
   groupSummariesByPackage,
@@ -184,18 +185,89 @@ for (const file of dirtyFiles) {
   if (file.startsWith('.project-brain/decisions/')) dirtyDecisions.add(path.basename(file, path.extname(file)));
 }
 
+const dirtyProjects = new Set();
+if (fleetMode) {
+  for (const file of dirtyFiles) {
+    const p = projectByFile.get(file);
+    if (p) dirtyProjects.add(p);
+  }
+  // First index in fleet mode → all projects dirty.
+  if (forceRebuild || existingRecords.length === 0) {
+    for (const p of projects) dirtyProjects.add(p.name);
+  }
+}
+
 if (isFastMode()) {
   console.log('Project Brain: fast mode — skipping module/feature/project summary rebuilds.');
 } else if (forceRebuild) {
   await rebuildModuleSummaries(store, embedder, { all: true });
   await rebuildPackageSummaries(store, embedder, { all: true });
   await rebuildDecisionClusters(store, embedder, { all: true });
-} else if (dirtyDirs.size === 0 && dirtyFeatures.size === 0 && dirtyDecisions.size === 0) {
+  if (fleetMode) await rebuildRepoSummaries(store, embedder, { all: true });
+} else if (dirtyDirs.size === 0 && dirtyFeatures.size === 0 && dirtyDecisions.size === 0 && dirtyProjects.size === 0) {
   console.log('Project Brain: no changes — module/feature/project/decision summaries left intact.');
 } else {
   await rebuildModuleSummaries(store, embedder, { dirtyDirs, dirtyFeatures });
   await rebuildPackageSummaries(store, embedder, { dirtyDirs });
   await rebuildDecisionClusters(store, embedder, { dirtyDecisions, dirtyFeatures, dirtyDirs });
+  if (fleetMode) await rebuildRepoSummaries(store, embedder, { dirtyProjects });
+}
+
+/**
+ * Emit one chunk:-7 repo-summary record per fleet project. Aggregates
+ * the project's package.json/go.mod/Chart.yaml metadata, README first
+ * paragraph, top-level exports, k8s services, Dockerfile images, and
+ * child file-summary intent lines into a single intent-dense vector.
+ */
+async function rebuildRepoSummaries(store, embedder, opts = {}) {
+  const { all: rebuildAll = false, dirtyProjects = new Set() } = opts;
+  const allRecords = await store.getAll();
+
+  // Stale: drop repo-summary records for dirty projects (or all on --force).
+  const staleIds = allRecords
+    .filter(r => r.type === 'repo-summary' && (rebuildAll || dirtyProjects.has(r.project)))
+    .map(r => r.id);
+  if (staleIds.length) await store.delete(staleIds);
+
+  const refreshed = await store.getAll();
+  const childByProject = new Map();
+  for (const r of refreshed) {
+    if (!r.isSummary || r.type === 'repo-summary' || r.type === 'session' || r.type === 'auto-compact') continue;
+    if (r.isModuleSummary || r.isProjectSummary) continue;
+    if (r.type === 'feature-summary' || r.type === 'package-summary' || r.type === 'decision-cluster') continue;
+    if (!r.project) continue;
+    if (!childByProject.has(r.project)) childByProject.set(r.project, []);
+    childByProject.get(r.project).push(r);
+  }
+
+  const newRecords = [];
+  for (const project of projects) {
+    if (!rebuildAll && !dirtyProjects.has(project.name)) continue;
+    const summary = buildRepoSummary({
+      root: ROOT,
+      project,
+      childSummaries: childByProject.get(project.name) || []
+    });
+    if (!summary) continue;
+    newRecords.push({
+      id: sha256(`repo:${project.name}:${summary.signature}`),
+      file: project.dir,
+      chunk: -7,
+      title: `${summary.name} project summary`,
+      type: 'repo-summary',
+      heading: summary.name,
+      text: summary.text,
+      embeddingText: summary.embeddingText,
+      isSummary: true,
+      isModuleSummary: false,
+      isProjectSummary: false,
+      project: project.name,
+      projectKinds: project.kinds,
+      module: project.dir,
+      vector: await embedder.embed(summary.embeddingText)
+    });
+  }
+  if (newRecords.length) await store.upsert(newRecords);
 }
 
 function inferFeatureFromPath(file) {
