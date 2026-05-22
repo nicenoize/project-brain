@@ -60,3 +60,35 @@ test('matchesFilter handles type/file/summaryOnly/modulesOnly', () => {
   assert.equal(matchesFilter(r, { file: 'a.md' }), true);
   assert.equal(matchesFilter(r, { file: 'b.md' }), false);
 });
+
+test('normalizeRecord preserves project + edge fields', () => {
+  const r = normalizeRecord({
+    id: '1', file: 'a.md',
+    project: 'backend',
+    edgeFrom: 'frontend', edgeTo: 'backend', edgeKind: 'http-call', edgeConfidence: 'high',
+    projectKinds: ['ts', 'docker']
+  });
+  assert.equal(r.project, 'backend');
+  assert.equal(r.edgeFrom, 'frontend');
+  assert.equal(r.edgeTo, 'backend');
+  assert.equal(r.edgeKind, 'http-call');
+  assert.equal(r.edgeConfidence, 'high');
+  assert.deepEqual(r.projectKinds, ['ts', 'docker']);
+});
+
+test('matchesFilter honors project (string + comma-list + array)', () => {
+  const r = normalizeRecord({ id: '1', file: 'a.md', project: 'backend' });
+  assert.equal(matchesFilter(r, { project: 'backend' }), true);
+  assert.equal(matchesFilter(r, { project: 'frontend' }), false);
+  assert.equal(matchesFilter(r, { project: 'backend,workers' }), true);
+  assert.equal(matchesFilter(r, { project: ['workers', 'backend'] }), true);
+  assert.equal(matchesFilter(r, { project: ['workers'] }), false);
+});
+
+test('matchesFilter honors edge fields', () => {
+  const r = normalizeRecord({ id: '1', file: 'a.md', edgeFrom: 'a', edgeTo: 'b', edgeKind: 'pubsub' });
+  assert.equal(matchesFilter(r, { edgeKind: 'pubsub' }), true);
+  assert.equal(matchesFilter(r, { edgeKind: 'http-call' }), false);
+  assert.equal(matchesFilter(r, { edgeFrom: 'a', edgeTo: 'b' }), true);
+  assert.equal(matchesFilter(r, { edgeFrom: 'a', edgeTo: 'c' }), false);
+});

@@ -423,6 +423,12 @@ export function normalizeRecord(record) {
     module: record.module || inferModule(record.file || ''),
     feature: record.feature || inferFeature(record.file || ''),
     decision: record.decision || inferDecision(record.file || ''),
+    project: record.project || '',
+    edgeFrom: record.edgeFrom || '',
+    edgeTo: record.edgeTo || '',
+    edgeKind: record.edgeKind || '',
+    edgeConfidence: record.edgeConfidence || '',
+    projectKinds: stripLanceSentinel(normalizeList(record.projectKinds)),
     sourceKind: record.sourceKind || '',
     mtime: record.mtime || '',
     hash: record.hash || '',
@@ -443,6 +449,13 @@ export function matchesFilter(record, filter = {}) {
   if (filter.modulesOnly && !record.isModuleSummary) return false;
   if (filter.type && record.type !== filter.type) return false;
   if (filter.file && record.file !== filter.file) return false;
+  if (filter.project) {
+    const allowed = Array.isArray(filter.project) ? filter.project : String(filter.project).split(',').map(s => s.trim()).filter(Boolean);
+    if (!allowed.includes(record.project)) return false;
+  }
+  if (filter.edgeKind && record.edgeKind !== filter.edgeKind) return false;
+  if (filter.edgeFrom && record.edgeFrom !== filter.edgeFrom) return false;
+  if (filter.edgeTo && record.edgeTo !== filter.edgeTo) return false;
   return true;
 }
 
@@ -470,7 +483,7 @@ function stripLanceSentinel(list) {
 
 function padLanceListColumns(record) {
   const out = { ...record };
-  for (const key of ['symbols', 'symbolKinds', 'exportedSymbols', 'imports', 'references', 'changedFiles']) {
+  for (const key of ['symbols', 'symbolKinds', 'exportedSymbols', 'imports', 'references', 'changedFiles', 'projectKinds']) {
     const arr = out[key];
     if (!Array.isArray(arr) || arr.length === 0) {
       out[key] = [LANCE_LIST_PLACEHOLDER];
