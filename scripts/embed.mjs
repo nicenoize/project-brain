@@ -54,23 +54,57 @@ export class OpenAIProvider extends EmbedProvider {
     const vectors = [];
     for (let i = 0; i < texts.length; i += this.batchSize) {
       const batch = texts.slice(i, i + this.batchSize);
-      const response = await fetch('https://api.openai.com/v1/embeddings', {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify({ model: this.model, input: batch })
-      });
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`OpenAI embeddings failed (${response.status}): ${body}`);
-      }
-      const data = await response.json();
+      const data = await this.requestBatchWithBackoff(batch);
       vectors.push(...data.data.sort((a, b) => a.index - b.index).map(item => item.embedding));
     }
     return vectors;
   }
+
+  async requestBatchWithBackoff(batch) {
+    const maxRetries = Number(process.env.BRAIN_OPENAI_MAX_RETRIES || 3);
+    let attempt = 0;
+    let lastError;
+    while (attempt <= maxRetries) {
+      let response;
+      try {
+        response = await fetch('https://api.openai.com/v1/embeddings', {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${this.apiKey}`,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({ model: this.model, input: batch })
+        });
+      } catch (error) {
+        lastError = error;
+        if (attempt === maxRetries) throw error;
+        await sleep(backoffMs(attempt));
+        attempt++;
+        continue;
+      }
+      if (response.ok) return response.json();
+      const transient = response.status === 429 || (response.status >= 500 && response.status < 600);
+      const body = await response.text();
+      if (!transient || attempt === maxRetries) {
+        throw new Error(`OpenAI embeddings failed (${response.status}): ${body}`);
+      }
+      lastError = new Error(`transient OpenAI ${response.status}: ${body.slice(0, 200)}`);
+      await sleep(backoffMs(attempt));
+      attempt++;
+    }
+    throw lastError || new Error('OpenAI embeddings exhausted retries');
+  }
+}
+
+function backoffMs(attempt) {
+  // 1s, 2s, 4s, 8s … with ±20% jitter.
+  const base = 1000 * Math.pow(2, attempt);
+  const jitter = base * (Math.random() * 0.4 - 0.2);
+  return Math.max(250, Math.round(base + jitter));
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export function openEmbedder(options = {}) {
