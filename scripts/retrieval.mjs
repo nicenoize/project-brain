@@ -74,20 +74,40 @@ function limitChunksPerFile(records, opts) {
   return out;
 }
 
+/**
+ * BM25 keyword score with document-length normalization.
+ * k1 controls term-frequency saturation (default 1.2); b controls length
+ * normalization (default 0.75, full length normalization). Pluses one to
+ * the idf term to keep all scores non-negative even when df > N/2.
+ */
 export function tfidfScore(query, records) {
   const queryTokens = tokenize(query);
+  if (!records.length || !queryTokens.length) return new Map();
+  const k1 = Number(process.env.BRAIN_BM25_K1 || 1.2);
+  const b = Number(process.env.BRAIN_BM25_B || 0.75);
   const df = new Map();
-  const docs = records.map(record => new Set(tokenize(recordText(record))));
-  for (const doc of docs) for (const token of doc) df.set(token, (df.get(token) || 0) + 1);
-
+  const docTokens = records.map(record => tokenize(recordText(record)));
+  for (const tokens of docTokens) {
+    const seen = new Set(tokens);
+    for (const token of seen) df.set(token, (df.get(token) || 0) + 1);
+  }
+  const totalLen = docTokens.reduce((sum, tokens) => sum + tokens.length, 0);
+  const avgdl = totalLen / docTokens.length || 1;
+  const N = records.length;
   const scores = new Map();
   for (let i = 0; i < records.length; i++) {
+    const tokens = docTokens[i];
+    const dl = tokens.length || 1;
     let score = 0;
-    const textTokens = tokenize(recordText(records[i]));
+    const tfCache = new Map();
+    for (const token of tokens) tfCache.set(token, (tfCache.get(token) || 0) + 1);
     for (const token of queryTokens) {
-      const tf = textTokens.filter(t => t === token).length;
+      const tf = tfCache.get(token) || 0;
       if (!tf) continue;
-      score += tf * (Math.log((records.length + 1) / ((df.get(token) || 0) + 1)) + 1);
+      const dfT = df.get(token) || 0;
+      const idf = Math.log(1 + (N - dfT + 0.5) / (dfT + 0.5));
+      const norm = tf + k1 * (1 - b + b * (dl / avgdl));
+      score += idf * (tf * (k1 + 1)) / norm;
     }
     scores.set(records[i].id, score);
   }
