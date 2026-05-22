@@ -24,6 +24,63 @@ function childAddLease(cwd, target) {
   return spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd, encoding: 'utf8' });
 }
 
+test('addWorkstream + addLease persist new `project` column', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-fleet-cols-'));
+  fs.mkdirSync(path.join(cwd, '.project-brain'), { recursive: true });
+  const code = `
+    const mod = await import('file://${scriptsDir.replace(/\\\\/g, '/')}/active-state.mjs');
+    mod.addWorkstream({ taskId: 'issue-99', owner: 'me', tool: 'codex', project: 'backend', branch: 'feature/99-x' });
+    mod.addLease({ target: 'lib/auth.ts', project: 'backend', lockedBy: 'me' });
+    console.log(JSON.stringify(mod.activeStateJson()));
+  `;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(r.stderr || r.stdout);
+  const state = JSON.parse(r.stdout.trim());
+  assert.equal(state.workstreams[0].project, 'backend');
+  assert.equal(state.workstreams[0].branch, 'feature/99-x');
+  assert.equal(state.leases[0].project, 'backend');
+  assert.equal(state.leases[0].target, 'lib/auth.ts');
+});
+
+test('legacy 6-column workstreams + 4-column leases parse correctly', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-fleet-legacy-'));
+  fs.mkdirSync(path.join(cwd, '.project-brain'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.project-brain', 'active_state.md'), `# Active State
+
+## Workstreams
+
+| task_id | owner | tool | branch | scope / links | status |
+| --- | --- | --- | --- | --- | --- |
+| issue-7 | alice | codex | feature/7-x | lib/auth.ts | active |
+
+## File Leases
+
+| path glob or file | locked_by | until | notes |
+| --- | --- | --- | --- |
+| lib/auth.ts | alice | | |
+
+## Blockers
+
+- None recorded
+`);
+  const code = `
+    const mod = await import('file://${scriptsDir.replace(/\\\\/g, '/')}/active-state.mjs');
+    console.log(JSON.stringify(mod.activeStateJson()));
+  `;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(r.stderr || r.stdout);
+  const state = JSON.parse(r.stdout.trim());
+  // Legacy row: project should be empty, branch/scope/status preserved.
+  assert.equal(state.workstreams[0].taskId, 'issue-7');
+  assert.equal(state.workstreams[0].project, '');
+  assert.equal(state.workstreams[0].branch, 'feature/7-x');
+  assert.equal(state.workstreams[0].scope, 'lib/auth.ts');
+  assert.equal(state.workstreams[0].status, 'active');
+  assert.equal(state.leases[0].target, 'lib/auth.ts');
+  assert.equal(state.leases[0].project, '');
+  assert.equal(state.leases[0].lockedBy, 'alice');
+});
+
 test('concurrent addLease calls do not lose rows', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-state-test-'));
   fs.mkdirSync(path.join(cwd, '.project-brain'), { recursive: true });

@@ -20,9 +20,11 @@ const type = takeOption(args, '--type');
 const symbol = takeOption(args, '--symbol');
 const taskOpt = takeOption(args, '--task');
 const actorOpt = takeOption(args, '--actor');
+const projectOpt = takeOption(args, '--project');
+const edgeKindOpt = takeOption(args, '--edge-kind');
 const query = args.join(' ').trim();
 if (!query) {
-  console.error('Usage: npm run brain:search -- "query" [--summary-only] [--modules-only] [--type doc] [--symbol SymbolName] [--task <id>] [--actor <label>] [--json]');
+  console.error('Usage: npm run brain:search -- "query" [--summary-only] [--modules-only] [--type doc] [--symbol SymbolName] [--task <id>] [--actor <label>] [--project name[,name2]] [--edge-kind k8s-image|http-call|...] [--json]');
   process.exit(1);
 }
 if (!fs.existsSync(JSON_INDEX) && !fs.existsSync(MANIFEST)) {
@@ -42,7 +44,11 @@ const actor = String(actorOpt || process.env.BRAIN_ACTOR || '').trim();
 const results = await retrieve(query, store, embedder, {
   topK: Number(process.env.BRAIN_TOP_K || 8),
   symbol,
-  filter: { summaryOnly, modulesOnly, type },
+  filter: {
+    summaryOnly, modulesOnly, type,
+    ...(projectOpt ? { project: projectOpt } : {}),
+    ...(edgeKindOpt ? { edgeKind: edgeKindOpt } : {})
+  },
   taskId,
   actor
 });

@@ -63,51 +63,84 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-export function addWorkstream({ taskId, owner = '', tool = '', branch = '', scope = '', status = 'active' }) {
+const WORKSTREAM_HEADERS = ['task_id', 'owner', 'tool', 'project', 'branch', 'scope / links', 'status'];
+const LEASE_HEADERS = ['path glob or file', 'project', 'locked_by', 'until', 'notes'];
+const WORKSTREAM_KEYS = ['taskId', 'owner', 'tool', 'project', 'branch', 'scope', 'status'];
+const LEASE_KEYS = ['target', 'project', 'lockedBy', 'until', 'notes'];
+
+export function addWorkstream({ taskId, owner = '', tool = '', project = '', branch = '', scope = '', status = 'active' }) {
   withStateLock(() => {
-    const row = [taskId, owner, tool, branch, scope, status];
-    const text = updateTable(readActiveState(), 'Workstreams', ['task_id', 'owner', 'tool', 'branch', 'scope / links', 'status'], row, 0);
+    const row = [taskId, owner, tool, project, branch, scope, status];
+    const text = updateTable(readActiveState(), 'Workstreams', WORKSTREAM_HEADERS, row, 0);
     write(ACTIVE_STATE, text);
   });
 }
 
 export function endWorkstream(taskId, status = 'done') {
   withStateLock(() => {
-    const rows = parseTable(section(readActiveState(), 'Workstreams')).rows;
-    const nextRows = rows.map(row => row[0] === taskId ? [...row.slice(0, 5), status] : row);
-    write(ACTIVE_STATE, replaceTable(readActiveState(), 'Workstreams', ['task_id', 'owner', 'tool', 'branch', 'scope / links', 'status'], nextRows));
+    const text = readActiveState();
+    const parsed = parseTable(section(text, 'Workstreams'));
+    const upgraded = upgradeRows(parsed, WORKSTREAM_HEADERS, ['task_id', 'owner', 'tool', 'branch', 'scope / links', 'status']);
+    const nextRows = upgraded.map(row => row[0] === taskId
+      ? [...row.slice(0, WORKSTREAM_HEADERS.length - 1), status]
+      : row);
+    write(ACTIVE_STATE, replaceTable(text, 'Workstreams', WORKSTREAM_HEADERS, nextRows));
   });
 }
 
-export function addLease({ target, lockedBy = '', until = '', notes = '' }) {
+export function addLease({ target, project = '', lockedBy = '', until = '', notes = '' }) {
   withStateLock(() => {
-    const row = [target, lockedBy, until, notes];
-    const text = updateTable(readActiveState(), 'File Leases', ['path glob or file', 'locked_by', 'until', 'notes'], row, 0);
+    const row = [target, project, lockedBy, until, notes];
+    const text = updateTable(readActiveState(), 'File Leases', LEASE_HEADERS, row, 0);
     write(ACTIVE_STATE, text);
   });
 }
 
-export function releaseLeases({ taskId = '', lockedBy = '', target = '' }) {
+export function releaseLeases({ taskId = '', lockedBy = '', target = '', project = '' }) {
   withStateLock(() => {
-    const rows = parseTable(section(readActiveState(), 'File Leases')).rows;
-    const nextRows = rows.filter(row => {
+    const text = readActiveState();
+    const parsed = parseTable(section(text, 'File Leases'));
+    const upgraded = upgradeRows(parsed, LEASE_HEADERS, ['path glob or file', 'locked_by', 'until', 'notes']);
+    const nextRows = upgraded.filter(row => {
       if (target && row[0] === target) return false;
-      if (lockedBy && row[1] === lockedBy) return false;
+      if (project && row[1] === project) return false;
+      if (lockedBy && row[2] === lockedBy) return false;
       if (taskId && row.join(' ').includes(taskId)) return false;
       return true;
     });
-    write(ACTIVE_STATE, replaceTable(readActiveState(), 'File Leases', ['path glob or file', 'locked_by', 'until', 'notes'], nextRows));
+    write(ACTIVE_STATE, replaceTable(text, 'File Leases', LEASE_HEADERS, nextRows));
   });
 }
 
 export function activeStateJson() {
   const text = readActiveState();
+  const wsTable = parseTable(section(text, 'Workstreams'));
+  const lsTable = parseTable(section(text, 'File Leases'));
   return {
-    workstreams: rowsToObjects(parseTable(section(text, 'Workstreams')), ['taskId', 'owner', 'tool', 'branch', 'scope', 'status']),
-    leases: rowsToObjects(parseTable(section(text, 'File Leases')), ['target', 'lockedBy', 'until', 'notes']),
+    workstreams: rowsToObjects({ rows: upgradeRows(wsTable, WORKSTREAM_HEADERS, ['task_id', 'owner', 'tool', 'branch', 'scope / links', 'status']) }, WORKSTREAM_KEYS),
+    leases: rowsToObjects({ rows: upgradeRows(lsTable, LEASE_HEADERS, ['path glob or file', 'locked_by', 'until', 'notes']) }, LEASE_KEYS),
     blockers: bullets(section(text, 'Blockers')),
     overlaps: bullets(section(text, 'Overlaps'))
   };
+}
+
+/**
+ * Tolerate the pre-fleet-mode table shape (no `project` column) by
+ * back-filling an empty cell at the new column index when we detect
+ * rows shorter than the current schema. Lets fleet mode roll out to
+ * existing repos without rewriting their active_state.md eagerly.
+ */
+function upgradeRows(parsed, newHeaders, oldHeaders) {
+  if (!parsed?.rows?.length) return [];
+  const isOld = parsed.headers?.length === oldHeaders.length;
+  if (!isOld) return parsed.rows;
+  const projectIdx = newHeaders.indexOf('project');
+  return parsed.rows.map(row => {
+    if (projectIdx === -1) return row;
+    const next = [...row];
+    next.splice(projectIdx, 0, '');
+    return next;
+  });
 }
 
 function updateTable(text, heading, headers, row, keyIndex) {
@@ -186,15 +219,15 @@ function defaultActiveState() {
 
 ## Workstreams
 
-| task_id | owner | tool | branch | scope / links | status |
-| --- | --- | --- | --- | --- | --- |
-| _None_ | | | | | |
+| task_id | owner | tool | project | branch | scope / links | status |
+| --- | --- | --- | --- | --- | --- | --- |
+| _None_ | | | | | | |
 
 ## File Leases
 
-| path glob or file | locked_by | until | notes |
-| --- | --- | --- | --- |
-| _None_ | | | |
+| path glob or file | project | locked_by | until | notes |
+| --- | --- | --- | --- | --- |
+| _None_ | | | | |
 
 ## Blockers
 

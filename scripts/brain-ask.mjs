@@ -20,6 +20,7 @@ let scope = '';
 let topK = '';
 let brainTask = '';
 let brainActor = '';
+let brainProject = '';
 const positional = [];
 
 for (let i = 0; i < argv.length; i++) {
@@ -36,6 +37,8 @@ for (let i = 0; i < argv.length; i++) {
     brainTask = argv[++i] || '';
   } else if (a === '--actor') {
     brainActor = argv[++i] || '';
+  } else if (a === '--project') {
+    brainProject = argv[++i] || '';
   } else {
     positional.push(a);
   }
@@ -43,7 +46,7 @@ for (let i = 0; i < argv.length; i++) {
 
 const query = positional.join(' ').trim();
 if (!query) {
-  console.error('Usage: npm run brain:ask -- "<query>" [--max-tokens N] [--top-k N] [--scope module] [--task <id>] [--actor <label>] [--pack] [--no-pack] [--force-vector] [--explain] [--json]');
+  console.error('Usage: npm run brain:ask -- "<query>" [--max-tokens N] [--top-k N] [--scope module] [--task <id>] [--actor <label>] [--project name[,name2]] [--pack] [--no-pack] [--force-vector] [--explain] [--json]');
   process.exit(1);
 }
 
@@ -77,6 +80,7 @@ if (decision.route === 'symbol') {
   if (flags.has('--json')) a.push('--json');
   if (brainTask) a.push('--task', brainTask);
   if (brainActor) a.push('--actor', brainActor);
+  if (brainProject) a.push('--project', brainProject);
   if (topK) { /* search uses BRAIN_TOP_K env */ }
   a.push(decision.target);
   const result = spawnSync(process.execPath, a, {
@@ -91,6 +95,7 @@ if (decision.route === 'doc') {
   if (flags.has('--json')) a.push('--json');
   if (brainTask) a.push('--task', brainTask);
   if (brainActor) a.push('--actor', brainActor);
+  if (brainProject) a.push('--project', brainProject);
   a.push(query);
   const result = spawnSync(process.execPath, a, {
     stdio: 'inherit',
@@ -104,6 +109,7 @@ if (decision.route === 'module') {
   if (flags.has('--json')) a.push('--json');
   if (brainTask) a.push('--task', brainTask);
   if (brainActor) a.push('--actor', brainActor);
+  if (brainProject) a.push('--project', brainProject);
   a.push(query);
   const result = spawnSync(process.execPath, a, {
     stdio: 'inherit',
@@ -122,6 +128,7 @@ if (wantsPack) {
   if (flags.has('--json')) a.push('--format', 'json');
   if (brainTask) a.push('--task', brainTask);
   if (brainActor) a.push('--actor', brainActor);
+  if (brainProject) a.push('--project', brainProject);
   const result = spawnSync(process.execPath, a, { stdio: 'inherit', env: withTopK(childEnv) });
   process.exit(result.status || 0);
 }
@@ -131,6 +138,7 @@ if (isFastMode()) searchArgs.push('--summary-only');
 if (flags.has('--json')) searchArgs.push('--json');
 if (brainTask) searchArgs.push('--task', brainTask);
 if (brainActor) searchArgs.push('--actor', brainActor);
+if (brainProject) searchArgs.push('--project', brainProject);
 searchArgs.push(query);
 const result = spawnSync(process.execPath, searchArgs, {
   stdio: 'inherit',

@@ -11,7 +11,10 @@ import {
   groupSummariesByPackage,
   readDirReadmeLead,
   readTopLevelExports,
-  buildPackageSummary
+  buildPackageSummary,
+  buildRepoSummary,
+  buildFleetSummary,
+  extractProjectContracts
 } from '../scripts/aggregate.mjs';
 import { extractCodeIntent } from '../scripts/chunk.mjs';
 
@@ -217,6 +220,121 @@ test('buildPackageSummary: returns null when package.json missing', () => {
 });
 
 // ---------- groupSummariesByPackage (V1) ----------
+
+// ---------- buildRepoSummary / extractProjectContracts (F2) ----------
+
+test('extractProjectContracts: Node project pulls name + description + deps', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-repo-test-'));
+  fs.mkdirSync(path.join(root, 'backend'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'backend', 'package.json'), JSON.stringify({
+    name: '@x/backend',
+    description: 'Auth + billing API.',
+    dependencies: { express: '^4', pg: '^8' }
+  }));
+  const c = extractProjectContracts(root, { name: 'backend', dir: 'backend', kinds: ['node'] });
+  assert.equal(c.name, '@x/backend');
+  assert.equal(c.description, 'Auth + billing API.');
+  assert.ok(c.deps.includes('express'));
+  assert.ok(c.deps.includes('pg'));
+});
+
+test('extractProjectContracts: Go project pulls module name + cmd binaries', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-repo-test-'));
+  fs.mkdirSync(path.join(root, 'workers', 'cmd', 'consumer'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'workers', 'cmd', 'migrator'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'workers', 'go.mod'), 'module github.com/acme/workers\n\nrequire (\n\tgithub.com/lib/pq v1.10.0\n)\n');
+  const c = extractProjectContracts(root, { name: 'workers', dir: 'workers', kinds: ['go'] });
+  assert.equal(c.name, 'github.com/acme/workers');
+  assert.deepEqual(c.binaries.sort(), ['consumer', 'migrator']);
+});
+
+test('extractProjectContracts: K8s project pulls service names + image refs', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-repo-test-'));
+  fs.mkdirSync(path.join(root, 'k8s', 'templates'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'k8s', 'Chart.yaml'), 'name: orchestration\ndescription: All deployments.\n');
+  fs.writeFileSync(path.join(root, 'k8s', 'templates', 'svc.yaml'), [
+    'apiVersion: v1',
+    'kind: Service',
+    'metadata:',
+    '  name: backend',
+    '---',
+    'apiVersion: apps/v1',
+    'kind: Deployment',
+    'spec:',
+    '  template:',
+    '    spec:',
+    '      containers:',
+    '        - name: web',
+    '          image: ghcr.io/acme/backend:1.2'
+  ].join('\n'));
+  const c = extractProjectContracts(root, { name: 'k8s', dir: 'k8s', kinds: ['helm'] });
+  assert.equal(c.name, 'orchestration');
+  assert.ok(c.services.includes('backend'));
+  assert.ok(c.images.includes('ghcr.io/acme/backend:1.2'));
+});
+
+test('buildRepoSummary: produces text + embeddingText, caps at 1100 chars', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-repo-test-'));
+  fs.mkdirSync(path.join(root, 'backend'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'backend', 'package.json'), JSON.stringify({
+    name: '@x/backend',
+    description: 'Auth + billing API.',
+    dependencies: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`dep-${i}`, '^1'])) // many deps
+  }));
+  fs.writeFileSync(path.join(root, 'backend', 'README.md'), 'The backend serves user auth, billing, and event publishing.');
+  const project = { name: 'backend', dir: 'backend', kinds: ['node'] };
+  const result = buildRepoSummary({
+    root, project,
+    childSummaries: Array.from({ length: 8 }, (_, i) => ({
+      file: `backend/src/file-${i}.ts`,
+      heading: `file-${i}.ts`,
+      text: `# file-${i}.ts\nDoes thing ${i}.`,
+      symbols: [`sym${i}`]
+    }))
+  });
+  assert.ok(result);
+  assert.equal(result.name, '@x/backend');
+  assert.ok(result.embeddingText.includes('# @x/backend project'));
+  assert.ok(result.embeddingText.includes('Description: Auth + billing API.'));
+  assert.ok(result.embeddingText.includes('Readme: The backend serves'));
+  assert.ok(result.embeddingText.includes('Files:'));
+  assert.ok(result.embeddingText.length <= 1100);
+});
+
+// ---------- buildFleetSummary (F4) ----------
+
+test('buildFleetSummary: produces text + embeddingText capped at 1100 chars', () => {
+  const projects = [
+    { name: 'backend', kinds: ['node', 'docker'] },
+    { name: 'workers', kinds: ['python'] },
+    { name: 'k8s', kinds: ['helm'] }
+  ];
+  const repoSummaries = [
+    { project: 'backend', heading: 'backend', text: '# backend project\nHandles API + auth.\nExports: a, b', id: 'r1' },
+    { project: 'workers', heading: 'workers', text: '# workers project\nProcesses background jobs.', id: 'r2' },
+    { project: 'k8s', heading: 'k8s', text: '# k8s project\nDeploys backend + workers.', id: 'r3' }
+  ];
+  const edgeRecords = [
+    { edgeFrom: 'k8s', edgeTo: 'backend', edgeKind: 'k8s-image', id: 'e1' },
+    { edgeFrom: 'k8s', edgeTo: 'workers', edgeKind: 'k8s-image', id: 'e2' },
+    { edgeFrom: 'backend', edgeTo: 'workers', edgeKind: 'pubsub', id: 'e3' }
+  ];
+  const result = buildFleetSummary({ projects, repoSummaries, edgeRecords });
+  assert.ok(result.embeddingText.length <= 1100);
+  assert.ok(result.embeddingText.includes('Projects (3): backend, workers, k8s'));
+  assert.ok(result.embeddingText.includes('Handles API'));
+  assert.ok(result.embeddingText.includes('k8s → backend via k8s-image'));
+  assert.ok(result.embeddingText.includes('backend → workers via pubsub'));
+});
+
+test('buildFleetSummary: empty edge list omits Edges section', () => {
+  const result = buildFleetSummary({
+    projects: [{ name: 'a', kinds: ['node'] }, { name: 'b', kinds: ['go'] }],
+    repoSummaries: [],
+    edgeRecords: []
+  });
+  assert.ok(!result.embeddingText.includes('Edges'));
+});
 
 test('groupSummariesByPackage: assigns by longest-prefix match, ignores non-summary', () => {
   const records = [

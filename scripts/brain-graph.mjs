@@ -20,7 +20,19 @@ export function buildGraph(records) {
   const nodes = new Map();
   const edges = new Map();
   for (const record of records) {
+    // Cross-project edges (chunk:-9) materialize as project→project graph edges
+    // and don't get the per-file/symbol breakdown applied.
+    if (record.type === 'cross-project-edge' && record.edgeFrom && record.edgeTo) {
+      addNode(nodes, `project:${record.edgeFrom}`, 'project', record.edgeFrom);
+      addNode(nodes, `project:${record.edgeTo}`, 'project', record.edgeTo);
+      addEdge(edges, `project:${record.edgeFrom}`, `project:${record.edgeTo}`, `${record.edgeKind}:${record.edgeConfidence}`);
+      continue;
+    }
     addNode(nodes, `file:${record.file}`, 'file', record.file);
+    if (record.project) {
+      addNode(nodes, `project:${record.project}`, 'project', record.project);
+      addEdge(edges, `file:${record.file}`, `project:${record.project}`, 'belongs_to_project');
+    }
     if (record.module) {
       addNode(nodes, `module:${record.module}`, 'module', record.module);
       addEdge(edges, `file:${record.file}`, `module:${record.module}`, 'belongs_to');
@@ -95,6 +107,6 @@ function nodeId(id) {
 }
 
 function label(id) {
-  return id.replace(/^(file|module|feature|decision|symbol|import):/, '').replace(/"/g, "'");
+  return id.replace(/^(file|module|feature|decision|symbol|import|reference|project):/, '').replace(/"/g, "'");
 }
 
