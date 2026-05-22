@@ -32,7 +32,7 @@
     "brain:install-cursor-hooks": "node scripts/install-cursor-hooks.mjs",
     "brain:install-hooks": "bash bin/install-hooks.sh",
     "brain:update-skill": "bash bin/update.sh",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs tests/**/*.test.mjs"
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
