@@ -25,11 +25,12 @@ const includeAutoCompact = takeFlag(args, '--include-auto-compact') || process.e
 const printBudget = takeFlag(args, '--print-budget') || process.env.BRAIN_PACK_PRINT_BUDGET === '1';
 const taskOpt = takeOption(args, '--task');
 const actorOpt = takeOption(args, '--actor');
+const projectOpt = takeOption(args, '--project');
 const query = args.join(' ').trim();
 
 if (!query && import.meta.url === `file://${process.argv[1]}`) {
   console.error(
-    'Usage: npm run brain:pack -- "query" [--max-tokens N] [--tight-budget] [--mode default|resume|minimal] [--include-auto-compact] [--print-budget] [--format json|text] [--task <workstream-id>] [--actor <label>]'
+    'Usage: npm run brain:pack -- "query" [--max-tokens N] [--tight-budget] [--mode default|resume|minimal] [--include-auto-compact] [--print-budget] [--format json|text] [--task <workstream-id>] [--actor <label>] [--project name[,name2]]'
   );
   console.error('Env: BRAIN_TASK, BRAIN_ACTOR, BRAIN_PACK_MAX_TOKENS (defaults to 2600; --tight-budget uses 2000). BRAIN_PACK_PRINT_BUDGET=1 logs token usage to stderr.');
   process.exit(1);
@@ -43,11 +44,13 @@ export async function packPrompt(query, opts = {}) {
   const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
   const taskId = trimStr(opts.taskId || taskOpt || process.env.BRAIN_TASK);
   const actor = trimStr(opts.actor || actorOpt || process.env.BRAIN_ACTOR);
+  const project = trimStr(opts.project || projectOpt || process.env.BRAIN_PROJECT);
   let ranked = await retrieve(query, store, embedder, {
     topK: Number(process.env.BRAIN_PACK_CANDIDATES || 32),
     candidates: Number(process.env.BRAIN_PACK_CANDIDATES || 64),
     taskId,
-    actor
+    actor,
+    ...(project ? { filter: { project } } : {})
   });
   ranked = ranked.filter(record => includeCompact || !isAutoCompactRecord(record));
   if (packMode === 'minimal') ranked = ranked.filter(record => record.isSummary || record.type === 'decision' || record.type === 'module-summary');
