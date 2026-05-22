@@ -203,8 +203,13 @@ async function rebuildModuleSummaries(store, embedder, opts = {}) {
   for (const [dir, summaries] of groups) {
     if (summaries.length < 2) continue;
     if (!rebuildAll && !dirtyDirs.has(dir)) continue;
-    const text = summaries.map(record => `## ${record.file}\n${record.text}`).join('\n\n');
-    const vector = await embedder.embed(`${dir}\n${text}`);
+    const { text, embeddingText } = buildAggregateSummaryTexts({
+      title: `${dir} module`,
+      key: dir,
+      readmeLeadParagraph: readDirReadmeLead(dir),
+      children: summaries
+    });
+    const vector = await embedder.embed(embeddingText);
     moduleRecords.push({
       id: sha256(`module:${dir}:${summaries.map(record => record.id).sort().join(':')}`),
       file: dir,
@@ -213,7 +218,7 @@ async function rebuildModuleSummaries(store, embedder, opts = {}) {
       type: 'module-summary',
       heading: dir,
       text,
-      embeddingText: `${dir}\n${text}`,
+      embeddingText,
       isSummary: true,
       isModuleSummary: true,
       isProjectSummary: false,
@@ -223,6 +228,85 @@ async function rebuildModuleSummaries(store, embedder, opts = {}) {
   }
   if (moduleRecords.length) await store.upsert(moduleRecords);
   await rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords, { rebuildAll, dirtyFeatures });
+}
+
+/**
+ * Build human-readable and embed-ready text for an aggregate summary record.
+ * - `text` is verbose (full child concat) — shown to humans via brain:pack.
+ * - `embeddingText` is intent-dense (~800-1000 chars) — what the vector encodes.
+ *
+ * For embedding we keep: the title, optional README lead paragraph, a one-line
+ * per-child digest (title + first sentence of intent), and a flat union of
+ * exported symbol names. List-y concatenation of full child summaries used to
+ * overflow MiniLM's 256-token context and waste recall on long modules.
+ */
+function buildAggregateSummaryTexts({ title, key, readmeLeadParagraph = '', children }) {
+  const verbose = children.map(record => `## ${record.heading || record.file}\n${record.text}`).join('\n\n');
+  const childLines = [];
+  const symbolUnion = new Set();
+  const headings = new Set();
+  const sliceCap = 20;
+  const sorted = [...children].sort((a, b) => String(a.file).localeCompare(String(b.file)));
+  for (const record of sorted.slice(0, sliceCap)) {
+    const intent = firstSentenceOfChild(record);
+    const childTitle = record.heading || path.basename(record.file || '');
+    if (intent) childLines.push(`- ${childTitle}: ${intent}`);
+    else if (childTitle) childLines.push(`- ${childTitle}`);
+    for (const sym of (record.symbols || []).slice(0, 8)) symbolUnion.add(sym);
+    if (record.heading) headings.add(record.heading);
+  }
+  const remainder = children.length - sliceCap;
+  if (remainder > 0) childLines.push(`- … +${remainder} more`);
+
+  const embedSections = [
+    `# ${title}`,
+    `Key: ${key}`,
+    readmeLeadParagraph ? `Readme: ${readmeLeadParagraph}` : '',
+    childLines.length ? `Children:\n${childLines.join('\n')}` : '',
+    symbolUnion.size ? `Exports: ${[...symbolUnion].slice(0, 60).join(', ')}` : ''
+  ].filter(Boolean);
+
+  let embeddingText = embedSections.join('\n');
+  // MiniLM context is ~256 tokens (~1000 chars after path noise). Hard cap so
+  // the tail of a huge module doesn't silently drop out of the vector.
+  if (embeddingText.length > 1100) embeddingText = embeddingText.slice(0, 1080) + ' …';
+  return { text: verbose, embeddingText };
+}
+
+/** Pull the first sentence/line of a child summary's text (drops the `# Title` / `File:` boilerplate). */
+function firstSentenceOfChild(record) {
+  const lines = String(record.text || '').split('\n').map(l => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (line.startsWith('# ')) continue;
+    if (line.startsWith('File: ')) continue;
+    if (line.startsWith('Exports') || line.startsWith('Imports') || line.startsWith('Resolved ') || line.startsWith('Cross-file')) continue;
+    if (line.startsWith('Headings:')) continue;
+    if (line.startsWith('No exported') || line.startsWith('No headings')) continue;
+    // First non-boilerplate line: cut at a sentence break.
+    const match = line.match(/^[^.?!]+[.?!]?/);
+    return (match ? match[0] : line).slice(0, 180);
+  }
+  return '';
+}
+
+/** Read the first paragraph of `<dir>/README.md` (case-insensitive), or ''. */
+function readDirReadmeLead(dir) {
+  const candidates = ['README.md', 'readme.md', 'Readme.md', 'README.MD'];
+  for (const name of candidates) {
+    const full = path.join(ROOT, dir, name);
+    if (!fs.existsSync(full)) continue;
+    try {
+      const text = fs.readFileSync(full, 'utf8');
+      // Drop frontmatter, then take first non-heading paragraph.
+      const body = text.replace(/^---\n[\s\S]*?\n---\n/, '');
+      const paragraphs = body.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+      for (const p of paragraphs) {
+        if (p.startsWith('#')) continue;
+        return p.slice(0, 280).replace(/\s+/g, ' ');
+      }
+    } catch {}
+  }
+  return '';
 }
 
 async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords, opts = {}) {
@@ -240,7 +324,11 @@ async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords,
   for (const [feature, records] of featureGroups) {
     if (records.length < 1) continue;
     if (!rebuildAll && !dirtyFeatures.has(feature)) continue;
-    const text = records.map(record => `## ${record.file}\n${record.text}`).join('\n\n');
+    const { text, embeddingText } = buildAggregateSummaryTexts({
+      title: `${feature} feature`,
+      key: feature,
+      children: records
+    });
     aggregateRecords.push({
       id: sha256(`feature:${feature}:${records.map(record => record.id).sort().join(':')}`),
       file: `.project-brain/features/${feature}.md`,
@@ -249,18 +337,22 @@ async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords,
       type: 'feature-summary',
       heading: feature,
       text,
-      embeddingText: `${feature}\n${text}`,
+      embeddingText,
       isSummary: true,
       isModuleSummary: false,
       isProjectSummary: false,
       feature,
-      vector: await embedder.embed(`${feature}\n${text}`)
+      vector: await embedder.embed(embeddingText)
     });
   }
 
   const projectInputs = moduleRecords.length ? moduleRecords : summaries;
   if (projectInputs.length >= 2) {
-    const text = projectInputs.map(record => `## ${record.heading || record.file}\n${record.text}`).join('\n\n');
+    const { text, embeddingText } = buildAggregateSummaryTexts({
+      title: 'Project',
+      key: 'project',
+      children: projectInputs
+    });
     aggregateRecords.push({
       id: sha256(`project:${projectInputs.map(record => record.id).sort().join(':')}`),
       file: '.project-brain/project-summary',
@@ -269,11 +361,11 @@ async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords,
       type: 'project-summary',
       heading: 'project',
       text,
-      embeddingText: `project\n${text}`,
+      embeddingText,
       isSummary: true,
       isModuleSummary: false,
       isProjectSummary: true,
-      vector: await embedder.embed(`project\n${text}`)
+      vector: await embedder.embed(embeddingText)
     });
   }
   if (aggregateRecords.length) await store.upsert(aggregateRecords);
