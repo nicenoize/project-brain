@@ -94,6 +94,17 @@ export function gitBranchSafe() {
   } catch { return ''; }
 }
 
+/** Resolve the git toplevel for an arbitrary directory (used by fleet per-project git ops). */
+export function gitRootOf(dir) {
+  try {
+    return execSync('git rev-parse --show-toplevel', {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+  } catch { return ''; }
+}
+
 export function mergePackageScripts(pkg) {
   pkg.scripts ||= {};
   const scripts = {
@@ -148,7 +159,8 @@ export function mergePackageDeps(pkg) {
   return pkg;
 }
 
-export async function listIndexableFiles() {
+export async function listIndexableFiles(opts = {}) {
+  const root = opts.root || ROOT;
   const { default: fg } = await import('fast-glob');
   const patterns = [
     '.project-brain/**/*.md',
@@ -184,7 +196,7 @@ export async function listIndexableFiles() {
     .map((s) => s.trim())
     .filter(Boolean);
   return fg([...patterns, ...extra], {
-    cwd: ROOT,
+    cwd: root,
     dot: true,
     onlyFiles: true,
     ignore: [
