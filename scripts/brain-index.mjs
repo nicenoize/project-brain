@@ -139,10 +139,12 @@ if (isFastMode()) {
   console.log('Project Brain: fast mode — skipping module/feature/project summary rebuilds.');
 } else if (forceRebuild) {
   await rebuildModuleSummaries(store, embedder, { all: true });
+  await rebuildPackageSummaries(store, embedder, { all: true });
 } else if (dirtyDirs.size === 0 && dirtyFeatures.size === 0) {
   console.log('Project Brain: no changes — module/feature/project summaries left intact.');
 } else {
   await rebuildModuleSummaries(store, embedder, { dirtyDirs, dirtyFeatures });
+  await rebuildPackageSummaries(store, embedder, { dirtyDirs });
 }
 
 function inferFeatureFromPath(file) {
@@ -287,6 +289,179 @@ function firstSentenceOfChild(record) {
     return (match ? match[0] : line).slice(0, 180);
   }
   return '';
+}
+
+/**
+ * For monorepos: emit one `chunk:-5 type:package-summary` per detected
+ * package under `packages/*` and `apps/*` (configurable via
+ * BRAIN_PACKAGE_GLOBS, comma/newline separated, default
+ * "packages/*,apps/*"). Each summary aggregates the package.json
+ * metadata, README lead paragraph, top exports from src/index.ts, and
+ * the list of child file summary titles — embedded as one intent-dense
+ * record so "what does @scope/x do" queries hit a single, accurate
+ * vector instead of scattered file summaries.
+ */
+async function rebuildPackageSummaries(store, embedder, opts = {}) {
+  const { all: rebuildAll = false, dirtyDirs = new Set() } = opts;
+  const packageDirs = discoverPackages();
+  if (!packageDirs.length) return;
+
+  // Identify and drop stale package-summary records for dirty packages only.
+  const allRecords = await store.getAll();
+  const staleIds = allRecords
+    .filter(record => {
+      if (record.type !== 'package-summary') return false;
+      if (rebuildAll) return true;
+      return [...dirtyDirs].some(dir => dir === record.file || dir.startsWith(`${record.file}/`));
+    })
+    .map(record => record.id);
+  if (staleIds.length) await store.delete(staleIds);
+
+  const refreshedRecords = await store.getAll();
+  const childSummariesByDir = groupSummariesByPackage(refreshedRecords, packageDirs);
+
+  const newRecords = [];
+  for (const pkgDir of packageDirs) {
+    const dirty = rebuildAll || [...dirtyDirs].some(dir => dir === pkgDir || dir.startsWith(`${pkgDir}/`));
+    if (!dirty) continue;
+    const summary = buildPackageSummary({
+      pkgDir,
+      childSummaries: childSummariesByDir.get(pkgDir) || []
+    });
+    if (!summary) continue;
+    newRecords.push({
+      id: sha256(`package:${pkgDir}:${summary.signature}`),
+      file: pkgDir,
+      chunk: -5,
+      title: `${summary.name || pkgDir} package summary`,
+      type: 'package-summary',
+      heading: summary.name || pkgDir,
+      text: summary.text,
+      embeddingText: summary.embeddingText,
+      isSummary: true,
+      isModuleSummary: false,
+      isProjectSummary: false,
+      module: pkgDir,
+      vector: await embedder.embed(summary.embeddingText)
+    });
+  }
+  if (newRecords.length) await store.upsert(newRecords);
+}
+
+function discoverPackages() {
+  const globs = splitEnv('BRAIN_PACKAGE_GLOBS');
+  const patterns = globs.length ? globs : ['packages/*', 'apps/*'];
+  const found = new Set();
+  for (const pattern of patterns) {
+    const base = pattern.replace(/\/\*$/, '');
+    const baseDir = path.join(ROOT, base);
+    if (!fs.existsSync(baseDir)) continue;
+    for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const pkgDir = `${base}/${entry.name}`;
+      if (fs.existsSync(path.join(ROOT, pkgDir, 'package.json'))) found.add(pkgDir);
+    }
+  }
+  return [...found].sort();
+}
+
+function groupSummariesByPackage(records, packageDirs) {
+  const sorted = [...packageDirs].sort((a, b) => b.length - a.length); // longest-prefix match
+  const byPkg = new Map();
+  for (const record of records) {
+    if (!record.isSummary) continue;
+    if (record.isModuleSummary || record.isProjectSummary || record.type === 'package-summary') continue;
+    if (record.type === 'session' || record.type === 'auto-compact' || record.type === 'feature-summary') continue;
+    const pkg = sorted.find(p => record.file === p || record.file.startsWith(`${p}/`));
+    if (!pkg) continue;
+    if (!byPkg.has(pkg)) byPkg.set(pkg, []);
+    byPkg.get(pkg).push(record);
+  }
+  return byPkg;
+}
+
+function buildPackageSummary({ pkgDir, childSummaries }) {
+  let pkgJson;
+  try {
+    pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, pkgDir, 'package.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+  const name = pkgJson.name || pkgDir;
+  const description = pkgJson.description || '';
+  const keywords = Array.isArray(pkgJson.keywords) ? pkgJson.keywords.filter(Boolean).slice(0, 12) : [];
+  const deps = [...Object.keys(pkgJson.dependencies || {}), ...Object.keys(pkgJson.peerDependencies || {})].slice(0, 24);
+  const readmeLead = readDirReadmeLead(pkgDir);
+  const topExports = readTopLevelExports(pkgDir);
+
+  const childTitles = childSummaries
+    .map(record => record.heading || path.basename(record.file || ''))
+    .filter(Boolean)
+    .slice(0, 24);
+  const childIntents = childSummaries
+    .slice(0, 12)
+    .map(record => {
+      const intent = firstSentenceOfChild(record);
+      const t = record.heading || path.basename(record.file || '');
+      return intent ? `- ${t}: ${intent}` : (t ? `- ${t}` : '');
+    })
+    .filter(Boolean);
+
+  const embedSections = [
+    `# ${name} package`,
+    `Path: ${pkgDir}`,
+    description ? `Description: ${description}` : '',
+    keywords.length ? `Keywords: ${keywords.join(', ')}` : '',
+    readmeLead ? `Readme: ${readmeLead}` : '',
+    topExports.length ? `Exports: ${topExports.join(', ')}` : '',
+    childIntents.length ? `Files:\n${childIntents.join('\n')}` : '',
+    deps.length ? `Deps: ${deps.join(', ')}` : ''
+  ].filter(Boolean);
+  let embeddingText = embedSections.join('\n');
+  if (embeddingText.length > 1100) embeddingText = embeddingText.slice(0, 1080) + ' …';
+
+  const text = [
+    `# ${name}`,
+    `Path: ${pkgDir}`,
+    description && `> ${description}`,
+    keywords.length && `**Keywords:** ${keywords.join(', ')}`,
+    readmeLead && `**Readme:** ${readmeLead}`,
+    topExports.length && `**Top-level exports:** ${topExports.join(', ')}`,
+    childTitles.length && `**Files (${childSummaries.length}):** ${childTitles.join(', ')}`,
+    deps.length && `**Dependencies:** ${deps.join(', ')}`
+  ].filter(Boolean).join('\n\n');
+
+  const signature = sha256([name, description, keywords.join(','), readmeLead, topExports.join(','), deps.join(','), childTitles.join(',')].join('|'));
+  return { name, text, embeddingText, signature };
+}
+
+function readTopLevelExports(pkgDir) {
+  const candidates = ['src/index.ts', 'src/index.tsx', 'src/index.js', 'index.ts', 'index.tsx', 'index.js', 'index.mjs', 'src/index.mjs'];
+  for (const rel of candidates) {
+    const full = path.join(ROOT, pkgDir, rel);
+    if (!fs.existsSync(full)) continue;
+    try {
+      const text = fs.readFileSync(full, 'utf8');
+      const names = new Set();
+      // export { a, b } from '…' / export { a, b }
+      for (const m of text.matchAll(/^\s*export\s*\{([^}]+)\}/gm)) {
+        for (const part of m[1].split(',')) {
+          const local = part.trim().split(/\s+as\s+/).pop()?.trim();
+          if (local && /^[A-Za-z_$][\w$]*$/.test(local)) names.add(local);
+        }
+      }
+      // export function/class/const/let/var/type/interface/enum NAME
+      for (const m of text.matchAll(/^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm)) {
+        names.add(m[1]);
+      }
+      // export * from '…/foo'  → list "* from foo"
+      for (const m of text.matchAll(/^\s*export\s*\*\s*from\s+['"]([^'"]+)['"]/gm)) {
+        names.add(`*from:${path.basename(m[1])}`);
+      }
+      if (names.size) return [...names].slice(0, 32);
+    } catch {}
+  }
+  return [];
 }
 
 /** Read the first paragraph of `<dir>/README.md` (case-insensitive), or ''. */
