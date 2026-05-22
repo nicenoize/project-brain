@@ -121,10 +121,32 @@ for (const file of changedFiles) {
 }
 
 if (records.length) await store.upsert(records);
+
+const dirtyFiles = new Set([...changedFiles, ...deletedFiles]);
+const dirtyDirs = new Set();
+const dirtyFeatures = new Set();
+for (const file of dirtyFiles) {
+  dirtyDirs.add(path.dirname(file));
+  const feat = inferFeatureFromPath(file);
+  if (feat) dirtyFeatures.add(feat);
+}
+// Include feature/module from frontmatter of touched records too (already loaded above).
+for (const record of records) {
+  if (record.feature) dirtyFeatures.add(record.feature);
+}
+
 if (isFastMode()) {
   console.log('Project Brain: fast mode — skipping module/feature/project summary rebuilds.');
+} else if (forceRebuild) {
+  await rebuildModuleSummaries(store, embedder, { all: true });
+} else if (dirtyDirs.size === 0 && dirtyFeatures.size === 0) {
+  console.log('Project Brain: no changes — module/feature/project summaries left intact.');
 } else {
-  await rebuildModuleSummaries(store, embedder);
+  await rebuildModuleSummaries(store, embedder, { dirtyDirs, dirtyFeatures });
+}
+
+function inferFeatureFromPath(file) {
+  return file.includes('/features/') ? path.basename(file, path.extname(file)) : '';
 }
 
 const allRecords = await store.getAll();
@@ -152,9 +174,21 @@ write(MANIFEST, JSON.stringify(manifest, null, 2));
 console.log(`Indexed ${records.length} new records, deleted ${deleteIds.length}, total ${allRecords.length}.`);
 await store.close();
 
-async function rebuildModuleSummaries(store, embedder) {
+async function rebuildModuleSummaries(store, embedder, opts = {}) {
+  const { all: rebuildAll = false, dirtyDirs = new Set(), dirtyFeatures = new Set() } = opts;
   const all = await store.getAll();
-  const staleModuleIds = all.filter(record => record.isModuleSummary || record.isProjectSummary || record.type === 'feature-summary').map(record => record.id);
+
+  // Identify which existing module summaries are stale — for a partial run,
+  // only those that cover a dirty directory.
+  const staleModuleIds = all
+    .filter(record => {
+      if (!(record.isModuleSummary || record.isProjectSummary || record.type === 'feature-summary')) return false;
+      if (rebuildAll) return true;
+      if (record.isProjectSummary) return true; // project summary always refreshed when anything changed
+      if (record.type === 'feature-summary') return dirtyFeatures.has(record.feature);
+      return dirtyDirs.has(record.file);
+    })
+    .map(record => record.id);
   if (staleModuleIds.length) await store.delete(staleModuleIds);
 
   const groups = new Map();
@@ -168,6 +202,7 @@ async function rebuildModuleSummaries(store, embedder) {
   const moduleRecords = [];
   for (const [dir, summaries] of groups) {
     if (summaries.length < 2) continue;
+    if (!rebuildAll && !dirtyDirs.has(dir)) continue;
     const text = summaries.map(record => `## ${record.file}\n${record.text}`).join('\n\n');
     const vector = await embedder.embed(`${dir}\n${text}`);
     moduleRecords.push({
@@ -187,10 +222,11 @@ async function rebuildModuleSummaries(store, embedder) {
     });
   }
   if (moduleRecords.length) await store.upsert(moduleRecords);
-  await rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords);
+  await rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords, { rebuildAll, dirtyFeatures });
 }
 
-async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords) {
+async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords, opts = {}) {
+  const { rebuildAll = false, dirtyFeatures = new Set() } = opts;
   const all = await store.getAll();
   const summaries = all.filter(record => record.isSummary && !record.isModuleSummary && !record.isProjectSummary && record.type !== 'session' && record.type !== 'auto-compact');
   const featureGroups = new Map();
@@ -203,6 +239,7 @@ async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords)
   const aggregateRecords = [];
   for (const [feature, records] of featureGroups) {
     if (records.length < 1) continue;
+    if (!rebuildAll && !dirtyFeatures.has(feature)) continue;
     const text = records.map(record => `## ${record.file}\n${record.text}`).join('\n\n');
     aggregateRecords.push({
       id: sha256(`feature:${feature}:${records.map(record => record.id).sort().join(':')}`),
