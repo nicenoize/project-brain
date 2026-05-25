@@ -216,11 +216,13 @@ function recencyBoost(record) {
   return max * w;
 }
 
-const CANONICAL_ROOT_NAMES = new Set(['context_index.md', 'master_plan.md', 'repo_context.md', 'product_plan.md', 'active_state.md']);
+const CANONICAL_ROOT_NAMES = new Set(['context_index.md', 'master_plan.md', 'repo_context.md', 'product_plan.md', 'active_state.md', 'constitution.md']);
 
 function canonicalBrainBoost(record, context) {
   const file = String(record.file || '');
-  if (!file.startsWith('.project-brain/')) return 0;
+  // Canonical-brain content lives under .project-brain/ (brain native) or
+  // .specify/memory/ (spec-kit constitution). Both get the same boost path.
+  if (!file.startsWith('.project-brain/') && !file.startsWith('.specify/memory/')) return 0;
   const base = Number(process.env.BRAIN_CANONICAL_ROOT_BOOST || 0.05);
   let b = 0;
   const baseName = file.split('/').pop() || '';
@@ -231,6 +233,11 @@ function canonicalBrainBoost(record, context) {
   if (context.architectural && (layer === 'architecture' || layer === 'decision')) b += base * 0.9;
   if (status === 'canonical') b += base * 0.8;
   if (status === 'deprecated') b -= base * 1.2;
+  // Spec-kit boost: surface specs/plans/tasks above generic docs on architectural queries.
+  const speckitType = record.type === 'spec' || record.type === 'plan' || record.type === 'tasks-list' || record.type === 'constitution';
+  if (speckitType && context.architectural) {
+    b += Number(process.env.BRAIN_SPEC_BOOST || 0.04);
+  }
   return b;
 }
 

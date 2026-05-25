@@ -22,6 +22,7 @@ Retrieval performance + multi-actor correctness + aggregate vectors. See `decisi
 | Coordination | [[modules/coordination]] | `scripts/active-state.mjs`, `scripts/brain-orchestrate.mjs`, `scripts/brain-work.mjs`, `scripts/brain-worktree.mjs`, `scripts/brain-session.mjs` |
 | Hooks + guardrails | [[modules/hooks]] | `scripts/brain-guard.mjs`, `scripts/brain-health.mjs`, `scripts/brain-lint-conventions.mjs`, `scripts/brain-session-digest.mjs`, `bin/install-hooks.sh` |
 | **Fleet mode** | [[modules/fleet]] | `scripts/projects.mjs`, `scripts/edges/*.mjs`, `scripts/brain-edges.mjs`, `scripts/brain-projects.mjs` |
+| **Spec-kit integration** | [[modules/spec-kit]] | `scripts/infer.mjs`, `scripts/brain-speckit.mjs`, `templates/claude-code/commands/brain-speckit-*.md` |
 
 ## Record kinds in the index
 
@@ -37,6 +38,16 @@ Retrieval performance + multi-actor correctness + aggregate vectors. See `decisi
 | `-7` | repo-summary | per fleet project (Node/Go/Python/K8s/Docker extractors) |
 | `-8` | fleet-summary | one per fleet brain (aggregates repo-summaries + edges) |
 | `-9` | cross-project-edge | one per detected cross-project edge |
+
+Spec-kit (when `.specify/` or `specs/<id>/` exists, see `modules/spec-kit.md`):
+
+| `type` | source |
+|---|---|
+| `constitution` | `.specify/memory/constitution.md` (canonical-root boost) |
+| `spec` | `specs/<id>/spec.md` |
+| `plan` | `specs/<id>/plan.md` |
+| `tasks-list` | `specs/<id>/tasks.md` |
+| `spec-support` | `specs/<id>/{research,data-model,quickstart}.md`, `contracts/*` |
 
 All aggregate records use `aggregate.mjs#buildAggregateSummaryTexts` so the embedding fits MiniLM's ~256-token window.
 
@@ -65,6 +76,16 @@ See `decisions/0005`, `0006`.
 
 See `decisions/0009`, `0010`, `0011`.
 
+## Spec-kit invariants
+
+- `.specify/memory/constitution.md` gets the canonical-root boost.
+- `specs/<id>/{spec,plan,tasks}.md` recognized strictly; every file under `specs/<id>/` shares the same `feature: <id>` tag, joining the existing `feature-summary` (chunk:-3) aggregate.
+- `brain:speckit import <id>` mirrors spec.md into `.project-brain/features/<id>.md` (idempotent).
+- `brain:speckit tasks <id> --write` produces `.project-brain/work-packages/spec-<id>-wpN.md` per user-story group.
+- Three `/brain-speckit-*` slash commands installed by `setup-claude-settings.mjs` into `.claude/commands/`.
+
+See `decisions/0012`.
+
 ## Commands (top-level)
 
 ```bash
@@ -85,6 +106,9 @@ npm test                                         # 88 unit tests
 npm run brain:edges                              # list cross-project edges
 npm run brain:edges -- --detect                  # force-rerun all detectors
 npm run brain:projects                           # projects + edge counts
+# Spec-kit (only when .specify/ or specs/<id>/ exists):
+npm run brain:speckit -- import <id>             # spec.md → .project-brain/features/<id>.md
+npm run brain:speckit -- tasks <id> --write      # tasks.md → work-packages
 ```
 
 ## Retrieval hints

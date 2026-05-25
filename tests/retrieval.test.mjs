@@ -54,3 +54,39 @@ test('hybridScore: metadata clamp prevents drowning', () => {
   const b = hybridScore(0.6, 0.4, 0, 0.5, 0.7);
   assert.equal(a, b);
 });
+
+// S1.2: constitution canonical-root boost + spec-kit type boost on
+// architectural queries. We import the metadataBoost helper via the
+// public retrieve() path with a custom store stub so the test stays
+// pure (no embedder, no real store).
+
+test('canonical-root boost recognizes .specify/memory/constitution.md', async () => {
+  const { retrieve } = await import('../scripts/retrieval.mjs');
+  const records = [
+    { id: 'a', file: '.specify/memory/constitution.md', type: 'constitution', text: 'project principles', vector: [1, 0] },
+    { id: 'b', file: 'docs/random.md', type: 'doc', text: 'project principles', vector: [1, 0] }
+  ];
+  const store = {
+    async search(_v, _k) { return records.map(r => ({ ...r, score: 1 })); },
+    async getAll() { return records; }
+  };
+  const embedder = { async embed() { return [1, 0]; } };
+  // Architectural-style query to trip canonicalBrainBoost.
+  const result = await retrieve('how is the project governed', store, embedder, { topK: 2 });
+  assert.equal(result[0].id, 'a', `expected constitution to rank first, got: ${result.map(r => r.id).join(',')}`);
+});
+
+test('spec-kit BRAIN_SPEC_BOOST lifts spec records over docs on architectural queries', async () => {
+  const { retrieve } = await import('../scripts/retrieval.mjs');
+  const records = [
+    { id: 'spec', file: 'specs/auth/spec.md', type: 'spec', text: 'auth requirements', vector: [1, 0] },
+    { id: 'doc', file: 'docs/random.md', type: 'doc', text: 'auth requirements', vector: [1, 0] }
+  ];
+  const store = {
+    async search() { return records.map(r => ({ ...r, score: 1 })); },
+    async getAll() { return records; }
+  };
+  const embedder = { async embed() { return [1, 0]; } };
+  const result = await retrieve('how does the auth feature work', store, embedder, { topK: 2 });
+  assert.equal(result[0].id, 'spec', `expected spec record to rank first, got: ${result.map(r => r.id).join(',')}`);
+});

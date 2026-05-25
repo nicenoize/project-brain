@@ -140,7 +140,39 @@ export function syncClaudeSettings() {
   ].join(' ');
   console.log(`Synced .claude/settings.json (${summary}).`);
 
+  syncClaudeCommands();
   setCavemanUltra();
+}
+
+/**
+ * Copy brain-provided custom slash commands into .claude/commands/.
+ * Additive: never overwrites a file the developer has touched. The
+ * /brain-speckit-* commands bridge spec-kit's /speckit.* flow into the
+ * brain pipeline (see decisions/0012-spec-kit-integration.md).
+ */
+function syncClaudeCommands() {
+  if (process.env.PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS === '1') return;
+  const templateDir = path.join(
+    process.cwd(),
+    'skills',
+    'project-brain',
+    'templates',
+    'claude-code',
+    'commands',
+  );
+  if (!fs.existsSync(templateDir)) return;
+  const targetDir = path.join(process.cwd(), '.claude', 'commands');
+  fs.mkdirSync(targetDir, { recursive: true });
+  let added = 0;
+  for (const name of fs.readdirSync(templateDir)) {
+    if (!name.endsWith('.md')) continue;
+    const src = path.join(templateDir, name);
+    const dst = path.join(targetDir, name);
+    if (fs.existsSync(dst)) continue; // don't clobber developer edits
+    fs.copyFileSync(src, dst);
+    added += 1;
+  }
+  if (added) console.log(`Installed ${added} brain slash command(s) under .claude/commands/.`);
 }
 
 /**
