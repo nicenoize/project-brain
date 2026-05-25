@@ -188,6 +188,40 @@ flowchart LR
 
 See `modules/fleet.md` and ADRs `0009`–`0011` for activation rules, detector contract, and per-project coordination.
 
+## Spec-Kit integration
+
+When a repo uses [`github/spec-kit`](https://github.com/github/spec-kit), brain becomes a downstream consumer of its artifacts. Activation is automatic when `.specify/` or `specs/<id>/` exists.
+
+```mermaid
+flowchart LR
+  Speckit["/speckit.* slash commands"] --> Spec["specs/&lt;id&gt;/spec.md"]
+  Speckit --> Plan["specs/&lt;id&gt;/plan.md"]
+  Speckit --> Tasks["specs/&lt;id&gt;/tasks.md"]
+  Speckit --> Const[".specify/memory/constitution.md"]
+
+  Spec --> IDX["brain-index<br/>(auto-detect)"]
+  Plan --> IDX
+  Tasks --> IDX
+  Const --> IDX
+
+  IDX --> R["records<br/>type: spec / plan / tasks-list / spec-support / constitution<br/>feature: &lt;id&gt;"]
+  R --> Store["vector store"]
+  R --> FS["chunk:-3 feature-summary<br/>(spec + plan + tasks all share feature:&lt;id&gt;)"]
+  FS --> Store
+
+  Const -. "canonical-root boost ×1.6" .-> Store
+
+  BSK["brain:speckit CLI"]
+  Spec --> BSK -- "import &lt;id&gt;" --> Feat[".project-brain/features/&lt;id&gt;.md<br/>(cross-linked, idempotent)"]
+  Tasks --> BSK -- "tasks &lt;id&gt; --write" --> WP[".project-brain/work-packages/spec-&lt;id&gt;-wpN.md"]
+  WP --> Brain["brain:work start --task spec-&lt;id&gt;-wpN"]
+
+  Slash["/brain-speckit-specify | tasks | implement<br/>(installed in .claude/commands/)"] --> BSK
+  Slash --> Speckit
+```
+
+See `modules/spec-kit.md` and ADR `0012-spec-kit-integration` for activation rules, CLI surface, and the additive-overlay rationale.
+
 ## Update Flow
 
 ```mermaid
