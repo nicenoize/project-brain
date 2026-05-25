@@ -508,6 +508,36 @@ PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS=1           skip /brain-speckit-* command ins
 
 See [`modules/spec-kit.md`](.project-brain/modules/spec-kit.md) for the full module overview and [`decisions/0012-spec-kit-integration.md`](.project-brain/decisions/0012-spec-kit-integration.md) for the rationale.
 
+## Recovery
+
+If the index gets stuck (Lance schema errors, gigantic `search_index.json`, ghost paths in the thousands), reset it:
+
+```bash
+npm run brain:repair             # interactive
+npm run brain:repair -- --yes    # non-interactive
+npm run brain:repair -- --dry-run
+npm run brain:index -- --force   # rebuild after repair
+```
+
+What gets removed (only generated artifacts):
+
+- `.project-brain/vector-db/` — Lance table
+- `.project-brain/search_index.json` (+ any leftover `.tmp.*` siblings)
+- `.project-brain/index_manifest.json`
+- `.project-brain/.fleet-cache/`
+
+What stays: every Markdown file under `.project-brain/` (source of truth) and everything else in the repo.
+
+Auto-recovery is on by default for Lance schema mismatches (typical after `brain:update-skill` adds new record fields). Opt out with `BRAIN_AUTO_RECOVER=0`. If the JSON mirror overflows Node's string limit (`ERR_STRING_TOO_LONG`), it's read-disabled with a warning — `brain:repair` is then the only recovery path.
+
+Cap-tuning env vars (rarely needed):
+
+```
+BRAIN_JSON_MIRROR_MAX_BYTES=209715200    # 200 MB read cap
+BRAIN_JSON_MIRROR_MAX_RECORDS=50000      # write cap
+BRAIN_JSON_MIRROR=0                      # disable JSON mirror entirely (Lance/Qdrant primary)
+```
+
 ## Response behavior
 
 When using this skill, be direct and operational. Prefer concrete file updates, commands, and checks over abstract explanation. If facts are uncertain, mark them as `Needs Review` instead of inventing them.
