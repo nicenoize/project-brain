@@ -109,6 +109,9 @@ npm run brain:projects                           # projects + edge counts
 # Spec-kit (only when .specify/ or specs/<id>/ exists):
 npm run brain:speckit -- import <id>             # spec.md → .project-brain/features/<id>.md
 npm run brain:speckit -- tasks <id> --write      # tasks.md → work-packages
+# Recovery (when Lance schema flaps or search_index.json bloats past Node's string limit):
+npm run brain:repair                             # nuke generated index artifacts
+npm run brain:index -- --force                   # rebuild from source
 ```
 
 ## Retrieval hints

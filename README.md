@@ -121,7 +121,8 @@ BRAIN_STORE=qdrant BRAIN_QDRANT_URL=http://localhost:6333 npm run brain:index
 
 ## Troubleshooting
 
-- **LanceDB schema mismatch after pulling a newer Project Brain.** Manual fix: `rm -rf .project-brain/vector-db && npm run brain:index -- --force`. Or run with `BRAIN_AUTO_RECOVER=1 npm run brain:index` to drop+rebuild automatically.
+- **LanceDB schema mismatch after pulling a newer Project Brain.** Auto-recovery is now **on by default** (opt out via `BRAIN_AUTO_RECOVER=0`): the next `brain:index` drops the stale table and rebuilds. If recovery flaps or the index has bloated past 50k records, run `npm run brain:repair` followed by `npm run brain:index -- --force` for a clean slate. The repair script only removes generated artifacts (vector-db/, search_index.json, index_manifest.json, .fleet-cache/) — Git-tracked Markdown is never touched.
+- **`ERR_STRING_TOO_LONG` reading `search_index.json`.** The JSON mirror exceeded Node's ~512 MB string limit (typically after a botched recovery loop bloated the record count). Read is now guarded — the file is skipped with a warning. Run `npm run brain:repair` to clear the bloat.
 - **`brain:index` failed in setup.** Re-run `npm run brain:index` directly to see the error; fix the embedder/store config and re-run setup or `brain:index -- --force`.
 - **Hooks not firing.** `npm run brain:install-hooks` (Git) and `npm run brain:install-cursor-hooks` (Cursor) are idempotent — re-run after pulling. Verify with `ls -la .git/hooks/`.
 - **Stale `context_index.md`.** `npm run brain:guard` warns above `BRAIN_CONTEXT_INDEX_WARN_TOKENS` (default 700 estimated). `npm run brain:health` flags root brain docs older than `BRAIN_STALE_DOC_DAYS`.
