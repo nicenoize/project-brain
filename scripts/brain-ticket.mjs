@@ -9,8 +9,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { BRAIN_DIR, ROOT, ensureDir, slugify, write } from './common.mjs';
 
+// Run CLI side effects only when invoked directly, so `import { buildPlan }`
+// from sibling scripts (e.g. brain-speckit.mjs) doesn't double-execute.
+const __isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+
+if (__isMain) main();
+
+function main() {
 const args = process.argv.slice(2);
 const command = args[0] === 'draft' || args[0] === 'create' ? args.shift() : 'draft';
 const opts = parseArgs(args);
@@ -67,7 +75,9 @@ if (opts.write) {
 if (opts.json) console.log(JSON.stringify(plan, null, 2));
 else console.log(renderMarkdown(plan));
 
-function buildPlan(input) {
+} // end main()
+
+export function buildPlan(input) {
   const size = scoreTask(input);
   const slices = splitFiles(input.files, input.packageCount);
   const packages = [];
@@ -126,7 +136,7 @@ function buildPlan(input) {
   };
 }
 
-function renderMarkdown(plan) {
+export function renderMarkdown(plan) {
   const lines = [
     '---',
     `type: ${JSON.stringify(plan.type)}`,
