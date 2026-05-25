@@ -165,5 +165,32 @@
     "query": "what does brain edges --detect do",
     "expectedFiles": ["scripts/brain-edges.mjs"],
     "expectedTypes": ["code"]
+  },
+  {
+    "query": "how does brain integrate with spec-kit",
+    "expectedFiles": [".project-brain/decisions/0012-spec-kit-integration.md", ".project-brain/modules/spec-kit.md"],
+    "expectedTypes": ["decision", "module"]
+  },
+  {
+    "query": "where is spec.md routed in inferType",
+    "expectedFiles": ["scripts/infer.mjs"],
+    "expectedSymbols": ["inferType"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "brain speckit tasks subcommand parses task list",
+    "expectedFiles": ["scripts/brain-speckit.mjs"],
+    "expectedTypes": ["code"]
+  },
+  {
+    "query": "what slash commands does brain ship for spec-kit",
+    "expectedFiles": ["templates/claude-code/commands/brain-speckit-tasks.md", ".project-brain/modules/spec-kit.md"],
+    "expectedTypes": ["doc", "module"]
+  },
+  {
+    "query": "constitution canonical-root boost",
+    "expectedFiles": ["scripts/retrieval.mjs", ".project-brain/decisions/0012-spec-kit-integration.md"],
+    "expectedSymbols": ["canonicalBrainBoost"],
+    "expectedTypes": ["code", "decision"]
   }
 ]
