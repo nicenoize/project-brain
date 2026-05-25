@@ -192,7 +192,12 @@ export async function listIndexableFiles(opts = {}) {
     'features/**/*.{ts,tsx,js,jsx,md,mdx}',
     'types/**/*.{ts,tsx,md,mdx}',
     'tooling/**/*.{mjs,js,ts,tsx}',
-    'config/**/*.{mjs,js,ts,tsx,md,mdx}'
+    'config/**/*.{mjs,js,ts,tsx,md,mdx}',
+    // Spec-kit artifacts (github/spec-kit). Indexed gracefully when present;
+    // single-project repos without these dirs see no records.
+    '.specify/**/*.md',
+    'specs/**/*.md',
+    'specs/**/*.{yml,yaml,json}'
   ];
   const extra = (process.env.BRAIN_INDEX_EXTRA_GLOBS || '')
     .split(/[,;\n]+/)
