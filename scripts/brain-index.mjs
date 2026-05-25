@@ -6,6 +6,7 @@ import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
 import { loadTsSemanticContext } from './ts-graph.mjs';
 import { discoverProjects, isFleetMode } from './projects.mjs';
+import { inferType, inferModule, inferFeature, inferDecision, inferSourceKind } from './infer.mjs';
 import { runDetectors } from './edges/index.mjs';
 import { candidateToRecord } from './edges/materialize.mjs';
 import {
@@ -636,40 +637,6 @@ function sessionCoordFields(file, data) {
   if (tool) out.tool = tool;
   if (parentRun) out.parentRun = parentRun;
   return out;
-}
-
-function inferType(file) {
-  if (file.includes('/features/')) return 'feature';
-  if (file.includes('/modules/')) return 'module';
-  if (file.includes('/decisions/')) return 'decision';
-  if (file.includes('/sessions/')) return 'session';
-  if (/\.[cm]?[jt]sx?$/.test(file)) return 'code';
-  return 'doc';
-}
-
-function inferModule(file, data = {}) {
-  if (data.module) return data.module;
-  if (file.includes('/modules/')) return path.basename(file, path.extname(file));
-  const parts = file.split('/');
-  if (['app', 'pages', 'components', 'lib', 'src', 'server', 'actions'].includes(parts[0])) return parts.slice(0, 2).join('/');
-  return path.dirname(file) === '.' ? '' : path.dirname(file);
-}
-
-function inferFeature(file, data = {}) {
-  if (data.feature) return data.feature;
-  return file.includes('/features/') ? path.basename(file, path.extname(file)) : '';
-}
-
-function inferDecision(file, data = {}) {
-  if (data.decision) return data.decision;
-  return file.includes('/decisions/') ? path.basename(file, path.extname(file)) : '';
-}
-
-function inferSourceKind(file) {
-  if (file.startsWith('.project-brain/')) return 'brain';
-  if (/\.[cm]?[jt]sx?$/.test(file)) return 'code';
-  if (/\.mdx?$/.test(file)) return 'doc';
-  return 'other';
 }
 
 function brainDocMeta(file, data = {}) {

@@ -139,7 +139,8 @@ export function mergePackageScripts(pkg) {
     'brain:install-hooks': 'bash skills/project-brain/bin/install-hooks.sh',
     'brain:update-skill': 'bash skills/project-brain/bin/update.sh',
     'brain:edges': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-edges.mjs',
-    'brain:projects': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-projects.mjs'
+    'brain:projects': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-projects.mjs',
+    'brain:speckit': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-speckit.mjs'
   };
   for (const [k, v] of Object.entries(scripts)) {
     if (!pkg.scripts[k] || pkg.scripts[k].includes('skills/project-brain/')) pkg.scripts[k] = v;
@@ -192,7 +193,12 @@ export async function listIndexableFiles(opts = {}) {
     'features/**/*.{ts,tsx,js,jsx,md,mdx}',
     'types/**/*.{ts,tsx,md,mdx}',
     'tooling/**/*.{mjs,js,ts,tsx}',
-    'config/**/*.{mjs,js,ts,tsx,md,mdx}'
+    'config/**/*.{mjs,js,ts,tsx,md,mdx}',
+    // Spec-kit artifacts (github/spec-kit). Indexed gracefully when present;
+    // single-project repos without these dirs see no records.
+    '.specify/**/*.md',
+    'specs/**/*.md',
+    'specs/**/*.{yml,yaml,json}'
   ];
   const extra = (process.env.BRAIN_INDEX_EXTRA_GLOBS || '')
     .split(/[,;\n]+/)

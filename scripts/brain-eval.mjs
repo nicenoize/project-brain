@@ -25,6 +25,10 @@ for (const item of cases) {
   const found = await retrieve(item.query, store, embedder, {
     topK,
     symbol: item.expectedSymbols?.join(',') || item.symbol || '',
+    // Symbol-heavy cases need the full-corpus scan because dense-only candidate
+    // pruning can miss out-of-vocab symbols (e.g. "QdrantStore" is OOV for MiniLM
+    // and won't appear in topK*8 dense candidates). See decision 0003.
+    broadCandidates: Boolean(item.expectedSymbols?.length),
     filter: item.expectedTypes?.length === 1 ? { type: item.expectedTypes[0] } : {}
   });
   results.push(evaluateCase(item, found, topK));
