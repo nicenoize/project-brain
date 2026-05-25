@@ -16,25 +16,67 @@ export class BrainStore {
   async close() {}
 }
 
+// Default 200 MB — well below Node's ~512 MB string limit and big enough
+// to hold ~50 k brain records with vectors. Above this, we skip the mirror
+// rather than OOM at JSON.parse time.
+const JSON_MIRROR_MAX_BYTES = Number(process.env.BRAIN_JSON_MIRROR_MAX_BYTES || 200 * 1024 * 1024);
+// Skip the per-call write when the in-memory record count exceeds this. A
+// freshly bloated mirror from a botched recovery used to balloon to 60 k+
+// records and hit the string-limit on the next read. Tunable for huge repos.
+const JSON_MIRROR_MAX_RECORDS = Number(process.env.BRAIN_JSON_MIRROR_MAX_RECORDS || 50_000);
+
 export class JsonStore extends BrainStore {
   constructor(options = {}) {
     super();
     this.path = options.path || JSON_INDEX;
     this.model = options.model || null;
+    this.disabled = false;
     this.records = this.readRecords();
   }
 
   readRecords() {
     if (!fs.existsSync(this.path)) return [];
-    const data = JSON.parse(read(this.path));
-    this.model ||= data.model || null;
-    return (data.records || []).map(normalizeRecord);
+    try {
+      const stat = fs.statSync(this.path);
+      if (stat.size > JSON_MIRROR_MAX_BYTES) {
+        console.warn(`Project Brain: JSON mirror at ${this.path} is ${Math.round(stat.size / 1024 / 1024)} MB ` +
+          `(over ${Math.round(JSON_MIRROR_MAX_BYTES / 1024 / 1024)} MB cap). Skipping read to avoid OOM. ` +
+          `Run \`npm run brain:repair\` to rebuild from source.`);
+        this.disabled = true;
+        return [];
+      }
+    } catch {}
+    try {
+      const data = JSON.parse(read(this.path));
+      this.model ||= data.model || null;
+      return (data.records || []).map(normalizeRecord);
+    } catch (error) {
+      if (error?.code === 'ERR_STRING_TOO_LONG') {
+        console.warn(`Project Brain: JSON mirror at ${this.path} exceeds Node's string limit. ` +
+          `Skipping read. Run \`npm run brain:repair\` to rebuild.`);
+        this.disabled = true;
+        return [];
+      }
+      console.warn(`Project Brain: JSON mirror read failed (${error.message || error}); treating as empty.`);
+      return [];
+    }
   }
 
   persist() {
+    // If the mirror was already disabled at read time (too big / unreadable),
+    // skip writes too — keeping the on-disk file frozen is preferable to
+    // either crashing or doubling down on a corrupted snapshot.
+    if (this.disabled) return;
+    if (this.records.length > JSON_MIRROR_MAX_RECORDS) {
+      console.warn(`Project Brain: JSON mirror would hold ${this.records.length} records ` +
+        `(cap ${JSON_MIRROR_MAX_RECORDS}). Disabling mirror writes for this run. ` +
+        `Set BRAIN_JSON_MIRROR_MAX_RECORDS to raise, or run \`npm run brain:repair\`.`);
+      this.disabled = true;
+      return;
+    }
     // Stream JSON to disk to avoid creating one giant in-memory string.
     ensureDir(path.dirname(this.path));
-    const tmpPath = `${this.path}.tmp`;
+    const tmpPath = `${this.path}.tmp.${process.pid}`;
     let fd;
     try {
       fd = fs.openSync(tmpPath, 'w');
@@ -51,7 +93,18 @@ export class JsonStore extends BrainStore {
       fs.writeSync(fd, '}\n');
       fs.closeSync(fd);
       fd = undefined;
-      fs.renameSync(tmpPath, this.path);
+      try {
+        fs.renameSync(tmpPath, this.path);
+      } catch (renameErr) {
+        // Concurrent bg-sync racing can unlink our pid-scoped tmp file or
+        // already swap the target. Treat ENOENT as a soft failure — the
+        // surviving process wrote a valid snapshot.
+        if (renameErr?.code === 'ENOENT') {
+          console.warn(`Project Brain mirror rename ENOENT (concurrent sync?). Continuing.`);
+          return;
+        }
+        throw renameErr;
+      }
     } catch (error) {
       if (fd !== undefined) {
         try { fs.closeSync(fd); } catch {}
@@ -143,23 +196,50 @@ export class LanceStore extends BrainStore {
         const msg = String(error?.message || error);
         const isSchemaErr = /schema|fields did not match|unexpected=/i.test(msg);
         if (isSchemaErr) {
-          const autoRecover = process.env.BRAIN_AUTO_RECOVER === '1';
-          if (autoRecover) {
-            console.warn('Project Brain: Lance schema mismatch detected. Auto-recovering: dropping table and re-creating from current records.');
-            try {
-              await this.db.dropTable(TABLE_NAME);
-            } catch {}
-            this.table = await this.db.createTable(TABLE_NAME, forLance, { mode: 'overwrite' });
-            return;
+          // Auto-recovery is on by default: schema mismatches almost always
+          // mean the brain skill was upgraded (new record fields) and the
+          // existing Lance table is stale. Dropping + recreating from the
+          // current batch is the safe path. Opt out with BRAIN_AUTO_RECOVER=0.
+          if (process.env.BRAIN_AUTO_RECOVER === '0') {
+            console.error('Project Brain: Lance table schema is older than this package (new coordination fields on records).');
+            console.error('Fix: rm -rf .project-brain/vector-db && npm run brain:index -- --force');
+            console.error('Or: rerun without BRAIN_AUTO_RECOVER=0 to drop+rebuild the Lance table automatically.');
+            throw error;
           }
-          console.error('Project Brain: Lance table schema is older than this package (new coordination fields on records).');
-          console.error('Fix: rm -rf .project-brain/vector-db && npm run brain:index -- --force');
-          console.error('Or: rerun with BRAIN_AUTO_RECOVER=1 to drop+rebuild the Lance table automatically.');
+          console.warn('Project Brain: Lance schema mismatch detected. Auto-recovering — dropping table + clearing JSON mirror.');
+          try {
+            await this.db.dropTable(TABLE_NAME);
+          } catch {}
+          // Reset the mirror so the next openTable can't seed Lance back from
+          // a stale snapshot. Without this reset the bg-sync hook can
+          // explode the record count by re-hydrating + re-upserting on every
+          // failed → succeeded recovery cycle.
+          this.resetMirror(forLance);
+          this.table = await this.db.createTable(TABLE_NAME, forLance, { mode: 'overwrite' });
+          return;
         }
         throw error;
       }
     } else {
       await table.add(forLance);
+    }
+  }
+
+  /**
+   * Replace the JSON mirror's in-memory records and on-disk snapshot with
+   * the given seed (typically the current upsert batch). Used during
+   * auto-recovery to prevent a bloated mirror from leaking stale rows back
+   * into a freshly rebuilt Lance table.
+   */
+  resetMirror(seedRecords) {
+    if (!this.mirrorEnabled) return;
+    try {
+      this.mirror.records = (seedRecords || []).map(normalizeRecord);
+      if (this.model) this.mirror.model = this.model;
+      this.mirror.persist();
+    } catch (error) {
+      if (this.mirrorStrict) throw error;
+      console.warn(`Project Brain mirror reset failed: ${error.message || error}`);
     }
   }
 
