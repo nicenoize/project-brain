@@ -470,6 +470,44 @@ BRAIN_AUTO_RECOVER=1                      Lance schema migration on first fleet 
 
 See `modules/fleet.md` for the full module overview and `decisions/0009`–`0011` for the rationale.
 
+## Spec-Kit integration
+
+When a repo uses [`github/spec-kit`](https://github.com/github/spec-kit), brain auto-detects its artifacts and indexes them alongside `.project-brain/` content. No flag needed — `.specify/` and `specs/<id>/` paths are picked up by the indexer, and the new record types (`constitution` / `spec` / `plan` / `tasks-list` / `spec-support`) flow into the existing retrieval surface.
+
+New record kinds:
+
+| `type` | Source | Aggregates into |
+|---|---|---|
+| `constitution` | `.specify/memory/constitution.md` | canonical-root boost (×1.6 baseline) |
+| `spec` | `specs/<id>/spec.md` | `feature-summary` (chunk:-3) via `feature: <id>` |
+| `plan` | `specs/<id>/plan.md` | same `feature-summary` |
+| `tasks-list` | `specs/<id>/tasks.md` | same `feature-summary` |
+| `spec-support` | other files in `specs/<id>/` | same `feature-summary` |
+
+CLI (only fires when `specs/<id>/` exists):
+
+```bash
+npm run brain:speckit -- import  <id>            # spec.md → .project-brain/features/<id>.md (cross-linked, idempotent)
+npm run brain:speckit -- tasks   <id> --write    # tasks.md → .project-brain/work-packages/spec-<id>-wpN.md per US group
+npm run brain:speckit -- tasks   <id> --github   # also open GH issues via gh issue create
+npm run brain:speckit -- analyze <id>            # ADR scaffolds from specs/<id>/analyze.md headings
+```
+
+Three Claude Code slash commands installed automatically by `setup-claude-settings.mjs` (skip via `PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS=1`):
+
+- `/brain-speckit-specify $ARGS` — wraps `/speckit.specify` + `brain:speckit import` + `brain:sync`.
+- `/brain-speckit-tasks <id>` — wraps `/speckit.tasks` + `brain:speckit tasks <id> --write`.
+- `/brain-speckit-implement <id>` — picks the next pending work-package, opens a brain workstream (`brain:work start --task spec-<id>-wpN`), runs `/speckit.implement` scoped to that package, then `brain:work end`.
+
+Configuration:
+
+```
+BRAIN_SPEC_BOOST=0.04                          additive boost on spec/plan/tasks-list/constitution records for architectural queries
+PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS=1           skip /brain-speckit-* command install during brain:update-skill
+```
+
+See [`modules/spec-kit.md`](.project-brain/modules/spec-kit.md) for the full module overview and [`decisions/0012-spec-kit-integration.md`](.project-brain/decisions/0012-spec-kit-integration.md) for the rationale.
+
 ## Response behavior
 
 When using this skill, be direct and operational. Prefer concrete file updates, commands, and checks over abstract explanation. If facts are uncertain, mark them as `Needs Review` instead of inventing them.
