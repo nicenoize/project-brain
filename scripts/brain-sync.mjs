@@ -8,6 +8,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import {
   ROOT,
@@ -23,6 +24,53 @@ import {
   gitBranchSafe,
   listIndexableFiles
 } from './common.mjs';
+
+const SYNC_BG_LOCK = path.join(BRAIN_DIR, '.sync-bg.lock');
+const SYNC_DEBOUNCE_MS = Number(process.env.BRAIN_SYNC_DEBOUNCE_MS || 30_000);
+const SYNC_NICE = process.env.BRAIN_SYNC_NICE !== '0';
+
+function pidAlive(pid) {
+  if (!pid || !Number.isFinite(pid)) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+function readLock() {
+  if (!fs.existsSync(SYNC_BG_LOCK)) return null;
+  try { return JSON.parse(read(SYNC_BG_LOCK)); } catch { return null; }
+}
+
+function writeLock(pid) {
+  ensureDir(BRAIN_DIR);
+  try {
+    fs.writeFileSync(SYNC_BG_LOCK, JSON.stringify({ pid, ts: Date.now() }));
+  } catch {}
+}
+
+function clearLock() {
+  try { fs.unlinkSync(SYNC_BG_LOCK); } catch {}
+}
+
+function recentlyCompletedSync() {
+  if (!fs.existsSync(MANIFEST)) return false;
+  try {
+    const stat = fs.statSync(MANIFEST);
+    return Date.now() - stat.mtimeMs < SYNC_DEBOUNCE_MS;
+  } catch { return false; }
+}
+
+function wrapWithNice(execPath, args) {
+  if (!SYNC_NICE) return { cmd: execPath, args };
+  const platform = os.platform();
+  if (platform === 'darwin' || platform === 'linux') {
+    // nice is a POSIX coreutil and is universally available; ionice is Linux-only.
+    if (platform === 'linux') {
+      // ionice -c 3 = idle I/O class; nice -n 19 = lowest CPU priority.
+      return { cmd: 'ionice', args: ['-c', '3', 'nice', '-n', '19', execPath, ...args] };
+    }
+    return { cmd: 'nice', args: ['-n', '19', execPath, ...args] };
+  }
+  return { cmd: execPath, args };
+}
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
@@ -83,23 +131,55 @@ const env = {
 
 if (decision.action === 'background' && allowBackground) {
   ensureDir(BRAIN_DIR);
+
+  // Debounce: if a sync finished within the window, skip.
+  if (!force && recentlyCompletedSync()) {
+    writeSyncState({
+      action: 'skip',
+      reason: `debounced (manifest updated <${SYNC_DEBOUNCE_MS}ms ago)`,
+      branch: gitBranchSafe(),
+      changed: changed.length,
+      deleted: deleted.length
+    });
+    console.log(`Project Brain sync: debounced (last sync <${SYNC_DEBOUNCE_MS}ms ago).`);
+    process.exit(0);
+  }
+
+  // Global single-bg-sync lock: if another bg sync is already in flight, skip.
+  const lock = readLock();
+  if (lock && pidAlive(lock.pid)) {
+    writeSyncState({
+      action: 'skip',
+      reason: `bg sync already running (pid ${lock.pid})`,
+      branch: gitBranchSafe(),
+      changed: changed.length,
+      deleted: deleted.length
+    });
+    console.log(`Project Brain sync: bg sync already running (pid ${lock.pid}); skipping.`);
+    process.exit(0);
+  }
+  if (lock) clearLock(); // stale lock from a crashed sync
+
   const out = fs.openSync(SYNC_BG_LOG, 'a');
   fs.writeSync(out, `\n--- ${new Date().toISOString()} bg sync (changed=${changed.length}, deleted=${deleted.length})\n`);
-  const child = spawn(process.execPath, [indexScript, ...indexArgs], {
+  const { cmd, args: spawnArgs } = wrapWithNice(process.execPath, [indexScript, ...indexArgs]);
+  const child = spawn(cmd, spawnArgs, {
     detached: true,
     stdio: ['ignore', out, out],
-    env
+    env: { ...env, BRAIN_SYNC_LOCK: SYNC_BG_LOCK }
   });
   child.unref();
+  writeLock(child.pid);
   writeSyncState({
     action: 'background',
     reason: decision.reason,
     branch: gitBranchSafe(),
     changed: changed.length,
     deleted: deleted.length,
-    pid: child.pid
+    pid: child.pid,
+    niced: SYNC_NICE
   });
-  console.log(`Project Brain index running in background (pid ${child.pid}). Logs: .project-brain/.sync-bg.log`);
+  console.log(`Project Brain index running in background (pid ${child.pid}${SYNC_NICE ? ', niced' : ''}). Logs: .project-brain/.sync-bg.log`);
   process.exit(0);
 }
 
