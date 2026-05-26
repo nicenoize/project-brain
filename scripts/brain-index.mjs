@@ -27,6 +27,16 @@ const deletedEnv = splitEnv('BRAIN_DELETED_FILES');
 ensureDir(BRAIN_DIR);
 ensureDir(path.join(BRAIN_DIR, 'vector-db'));
 
+// Bg-sync hands us BRAIN_SYNC_LOCK so we can release the cross-process bg-sync
+// lock on exit. Released on any termination (clean or via signal).
+if (process.env.BRAIN_SYNC_LOCK) {
+  const lockPath = process.env.BRAIN_SYNC_LOCK;
+  const release = () => { try { fs.unlinkSync(lockPath); } catch {} };
+  process.on('exit', release);
+  process.on('SIGINT', () => { release(); process.exit(130); });
+  process.on('SIGTERM', () => { release(); process.exit(143); });
+}
+
 let oldManifest = { files: {} };
 try {
   oldManifest = JSON.parse(read(MANIFEST, '{"files":{}}'));
@@ -94,10 +104,20 @@ let deletedFiles = Object.keys(oldManifest.files || {}).filter(file => !fileSet.
 
 const existingRecords = await store.getAll();
 const existingIdsByFile = new Map();
+// Chunk-level vector reuse: when a file's top-level hash changes but most of
+// its chunks are byte-identical, we copy the previously-embedded vector instead
+// of re-running the model. Keyed by sha256(embeddingText). Disabled with
+// BRAIN_REUSE_VECTORS=0 (default on).
+const reuseVectors = process.env.BRAIN_REUSE_VECTORS !== '0';
+const existingVectorByChunkSha = new Map();
 for (const record of existingRecords) {
   if (!record.file) continue;
   if (!existingIdsByFile.has(record.file)) existingIdsByFile.set(record.file, []);
   existingIdsByFile.get(record.file).push(record.id);
+  if (reuseVectors && record.embeddingText && Array.isArray(record.vector) && record.vector.length) {
+    const key = `${record.file}:${sha256(record.embeddingText)}`;
+    if (!existingVectorByChunkSha.has(key)) existingVectorByChunkSha.set(key, record.vector);
+  }
 }
 const strayFiles = [...new Set(existingRecords.map((r) => r.file).filter(Boolean))].filter((file) => !fileSet.has(file));
 deletedFiles = [...new Set([...deletedFiles, ...strayFiles])];
@@ -123,6 +143,7 @@ for (const file of new Set([...changedFiles, ...deletedFiles])) {
 await store.delete(deleteIds);
 
 const records = [];
+const reuseStats = { reused: 0, embedded: 0 };
 for (const file of changedFiles) {
   const content = read(path.join(ROOT, file));
   if (!content.trim()) continue;
@@ -131,7 +152,27 @@ for (const file of changedFiles) {
   const doc = parseDoc(file, content);
   if (truthyFrontmatter(doc.data.noindex)) continue;
   const chunks = await dispatchChunker(file, doc.body, doc.data, { tsContext });
-  const vectors = await embedder.embedBatch(chunks.map(chunk => chunk.embeddingText || `${file}\n${chunk.text}`));
+  const embeddingTexts = chunks.map(chunk => chunk.embeddingText || `${file}\n${chunk.text}`);
+  // Try to reuse vectors for byte-identical chunks first.
+  const vectors = new Array(chunks.length);
+  const pendingIdx = [];
+  const pendingTexts = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const key = reuseVectors ? `${file}:${sha256(embeddingTexts[i])}` : null;
+    const cached = key && existingVectorByChunkSha.get(key);
+    if (cached) {
+      vectors[i] = cached;
+      reuseStats.reused++;
+    } else {
+      pendingIdx.push(i);
+      pendingTexts.push(embeddingTexts[i]);
+    }
+  }
+  if (pendingTexts.length) {
+    const fresh = await embedder.embedBatch(pendingTexts);
+    for (let k = 0; k < pendingIdx.length; k++) vectors[pendingIdx[k]] = fresh[k];
+    reuseStats.embedded += pendingTexts.length;
+  }
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     const sessionCoord = sessionCoordFields(file, doc.data);
@@ -170,6 +211,11 @@ for (const file of changedFiles) {
 }
 
 if (records.length) await store.upsert(records);
+if (reuseVectors && (reuseStats.reused || reuseStats.embedded)) {
+  const total = reuseStats.reused + reuseStats.embedded;
+  const pct = total ? Math.round((reuseStats.reused / total) * 100) : 0;
+  console.log(`Project Brain: embedded ${reuseStats.embedded} new chunks, reused ${reuseStats.reused} (${pct}% cache hit).`);
+}
 
 const dirtyFiles = new Set([...changedFiles, ...deletedFiles]);
 const dirtyDirs = new Set();

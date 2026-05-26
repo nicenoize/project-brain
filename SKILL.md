@@ -538,6 +538,18 @@ BRAIN_JSON_MIRROR_MAX_RECORDS=50000      # write cap
 BRAIN_JSON_MIRROR=0                      # disable JSON mirror entirely (Lance/Qdrant primary)
 ```
 
+## Performance
+
+The indexer reuses previously-computed vectors for byte-identical chunks. A one-line edit to a 700-line file embeds **1 chunk**, not all 16 — typical cache hit rate is 80–95% during incremental sync. Background sync runs niced (lowest CPU priority, idle I/O on Linux) and is debounced + globally locked so the editor never sees two bg-syncs racing.
+
+Perf tuning env vars:
+
+```
+BRAIN_REUSE_VECTORS=0                    # disable chunk-level vector reuse (force full re-embed)
+BRAIN_SYNC_DEBOUNCE_MS=30000             # skip bg sync if manifest was updated within window
+BRAIN_SYNC_NICE=0                        # disable nice/ionice wrapping for the bg child
+```
+
 ## Response behavior
 
 When using this skill, be direct and operational. Prefer concrete file updates, commands, and checks over abstract explanation. If facts are uncertain, mark them as `Needs Review` instead of inventing them.
