@@ -126,6 +126,7 @@ BRAIN_STORE=qdrant BRAIN_QDRANT_URL=http://localhost:6333 npm run brain:index
 - **`brain:index` failed in setup.** Re-run `npm run brain:index` directly to see the error; fix the embedder/store config and re-run setup or `brain:index -- --force`.
 - **Hooks not firing.** `npm run brain:install-hooks` (Git) and `npm run brain:install-cursor-hooks` (Cursor) are idempotent — re-run after pulling. Verify with `ls -la .git/hooks/`.
 - **Stale `context_index.md`.** `npm run brain:guard` warns above `BRAIN_CONTEXT_INDEX_WARN_TOKENS` (default 700 estimated). `npm run brain:health` flags root brain docs older than `BRAIN_STALE_DOC_DAYS`.
+- **Editor feels slow / fan spinning.** Bg-sync now runs niced (lowest CPU priority) with a 30s debounce + global single-process lock and reuses vectors for byte-identical chunks (typical 80–95% cache hit on small edits). Disable any with `BRAIN_SYNC_NICE=0`, `BRAIN_SYNC_DEBOUNCE_MS=0`, `BRAIN_REUSE_VECTORS=0`. See ADR [`0013-lazy-sync-performance.md`](.project-brain/decisions/0013-lazy-sync-performance.md).
 
 ## Visualization
 
