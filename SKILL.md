@@ -308,6 +308,28 @@ When multiple agents or humans may touch the same area:
 3. Use `npm run brain:lease -- release --task <task>` when the package is done.
 4. The orchestrator should resolve overlaps before integration work begins.
 
+### Proactive pre-touch brief
+
+Everything else in the brain is *pull* (you ask). `brain:brief` is a *push*: before you touch a set of files, it surfaces what you should already know, so the brain taps you on the shoulder instead of waiting to be asked. It is **read-only** and never mutates state.
+
+```bash
+npm run brain:brief                          # default target = working-tree changes
+npm run brain:brief -- --files src/auth.ts,lib/db.ts
+npm run brain:brief -- --files src/auth.ts --json
+npm run brain:brief -- --strict              # exit non-zero on a hard lease conflict
+```
+
+It groups advisories from existing brain state:
+
+- **🚨/⚠ Leases & workstreams** — active file leases touching your files or their module (`🚨` when someone else holds the lease, `⚠` when it's yours), sourced from `active_state.md`.
+- **📐 Governing ADRs** — `.project-brain/decisions/*.md` whose module or body references your files/module.
+- **↯ Downstream impact** — indexed `cross-project-edge` records where this project is the upstream owner; "changing this may affect `<project>` via `<edgeKind>`".
+- **🕑 Recent sessions** — best-effort: recent session docs that mention your files/modules.
+
+The plain run always exits 0 (advisory). `--strict` exits non-zero only when someone else holds a lease on a file you're about to touch.
+
+**Opt-in post-checkout hook.** `templates/hooks/post-checkout` ships a guarded snippet that runs `brain:brief` after a branch switch. It is additive (does not clobber existing hook content) and soft-exits 0 on any failure (never blocks checkout). It is **off by default** — enable it by exporting `BRAIN_BRIEF_ON_CHECKOUT=1`. We do not auto-install it.
+
 ### During implementation
 
 Before making large changes:
