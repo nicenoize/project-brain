@@ -86,6 +86,15 @@ Each **record** is: a **384-dimensional** embedding (`Xenova/all-MiniLM-L6-v2`),
 
 **Measuring quality:** `npm run brain:eval` exercises smoke cases (from `.project-brain/eval.json` when present). Expand those cases when you find repeatable blind spots so retrieval regressions stay visible in CI or local runs.
 
+**Swappable local embedding model:** The local embedder is env-gated so a stronger/code-aware transformers.js model can be A/B-tested against the default on the hard conceptual eval subset (`npm run brain:eval`; methodology: `docs/eval-methodology.md` when present):
+
+```bash
+BRAIN_LOCAL_EMBED_MODEL=Xenova/all-MiniLM-L6-v2   # any transformers.js feature-extraction model id (default)
+BRAIN_LOCAL_EMBED_DIMS=384                          # that model's output width (default)
+```
+
+Both unset → behavior is byte-for-byte identical (same MiniLM model, 384 dims, mean pooling + normalize). Switching models is a **new vector space**: model + dims are recorded in `index_manifest.json`, so `brain:index` auto-forces a full re-index on a model change (and `brain:search` warns if the index model ≠ current). Always re-index with `--force` after switching: `npm run brain:index -- --force`. Do not mix models in one index. (OpenAI embeddings remain controlled separately via `BRAIN_EMBED_PROVIDER=openai` / `BRAIN_OPENAI_EMBED_MODEL`.)
+
 ## Token-saving communication
 
 Use the external Caveman skill for compressed agent communication when available.
