@@ -19,6 +19,8 @@ export function inferType(file) {
   if (/^specs\/[^/]+\/plan\.md$/.test(file)) return 'plan';
   if (/^specs\/[^/]+\/tasks\.md$/.test(file)) return 'tasks-list';
   if (/^specs\/[^/]+\//.test(file)) return 'spec-support';
+  // Reasoning-cache records: durable cited answers under .project-brain/explainers/.
+  if (file.includes('.project-brain/explainers/')) return 'explainer';
   if (file.includes('/features/')) return 'feature';
   if (file.includes('/modules/')) return 'module';
   if (file.includes('/decisions/')) return 'decision';
