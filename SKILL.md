@@ -99,6 +99,8 @@ BRAIN_LOCAL_EMBED_DIMS=384                          # that model's output width 
 
 Both unset → behavior is byte-for-byte identical (same MiniLM model, 384 dims, mean pooling + normalize). Switching models is a **new vector space**: model + dims are recorded in `index_manifest.json`, so `brain:index` auto-forces a full re-index on a model change (and `brain:search` warns if the index model ≠ current). Always re-index with `--force` after switching: `npm run brain:index -- --force`. Do not mix models in one index. (OpenAI embeddings remain controlled separately via `BRAIN_EMBED_PROVIDER=openai` / `BRAIN_OPENAI_EMBED_MODEL`.)
 
+**Contextual Retrieval (opt-in, `BRAIN_CONTEXTUAL_CHUNKS=1`):** When set, the indexer prepends a short deterministic situating prefix (e.g. `[project-brain · module: retrieval · scripts/retrieval.mjs · hybridScore] `) to each chunk's **embedding input only**, so the dense vector carries the chunk's location/identity context (Anthropic's "Contextual Retrieval"). The stored/displayed `text` field is unchanged — agents still see the original chunk. **Default OFF**: with the var unset, indexing is byte-for-byte identical. Re-index (`npm run brain:index --force`) after toggling, and validate recall with `npm run brain:eval` before relying on it. `BRAIN_CONTEXTUAL_PROVIDER` is a reserved seam for a future LLM-generated blurb; only the deterministic generator is implemented today.
+
 ## Token-saving communication
 
 Use the external Caveman skill for compressed agent communication when available.
