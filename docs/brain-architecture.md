@@ -53,6 +53,19 @@ Key invariants:
 - Module/feature/project summaries are only rebuilt when a child file under them actually changed (`--force` for a full rebuild).
 - `active_state.md` mutations go through `withStateLock` (`.project-brain/.active_state.lock` with PID + ISO timestamp).
 
+### Polyglot symbols (Python + Go)
+
+Precise `symbols` / `exportedSymbols` / `references` come from the TypeScript compiler (`ts-graph.mjs` + the AST path in `chunk.mjs`), so `brain:impact` and `brain:graph` are effectively **TS/JS-only** by default — a Python or Go repo produces no code records and impact/graph see nothing.
+
+`BRAIN_POLYGLOT_SYMBOLS=1` (default **OFF**) turns on a lightweight, pure-JS fallback in `scripts/lang-symbols.mjs` (`extractLiteSymbols(filePath, text)`):
+
+- The file listing in `common.mjs` is widened to include `**/*.py` and `**/*.go` (under the same flag).
+- `chunk.mjs` routes those extensions through `chunkLiteCode`, which carries the regex-extracted `symbols`/`exportedSymbols`/`references` on every chunk; the precise TS/JS AST path is left exactly as-is.
+- `infer.mjs` maps `.py`/`.go` to `type:code` / `sourceKind:code` (also flag-gated).
+- The existing `brain:impact` and `brain:graph` machinery consumes those fields unchanged — definitions, direct callers, and cross-file `calls:` edges resolve for Python/Go symbols with no further changes.
+
+With the flag unset, the indexed file set and every record are **byte-for-byte unchanged**; the intent is to flip default-on after validation. This is the first increment and is regex/heuristic-based (Python exports = top-level `def`/`class`/assignments not prefixed with `_`; Go exports = capitalized identifiers). **tree-sitter precision is the planned follow-up**, replacing the heuristics behind the same `extractLiteSymbols` interface. Known limits today: regexes can miss multi-line/decorated declarations and over- or under-count references vs. a real parser, and `brain:impact`'s callee heuristic (`/^[A-Z]/`) still favors capitalized callees (fine for Go/Python classes, misses lowercase Python function callees — direct callers are unaffected).
+
 ## Source Of Truth
 
 - Global Project Brain repo owns reusable skill code, scripts, templates, GitFlow rules, code conventions, Cavemem policy, and Caveman token-budget guidance.
