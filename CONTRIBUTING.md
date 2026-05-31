@@ -67,7 +67,7 @@ Rules:
 Changes to `retrieval.mjs` (BM25 params, hybrid score, metadata boosts, dedup behavior) must:
 
 1. Update `tests/retrieval.test.mjs` to assert the new invariant.
-2. Run `npm run brain:eval` against a known repo and record the before/after recall@8 in the PR body.
+2. Run `npm run brain:eval` against a known repo and record the before/after recall@8 in the PR body. Report movement on the **hard (vocabulary-mismatch) subset** specifically, not just the aggregate — see [`docs/eval-methodology.md`](docs/eval-methodology.md) for why the easy cases are saturated and what makes a fair hard case.
 3. Default-off any new behavior that changes ranking globally; gate behind an env var (`BRAIN_*`) until the new defaults are validated.
 
 ## Release flow
