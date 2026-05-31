@@ -17,6 +17,32 @@ export async function retrieve(query, store, embedder, opts = {}) {
     ? (await store.getAll()).filter(record => recordMatches(record, filter))
     : dense;
 
+  // BRAIN_GRAPH_EXPAND=1 (default OFF): one-hop graph expansion. Pull in
+  // structurally-adjacent records (by references/symbols, imports, cross-project
+  // edges) reachable from the top-N dense seeds so neighbors that don't dense-
+  // rank on their own can still surface. Heavier than the default path because
+  // it needs store.getAll(); only ever calls it when the flag is set.
+  const neighborIds = new Set();
+  let graphBonus = 0;
+  if (process.env.BRAIN_GRAPH_EXPAND === '1') {
+    const seedCount = Number(process.env.BRAIN_GRAPH_EXPAND_SEEDS || 5);
+    const seeds = dense.slice(0, Math.max(0, seedCount));
+    if (seeds.length) {
+      graphBonus = clampGraphBonus(Number(process.env.BRAIN_GRAPH_EXPAND_BONUS || 0.08));
+      const allRecords = (await store.getAll()).filter(record => recordMatches(record, filter));
+      const neighbors = expandByGraph(seeds, allRecords, {
+        max: Number(process.env.BRAIN_GRAPH_EXPAND_MAX || 12)
+      });
+      const inPool = new Set(pool.map(r => r.id));
+      for (const neighbor of neighbors) {
+        if (inPool.has(neighbor.id)) continue;
+        inPool.add(neighbor.id);
+        neighborIds.add(neighbor.id);
+        pool.push(neighbor);
+      }
+    }
+  }
+
   const denseScores = new Map(dense.map(record => [record.id, record.score]));
   const keyword = tfidfScore(query, pool);
   const symbol = symbolScore(query, pool, opts);
@@ -30,7 +56,10 @@ export async function retrieve(query, store, embedder, opts = {}) {
       const denseScore = denseScores.get(record.id) || 0;
       const keywordScore = ((keyword.get(record.id) || 0) / maxKeyword) * keywordScale;
       const symbolMatchScore = symbol.get(record.id) || 0;
-      const metadataScore = metadataBoost(record, context);
+      // Graph-proximity is a small additive nudge applied through the same
+      // metadata channel (clamped in hybridScore) so it can't drown a real
+      // dense hit. Only neighbors pulled in by expansion receive it.
+      const metadataScore = metadataBoost(record, context) + (neighborIds.has(record.id) ? graphBonus : 0);
       return {
         ...record,
         denseScore,
@@ -143,6 +172,103 @@ export function hybridScore(dense, keyword, symbol, metadata, alpha) {
   const meta = Math.max(-0.5, Math.min(0.5, metadata));
   const raw = base * (1 + symbolWeight * symbol) + meta;
   return Math.max(0, Math.min(2, raw));
+}
+
+/**
+ * One-hop graph expansion (pure, unit-testable). Given the dense `seeds` and
+ * the full record set `allRecords`, return the set of structurally-adjacent
+ * neighbor records reachable in a single hop. No store/embedder/env reads —
+ * the caller supplies all data and `opts.max` (neighbor cap).
+ *
+ * Edges walked (both directions where it makes sense):
+ *  - references → symbols: a seed's `references` resolve to records that DECLARE
+ *    that symbol (in `symbols`/`exportedSymbols`); a seed's declared symbols
+ *    resolve to records that REFERENCE them. Mirrors brain-graph's calls: edges.
+ *  - imports: records sharing an import specifier with a seed.
+ *  - cross-project edges: cross-project-edge records whose edgeFrom/edgeTo touch
+ *    a seed's project, plus records in the project on the other end of such an
+ *    edge from a seed.
+ *
+ * Symbol matching is normalized (normalizeSymbol) for consistency with the
+ * rest of this module; collisions on a common normalized name are accepted as
+ * over-inclusion (capped by opts.max).
+ */
+export function expandByGraph(seeds, allRecords, opts = {}) {
+  const max = Number.isFinite(opts.max) ? opts.max : 12;
+  if (max <= 0 || !seeds.length || !allRecords.length) return [];
+
+  const seedIds = new Set(seeds.map(r => r.id));
+
+  // Indexes over the full corpus, built once.
+  const declaresSymbol = new Map();   // normSymbol -> [records that declare it]
+  const referencesSymbol = new Map(); // normSymbol -> [records that reference it]
+  const importsSpecifier = new Map(); // specifier  -> [records importing it]
+  const recordsByProject = new Map(); // project    -> [records]
+  const crossEdges = [];              // cross-project-edge records
+  for (const record of allRecords) {
+    for (const sym of [...(record.symbols || []), ...(record.exportedSymbols || [])]) {
+      pushTo(declaresSymbol, normalizeSymbol(sym), record);
+    }
+    for (const ref of record.references || []) {
+      pushTo(referencesSymbol, normalizeSymbol(ref), record);
+    }
+    for (const spec of record.imports || []) {
+      pushTo(importsSpecifier, spec, record);
+    }
+    if (record.project) pushTo(recordsByProject, record.project, record);
+    if (record.type === 'cross-project-edge' && record.edgeFrom && record.edgeTo) {
+      crossEdges.push(record);
+    }
+  }
+
+  const out = [];
+  const added = new Set();
+  const add = (record) => {
+    if (!record || seedIds.has(record.id) || added.has(record.id)) return;
+    added.add(record.id);
+    out.push(record);
+  };
+
+  for (const seed of seeds) {
+    if (out.length >= max) break;
+    // seed.references → records declaring that symbol
+    for (const ref of seed.references || []) {
+      for (const target of declaresSymbol.get(normalizeSymbol(ref)) || []) add(target);
+    }
+    // seed declared symbols → records referencing them
+    for (const sym of [...(seed.symbols || []), ...(seed.exportedSymbols || [])]) {
+      for (const target of referencesSymbol.get(normalizeSymbol(sym)) || []) add(target);
+    }
+    // shared imports
+    for (const spec of seed.imports || []) {
+      for (const target of importsSpecifier.get(spec) || []) add(target);
+    }
+    // cross-project edges touching the seed's project
+    if (seed.project) {
+      for (const edge of crossEdges) {
+        let otherProject = '';
+        if (edge.edgeFrom === seed.project) otherProject = edge.edgeTo;
+        else if (edge.edgeTo === seed.project) otherProject = edge.edgeFrom;
+        else continue;
+        add(edge);
+        for (const target of recordsByProject.get(otherProject) || []) add(target);
+      }
+    }
+  }
+
+  return out.slice(0, max);
+}
+
+function pushTo(map, key, value) {
+  if (!key) return;
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+
+function clampGraphBonus(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(0.5, value));
 }
 
 export function tokenize(text) {
