@@ -70,6 +70,8 @@ Changes to `retrieval.mjs` (BM25 params, hybrid score, metadata boosts, dedup be
 2. Run `npm run brain:eval` against a known repo and record the before/after recall@8 in the PR body. Report movement on the **hard (vocabulary-mismatch) subset** specifically, not just the aggregate — see [`docs/eval-methodology.md`](docs/eval-methodology.md) for why the easy cases are saturated and what makes a fair hard case.
 3. Default-off any new behavior that changes ranking globally; gate behind an env var (`BRAIN_*`) until the new defaults are validated.
 
+**Contextual Retrieval** (`scripts/contextual.mjs`, gated by `BRAIN_CONTEXTUAL_CHUNKS=1`) follows this stance: when enabled, the indexer prepends a deterministic situating prefix to each chunk's **embedding input only** (`record.embeddingText`); the stored/displayed `record.text` stays the original chunk. It is **default OFF** — with the var unset, indexing is byte-for-byte unchanged. The prefix generator is a pure, exported function (`buildContextualPrefix` / `situateEmbeddingText`) unit-tested in `tests/contextual.test.mjs`. Before flipping the default, run `npm run brain:eval` and record before/after recall@8. `BRAIN_CONTEXTUAL_PROVIDER` is a reserved extension seam for a future LLM-generated blurb; no network/LLM client is implemented.
+
 ## Release flow
 
 This package is consumed via `brain:update-skill` from application repos, so `main` is always-shippable.

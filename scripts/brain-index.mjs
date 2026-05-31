@@ -7,6 +7,7 @@ import { openStore } from './store.mjs';
 import { loadTsSemanticContext } from './ts-graph.mjs';
 import { discoverProjects, isFleetMode } from './projects.mjs';
 import { inferType, inferModule, inferFeature, inferDecision, inferSourceKind } from './infer.mjs';
+import { contextualChunksEnabled, situateEmbeddingText, repoLabel } from './contextual.mjs';
 import { runDetectors } from './edges/index.mjs';
 import { candidateToRecord } from './edges/materialize.mjs';
 import {
@@ -152,7 +153,30 @@ for (const file of changedFiles) {
   const doc = parseDoc(file, content);
   if (truthyFrontmatter(doc.data.noindex)) continue;
   const chunks = await dispatchChunker(file, doc.body, doc.data, { tsContext });
-  const embeddingTexts = chunks.map(chunk => chunk.embeddingText || `${file}\n${chunk.text}`);
+  // Per-file inferred metadata is identical across this file's chunks; compute
+  // once and reuse for both the record build and the contextual situating.
+  const fileModule = inferModule(file, doc.data);
+  const fileFeature = inferFeature(file, doc.data);
+  const fileType = doc.data.type || inferType(file);
+  const fileProject = doc.data.project || projectByFile.get(file) || '';
+  // Contextual Retrieval (BRAIN_CONTEXTUAL_CHUNKS=1, default OFF): prepend a
+  // deterministic situating prefix to the DENSE embedding input only. The
+  // stored/displayed `record.text` stays the original chunk body (see below).
+  const contextual = contextualChunksEnabled();
+  const ctxRepo = repoLabel({ project: fileProject }, ROOT);
+  const embeddingTexts = chunks.map(chunk => {
+    const base = chunk.embeddingText || `${file}\n${chunk.text}`;
+    if (!contextual) return base;
+    return situateEmbeddingText(base, {
+      file,
+      module: fileModule,
+      feature: fileFeature,
+      type: fileType,
+      heading: chunk.heading || '',
+      symbols: chunk.symbols || [],
+      exportedSymbols: chunk.exportedSymbols || []
+    }, { enabled: true, repo: ctxRepo });
+  });
   // Try to reuse vectors for byte-identical chunks first.
   const vectors = new Array(chunks.length);
   const pendingIdx = [];
@@ -182,17 +206,19 @@ for (const file of changedFiles) {
       file,
       chunk: chunk.chunk,
       title: doc.data.title || path.basename(file),
-      type: doc.data.type || inferType(file),
+      type: fileType,
       heading: chunk.heading || '',
+      // Stored/displayed text stays the ORIGINAL chunk body. Contextual
+      // situating (when enabled) only augments embeddingText below.
       text: chunk.text,
-      embeddingText: chunk.embeddingText || `${file}\n${chunk.text}`,
+      embeddingText: embeddingTexts[i],
       isSummary: Boolean(chunk.isSummary),
       isModuleSummary: false,
       isProjectSummary: false,
-      module: inferModule(file, doc.data),
-      feature: inferFeature(file, doc.data),
+      module: fileModule,
+      feature: fileFeature,
       decision: inferDecision(file, doc.data),
-      project: doc.data.project || projectByFile.get(file) || '',
+      project: fileProject,
       sourceKind: inferSourceKind(file),
       ...meta,
       mtime: stat.mtime.toISOString(),
