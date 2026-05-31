@@ -40,6 +40,7 @@
     "brain:handoff": "node scripts/brain-handoff.mjs",
     "brain:feature": "node scripts/brain-feature.mjs",
     "brain:explain": "node scripts/brain-explain.mjs",
+    "brain:brief": "node scripts/brain-brief.mjs",
     "test": "node --test tests/*.test.mjs tests/**/*.test.mjs"
   },
   "dependencies": {
