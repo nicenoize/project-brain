@@ -116,6 +116,7 @@ export function mergePackageScripts(pkg) {
     'brain:sync': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-sync.mjs',
     'brain:guard': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-guard.mjs',
     'brain:health': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-health.mjs',
+    'brain:verify': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-verify.mjs',
     'brain:session': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-session.mjs',
     'brain:lease': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-lease.mjs',
     'brain:work': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-work.mjs',
