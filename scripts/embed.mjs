@@ -9,14 +9,26 @@ export class EmbedProvider {
   }
 }
 
+export const DEFAULT_LOCAL_EMBED_MODEL = 'Xenova/all-MiniLM-L6-v2';
+export const DEFAULT_LOCAL_EMBED_DIMS = 384;
+
 export class LocalProvider extends EmbedProvider {
-  constructor() {
+  constructor(options = {}) {
     super();
     this.extractor = null;
+    // Env-gated seam: any transformers.js feature-extraction model id can be
+    // plugged via BRAIN_LOCAL_EMBED_MODEL (+ its output width via
+    // BRAIN_LOCAL_EMBED_DIMS) so a code-aware model can be A/B-tested. With
+    // both envs unset, this is byte-for-byte identical to the prior hardcoded
+    // all-MiniLM-L6-v2 / 384-dim behavior.
+    this.model = options.model || process.env.BRAIN_LOCAL_EMBED_MODEL || DEFAULT_LOCAL_EMBED_MODEL;
+    const dimsRaw = options.dims ?? process.env.BRAIN_LOCAL_EMBED_DIMS;
+    const dimsNum = Number(dimsRaw);
+    this._dims = Number.isFinite(dimsNum) && dimsNum > 0 ? dimsNum : DEFAULT_LOCAL_EMBED_DIMS;
   }
 
-  get modelName() { return 'Xenova/all-MiniLM-L6-v2'; }
-  get dims() { return 384; }
+  get modelName() { return this.model; }
+  get dims() { return this._dims; }
 
   async load() {
     if (!this.extractor) {
