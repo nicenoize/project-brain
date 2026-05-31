@@ -24,7 +24,17 @@ export function inferType(file) {
   if (file.includes('/decisions/')) return 'decision';
   if (file.includes('/sessions/')) return 'session';
   if (/\.[cm]?[jt]sx?$/.test(file)) return 'code';
+  // Polyglot code (Python/Go), env-gated so the default file set / taxonomy is
+  // unchanged. These only ever reach indexing when BRAIN_POLYGLOT_SYMBOLS=1
+  // (the file listing in common.mjs is widened under the same flag).
+  if (isPolyglotCodeFile(file)) return 'code';
   return 'doc';
+}
+
+/** Python/Go source files, recognized only when polyglot extraction is enabled. */
+export function isPolyglotCodeFile(file) {
+  if (process.env.BRAIN_POLYGLOT_SYMBOLS !== '1') return false;
+  return /\.(py|go)$/.test(file);
 }
 
 export function inferModule(file, data = {}) {
@@ -54,6 +64,7 @@ export function inferSourceKind(file) {
   if (file.startsWith('.specify/')) return 'brain';
   if (file.startsWith('specs/')) return 'brain';
   if (/\.[cm]?[jt]sx?$/.test(file)) return 'code';
+  if (isPolyglotCodeFile(file)) return 'code';
   if (/\.mdx?$/.test(file)) return 'doc';
   return 'other';
 }
