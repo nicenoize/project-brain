@@ -131,6 +131,17 @@ if (brainDocStaged) {
   }
 }
 
+// Security gates: opt-in via env, skip silently if tool isn't installed.
+// `BRAIN_GUARD_SECURITY=1` enables all available scanners; individual
+// flags (`BRAIN_GUARD_GITLEAKS=1`, `BRAIN_GUARD_SEMGREP=1`, `BRAIN_GUARD_NPM_AUDIT=1`)
+// toggle one at a time. Findings at high|critical severity block (push to
+// errors); lower severities push to warnings.
+{
+  const secResult = runSecurityScanners(staged);
+  for (const e of secResult.errors) errors.push(e);
+  for (const w of secResult.warnings) warnings.push(w);
+}
+
 if (errors.length || warnings.length) {
   if (warnings.length) {
     console.log('\nProject Brain warnings:');
@@ -143,3 +154,113 @@ if (errors.length || warnings.length) {
   }
 }
 console.log('Project Brain guard passed.');
+
+// ---- security scanners ----
+
+function isScannerEnabled(name) {
+  if (process.env.BRAIN_GUARD_SECURITY === '1') return true;
+  const key = `BRAIN_GUARD_${name.toUpperCase().replace(/[-:]/g, '_')}`;
+  return process.env[key] === '1';
+}
+
+function scannerBin(name) {
+  const key = `BRAIN_GUARD_${name.toUpperCase().replace(/[-:]/g, '_')}_BIN`;
+  return process.env[key] || name;
+}
+
+function hasBin(name) {
+  if (process.env[`BRAIN_GUARD_${name.toUpperCase().replace(/[-:]/g, '_')}_BIN`]) return true;
+  try { execSync(`command -v ${name}`, { stdio: 'ignore' }); return true; }
+  catch { return false; }
+}
+
+function runSecurityScanners(stagedFiles) {
+  const errs = [];
+  const warns = [];
+  if (isScannerEnabled('gitleaks')) {
+    const res = runGitleaks();
+    if (res.skipped) warns.push(`gitleaks: skipped (${res.skipped})`);
+    else for (const f of res.findings) {
+      const where = `${f.File || f.file || 'unknown'}:${f.StartLine || f.start_line || ''}`;
+      errs.push(`gitleaks: ${f.RuleID || f.rule_id || 'secret-finding'} in ${where}`);
+    }
+  }
+  if (isScannerEnabled('semgrep')) {
+    const codeStaged = stagedFiles.filter(f => fs.existsSync(f));
+    const res = runSemgrep(codeStaged);
+    if (res.skipped) warns.push(`semgrep: skipped (${res.skipped})`);
+    else for (const f of res.findings) {
+      const where = `${f.path || 'unknown'}:${f.start?.line ?? ''}`;
+      const severity = String(f.extra?.severity || 'WARNING').toUpperCase();
+      const msg = `semgrep: ${f.check_id || 'rule'} in ${where} — ${f.extra?.message || ''}`.trim();
+      if (severity === 'ERROR') errs.push(msg);
+      else warns.push(msg);
+    }
+  }
+  if (isScannerEnabled('npm_audit') || isScannerEnabled('npm-audit')) {
+    const res = runNpmAudit();
+    if (res.skipped) warns.push(`npm audit: skipped (${res.skipped})`);
+    else {
+      const level = (process.env.BRAIN_GUARD_NPM_AUDIT_LEVEL || 'high').toLowerCase();
+      const blocking = level === 'critical' ? ['critical'] : ['critical', 'high'];
+      const blockingTotal = blocking.reduce((acc, k) => acc + (res.summary[k] || 0), 0);
+      if (blockingTotal) {
+        errs.push(`npm audit: ${blockingTotal} ${blocking.join('/')}-severity vulnerabilities (run \`npm audit\`)`);
+      } else {
+        const total = Object.values(res.summary).reduce((a, b) => a + (b || 0), 0);
+        if (total) warns.push(`npm audit: ${total} non-blocking vulnerabilities (below threshold ${level})`);
+      }
+    }
+  }
+  return { errors: errs, warnings: warns };
+}
+
+function runGitleaks() {
+  if (!hasBin('gitleaks')) return { skipped: 'gitleaks not installed; set BRAIN_GUARD_GITLEAKS_BIN to override' };
+  const bin = scannerBin('gitleaks');
+  // `protect --staged` is the pre-commit fast-path: only scans staged hunks.
+  const r = spawnSync(bin, ['protect', '--staged', '--no-banner', '--report-format', 'json', '--redact'], { encoding: 'utf8' });
+  if (r.error) return { skipped: `gitleaks spawn failed: ${r.error.code || r.error.message}` };
+  const findings = [];
+  // gitleaks emits JSON to stdout when findings exist; exits non-zero on findings.
+  if (r.stdout) {
+    try {
+      const parsed = JSON.parse(r.stdout);
+      if (Array.isArray(parsed)) findings.push(...parsed);
+    } catch {}
+  }
+  return { findings };
+}
+
+function runSemgrep(stagedFiles) {
+  if (!hasBin('semgrep')) return { skipped: 'semgrep not installed; set BRAIN_GUARD_SEMGREP_BIN to override' };
+  if (!stagedFiles.length) return { findings: [] };
+  const bin = scannerBin('semgrep');
+  const config = process.env.BRAIN_GUARD_SEMGREP_CONFIG || 'auto';
+  const r = spawnSync(bin, ['--config', config, '--json', '--quiet', '--metrics', 'off', ...stagedFiles], { encoding: 'utf8' });
+  if (r.error) return { skipped: `semgrep spawn failed: ${r.error.code || r.error.message}` };
+  const findings = [];
+  if (r.stdout) {
+    try {
+      const parsed = JSON.parse(r.stdout);
+      if (Array.isArray(parsed?.results)) findings.push(...parsed.results);
+    } catch {}
+  }
+  return { findings };
+}
+
+function runNpmAudit() {
+  if (!hasBin('npm')) return { skipped: 'npm not installed' };
+  if (!fs.existsSync('package.json')) return { skipped: 'no package.json in cwd' };
+  const bin = scannerBin('npm');
+  const r = spawnSync(bin, ['audit', '--json'], { encoding: 'utf8' });
+  if (r.error) return { skipped: `npm spawn failed: ${r.error.code || r.error.message}` };
+  let summary = { info: 0, low: 0, moderate: 0, high: 0, critical: 0 };
+  if (r.stdout) {
+    try {
+      const parsed = JSON.parse(r.stdout);
+      if (parsed?.metadata?.vulnerabilities) summary = { ...summary, ...parsed.metadata.vulnerabilities };
+    } catch {}
+  }
+  return { summary };
+}
