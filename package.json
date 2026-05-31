@@ -12,6 +12,7 @@
     "brain:sync": "node scripts/brain-sync.mjs",
     "brain:guard": "node scripts/brain-guard.mjs",
     "brain:health": "node scripts/brain-health.mjs",
+    "brain:verify": "node scripts/brain-verify.mjs",
     "brain:session": "node scripts/brain-session.mjs",
     "brain:lease": "node scripts/brain-lease.mjs",
     "brain:work": "node scripts/brain-work.mjs",
