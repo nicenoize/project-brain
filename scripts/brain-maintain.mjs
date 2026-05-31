@@ -20,6 +20,12 @@ const cleanSessions = argv.includes('--clean-sessions') || process.env.BRAIN_MAI
 const cleanSessionFiles = argv.includes('--clean-session-files') || process.env.BRAIN_SESSION_CLEAN_FILES === '1';
 const caveman = argv.includes('--caveman') || process.env.BRAIN_MAINTAIN_CAVEMAN === '1';
 const wenyan = argv.includes('--wenyan') || process.env.BRAIN_MAINTAIN_WENYAN === '1';
+// Drift check (brain:verify): opt-in, informational by default. --verify (or
+// BRAIN_MAINTAIN_VERIFY=1) runs it; it only fails maintain when --verify-strict
+// (or BRAIN_MAINTAIN_VERIFY_STRICT=1) is set, so drift surfaces as advice
+// without breaking CI until a team chooses to gate on it.
+const verifyStrict = argv.includes('--verify-strict') || process.env.BRAIN_MAINTAIN_VERIFY_STRICT === '1';
+const verify = verifyStrict || argv.includes('--verify') || process.env.BRAIN_MAINTAIN_VERIFY === '1';
 
 const EVAL_PATH = path.join(BRAIN_DIR, 'eval.json');
 
@@ -104,6 +110,16 @@ function main() {
     const cleanCode = npmRun('brain:session', cleanArgs);
     if (cleanCode !== 0 && !hook) return cleanCode;
     say('expired sessions cleaned', '汰');
+  }
+
+  if (verify) {
+    const verifyCode = npmRun('brain:verify', verifyStrict ? ['--strict'] : []);
+    if (verifyStrict && verifyCode !== 0) {
+      say('drift detected (verify-strict)', '殊');
+      if (!hook) return verifyCode;
+    } else {
+      say(verifyCode === 0 ? 'no drift' : 'drift noted (informational)', verifyCode === 0 ? '齊' : '殊');
+    }
   }
 
   const hasEvalFile = exists(EVAL_PATH);
