@@ -86,6 +86,8 @@ Each **record** is: a **384-dimensional** embedding (`Xenova/all-MiniLM-L6-v2`),
 
 **Measuring quality:** `npm run brain:eval` exercises smoke cases (from `.project-brain/eval.json` when present). Expand those cases when you find repeatable blind spots so retrieval regressions stay visible in CI or local runs.
 
+**Contextual Retrieval (opt-in, `BRAIN_CONTEXTUAL_CHUNKS=1`):** When set, the indexer prepends a short deterministic situating prefix (e.g. `[project-brain · module: retrieval · scripts/retrieval.mjs · hybridScore] `) to each chunk's **embedding input only**, so the dense vector carries the chunk's location/identity context (Anthropic's "Contextual Retrieval"). The stored/displayed `text` field is unchanged — agents still see the original chunk. **Default OFF**: with the var unset, indexing is byte-for-byte identical. Re-index (`npm run brain:index --force`) after toggling, and validate recall with `npm run brain:eval` before relying on it. `BRAIN_CONTEXTUAL_PROVIDER` is a reserved seam for a future LLM-generated blurb; only the deterministic generator is implemented today.
+
 ## Token-saving communication
 
 Use the external Caveman skill for compressed agent communication when available.
