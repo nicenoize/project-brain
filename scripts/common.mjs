@@ -203,11 +203,21 @@ export async function listIndexableFiles(opts = {}) {
     'specs/**/*.md',
     'specs/**/*.{yml,yaml,json}'
   ];
+  // Polyglot symbol extraction (Python/Go) is gated OFF by default. When
+  // BRAIN_POLYGLOT_SYMBOLS=1, widen the file listing so .py/.go sources are
+  // discovered and fed through the lite extractor. Unset → byte-for-byte
+  // unchanged file set. Tree-sitter precision is the documented follow-up.
+  const polyglotPatterns = process.env.BRAIN_POLYGLOT_SYMBOLS === '1'
+    ? [
+        '**/*.py',
+        '**/*.go'
+      ]
+    : [];
   const extra = (process.env.BRAIN_INDEX_EXTRA_GLOBS || '')
     .split(/[,;\n]+/)
     .map((s) => s.trim())
     .filter(Boolean);
-  return fg([...patterns, ...extra], {
+  return fg([...patterns, ...polyglotPatterns, ...extra], {
     cwd: root,
     dot: true,
     onlyFiles: true,
