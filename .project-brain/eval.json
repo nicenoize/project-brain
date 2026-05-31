@@ -298,5 +298,111 @@
     "query": "detecting when two services point at the same database schema",
     "expectedFiles": ["scripts/edges/db-shared.mjs"],
     "note": "Hard: 'two services point at the same database' vs the db-shared edge detector (shared migration dir / DATABASE_URL). No 'db-shared' token in query; detector is the best answer."
+  },
+
+  {
+    "query": "why a giant generated lockfile shouldn't outrank a tiny on-topic snippet just for repeating a word",
+    "expectedFiles": [".project-brain/decisions/0002-bm25-keyword-scoring.md"],
+    "note": "Hard: 'giant file outranking a tiny snippet by repetition' vs the ADR's document-length-normalization rationale (replace raw TF-IDF with BM25, b-parameter). No 'BM25/tfidf/length' token in query; this decision uniquely owns the fix."
+  },
+  {
+    "query": "treating an upstream feature-authoring toolkit as something we read rather than absorb",
+    "expectedFiles": [".project-brain/decisions/0012-spec-kit-integration.md"],
+    "note": "Hard: 'read rather than absorb an upstream toolkit' vs the ADR's 'additive overlay, treat spec-kit as upstream consumer'. Query avoids 'spec-kit/overlay'; the absorb-vs-consume decision lives only here."
+  },
+  {
+    "query": "how new files get sorted into kinds like decision or module from just their path",
+    "expectedFiles": ["scripts/infer.mjs"],
+    "note": "Hard: 'sorting files into kinds from their path' vs inferType's path/frontmatter-to-record-type classification. Query uses no 'inferType/type' symbol token; this pure helper is the single home of that logic."
+  },
+  {
+    "query": "the end-to-end walk from listing files to a queryable vector store",
+    "expectedFiles": [".project-brain/modules/indexing.md"],
+    "note": "Hard: 'walk from listing files to a queryable store' vs the indexing module's pipeline overview (list → chunk → embed → upsert). Module doc is the genuinely-best synthesizing answer; query avoids 'index/pipeline' jargon."
+  },
+  {
+    "query": "spanning several neighbouring repos as if they were one knowledge base",
+    "expectedFiles": [".project-brain/modules/fleet.md"],
+    "note": "Hard: 'spanning several neighbouring repos as one' vs the fleet module's 'one brain across N sibling project directories'. Distinct from the discovery ADR — the module doc is the architecture overview; query avoids 'fleet'."
+  },
+  {
+    "query": "the order things go through to turn a question into ranked passages",
+    "expectedFiles": [".project-brain/modules/retrieval.md"],
+    "note": "Hard: 'turning a question into ranked passages' vs the retrieval module's query→candidates→score→dedup overview. Module doc owns the end-to-end narrative; query carries no 'retrieval/hybrid' token."
+  },
+  {
+    "query": "reusing yesterday's relationship findings for repos nobody touched",
+    "expectedFiles": ["scripts/edges/cache.mjs"],
+    "note": "Hard: 'reusing prior findings for untouched repos' vs the per-detector incremental edge cache (restore cached candidates for clean pairs). Query avoids 'cache/detector'; this file uniquely implements the reuse."
+  },
+  {
+    "query": "spotting a shared backbone when several apps read the same configuration key",
+    "expectedFiles": ["scripts/edges/env-var.mjs"],
+    "note": "Hard: 'several apps read the same configuration key' vs env-var detector pairing projects that reference the same env variable. Query avoids 'env/variable'; this detector is the only one keyed on shared config keys."
+  },
+  {
+    "query": "linking a stub-call site to the place its remote contract is declared",
+    "expectedFiles": ["scripts/edges/grpc-client.mjs"],
+    "note": "Hard: 'stub-call site to its remote contract' vs grpc-client matching generated-client constructions to a .proto service in another project. Distinct from proto-schema (which indexes the .proto import itself); this file owns client→service resolution."
+  },
+  {
+    "query": "registering each service's published address from its REST contract file",
+    "expectedFiles": ["scripts/edges/openapi-schema.mjs"],
+    "note": "Hard: 'published address from a REST contract file' vs openapi-schema's registrar extracting server URLs from openapi specs into facts. Query avoids 'openapi/swagger'; this registrar uniquely supplies base URLs for http resolution."
+  },
+  {
+    "query": "one node project pulling in another's published library by its declared name",
+    "expectedFiles": ["scripts/edges/package-dep.mjs"],
+    "note": "Hard: 'pulling in another project's published library by name' vs package-dep matching a dependency against a sibling package.json#name. Query avoids 'package/dep'; this detector owns Node name-match edges."
+  },
+  {
+    "query": "drawing a link when one repo imports another's interface definition file",
+    "expectedFiles": ["scripts/edges/proto-schema.mjs"],
+    "note": "Hard: 'imports another's interface definition file' vs proto-schema linking a .proto import across projects and publishing grpcServices. Distinct from grpc-client; this file owns the .proto import edge itself."
+  },
+  {
+    "query": "guessing the container tag a project would publish so manifests can point back at it",
+    "expectedFiles": ["scripts/edges/image-registry.mjs"],
+    "note": "Hard: 'guessing the container tag a project would publish' vs image-registry deriving each project's image ref and publishing imageRegistry. Distinct from k8s-image (the consumer); this registrar owns ref derivation."
+  },
+  {
+    "query": "a Go module overriding a dependency to point at a sibling folder on disk",
+    "expectedFiles": ["scripts/edges/go-replace.mjs"],
+    "note": "Hard: 'Go module overriding a dependency to a sibling folder' vs go-replace matching `replace => ../sibling` directives. Query avoids 'go-replace'; this detector uniquely handles replace-directive edges."
+  },
+  {
+    "query": "the shared agreement every relationship-finder plugin must satisfy",
+    "expectedFiles": ["scripts/edges/types.mjs"],
+    "note": "Hard: 'shared agreement every plugin must satisfy' vs the detector contract typedefs (DetectorContext, EdgeCandidate). Query avoids 'type/contract'; this file is the single source of the detector interface."
+  },
+  {
+    "query": "prepending a little where-am-I blurb to a snippet before turning it into a vector",
+    "expectedFiles": ["scripts/contextual.mjs"],
+    "note": "Hard: 'prepending a where-am-I blurb before vectorizing' vs contextual retrieval's deterministic situating-prefix generator. Query avoids 'contextual'; this module uniquely builds the per-chunk prefix."
+  },
+  {
+    "query": "answering what else breaks if I rename this identifier",
+    "expectedFiles": ["scripts/brain-impact.mjs"],
+    "note": "Hard: 'what breaks if I rename this identifier' vs the symbol impact analyzer gathering callers/callees/tests/ADRs. Query avoids 'impact'; this script is the single tool for blast-radius lookup."
+  },
+  {
+    "query": "emitting a picture of how files modules and symbols connect for other tooling",
+    "expectedFiles": ["scripts/brain-graph.mjs"],
+    "note": "Hard: 'a picture of how files/modules/symbols connect' vs brain-graph exporting JSON/Mermaid of the indexed edges. Query avoids 'graph'; this script owns the export."
+  },
+  {
+    "query": "pulling symbols out of Python and Go where the TypeScript compiler can't help",
+    "expectedFiles": ["scripts/lang-symbols.mjs"],
+    "note": "Hard: 'symbols from Python and Go without the TS compiler' vs the language-agnostic lite extractor covering the languages chunk.mjs's TS path doesn't. Query avoids 'lang-symbols'; this is the only polyglot extractor."
+  },
+  {
+    "query": "moving long-finished items out of the working notes into a dated archive",
+    "expectedFiles": ["scripts/brain-prune.mjs"],
+    "note": "Hard: 'moving long-finished items into a dated archive' vs prune relocating >=30d-complete bullets from active_state.md into history/YYYY-MM.md. Query avoids 'prune'; this script uniquely owns durable-memory trimming."
+  },
+  {
+    "query": "flagging index entries that point at files no longer on disk",
+    "expectedFiles": ["scripts/brain-health.mjs"],
+    "note": "Hard: 'index entries pointing at files no longer on disk' vs the health report's ghost-path detection and store/mirror drift checks. Query avoids 'health'; this read-only report is the single home of those checks."
   }
 ]
