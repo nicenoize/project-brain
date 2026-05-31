@@ -192,5 +192,111 @@
     "expectedFiles": ["scripts/retrieval.mjs", ".project-brain/decisions/0012-spec-kit-integration.md"],
     "expectedSymbols": ["canonicalBrainBoost"],
     "expectedTypes": ["code", "decision"]
+  },
+
+  {
+    "query": "how do we stop two agents clobbering the same shared file",
+    "expectedFiles": [".project-brain/decisions/0005-active-state-exclusive-lock.md"],
+    "note": "Hard: query says 'clobbering/shared file'; target speaks of 'exclusive lock' and 'overwrite' — zero filename/symbol overlap, dense must earn it. ADR is the genuinely-best answer (it is the decision that introduced the write protection)."
+  },
+  {
+    "query": "what keeps a crashed worker from leaving the system jammed forever",
+    "expectedFiles": [".project-brain/decisions/0005-active-state-exclusive-lock.md"],
+    "note": "Hard: 'crashed worker / jammed' vs the ADR's 'stale lock takeover'. No lexical overlap; the stale-lock takeover rule lives only in this decision."
+  },
+  {
+    "query": "preventing duplicate work when two coordinators start at once",
+    "expectedFiles": [".project-brain/decisions/0006-orchestrator-slot-lease.md"],
+    "note": "Hard: 'duplicate work / coordinators' maps to 'orchestrator slot lease / over-spawn'. The concept (racing orchestrators) is described only here, with different vocabulary."
+  },
+  {
+    "query": "avoiding redundant recomputation of folder digests after a tiny edit",
+    "expectedFiles": [".project-brain/decisions/0007-incremental-summary-rebuild.md"],
+    "note": "Hard: 'folder digests / redundant recomputation' vs 'module summary incremental rebuild / dirty dirs'. Genuinely-best target; the dirty-set rebuild rationale is unique to this ADR."
+  },
+  {
+    "query": "keeping the editor responsive while the background reindex runs",
+    "expectedFiles": [".project-brain/decisions/0013-lazy-sync-performance.md"],
+    "note": "Hard: 'editor responsive / background reindex' vs 'nice + ionice, bg-sync priority'. No keyword overlap; the CPU/IO-priority decision is only in this ADR."
+  },
+  {
+    "query": "skip re-embedding chunks whose text did not actually change",
+    "expectedFiles": [".project-brain/decisions/0013-lazy-sync-performance.md"],
+    "note": "Hard: 'skip re-embedding unchanged chunks' is the vector-reuse idea; ADR phrases it as 'chunk-level vector reuse keyed by sha256(embeddingText)'. Same decision doc, different words."
+  },
+  {
+    "query": "why one strong vector match should not be drowned out by tag bonuses",
+    "expectedFiles": [".project-brain/decisions/0001-hybrid-score-normalization.md"],
+    "note": "Hard: 'tag bonuses drowning a strong match' vs 'metadata clamp / symbol multiplier / score cap'. The scoring-balance rationale is unique to this normalization ADR."
+  },
+  {
+    "query": "stop one long file from hogging every top result slot",
+    "expectedFiles": [".project-brain/decisions/0004-result-deduplication-per-file.md"],
+    "note": "Hard: 'hogging result slots' vs 'cap non-summary chunks per file / dedup'. The per-file diversity cap rationale lives only in this ADR."
+  },
+  {
+    "query": "why we only re-rank the nearest neighbours instead of the whole library",
+    "expectedFiles": [".project-brain/decisions/0003-dense-candidate-only-scoring.md"],
+    "note": "Hard: 'nearest neighbours vs whole library' vs 'score only over the dense candidate set'. The O(N) full-corpus-scan removal rationale is unique to this decision."
+  },
+  {
+    "query": "fitting long directory descriptions into the small embedding window",
+    "expectedFiles": [".project-brain/decisions/0008-aggregate-vector-records.md"],
+    "note": "Hard: 'small embedding window / long directory descriptions' vs 'MiniLM 256-token context truncation, tighter folder embeddings'. The truncation fix is described only here."
+  },
+  {
+    "query": "automatically noticing several related codebases sitting side by side",
+    "expectedFiles": [".project-brain/decisions/0009-fleet-mode-discovery.md"],
+    "note": "Hard: 'noticing related codebases side by side' vs 'fleet-mode discovery of sibling project directories'. No 'fleet' token in the query; discovery rationale is unique to this ADR."
+  },
+  {
+    "query": "telling apart same-named files that belong to different services",
+    "expectedFiles": [".project-brain/decisions/0011-fleet-active-state-coordination.md"],
+    "note": "Hard: 'same-named files in different services' vs 'project column so backend/lib/auth.ts and frontend/lib/auth.ts don't collide'. The project-column disambiguation is only in this ADR."
+  },
+  {
+    "query": "figuring out which services actually talk to each other at runtime",
+    "expectedFiles": [".project-brain/decisions/0010-cross-project-edge-detection.md"],
+    "note": "Hard: 'which services talk to each other' vs 'cross-project edge detection via pluggable detectors'. The runtime-relationship materialization rationale is unique to this decision."
+  },
+  {
+    "query": "letting the assistant pick up where a teammate's chat left off",
+    "expectedFiles": [".project-brain/modules/coordination.md"],
+    "note": "Hard: 'pick up where a teammate left off' vs the coordination module's shared active_state surface for multiple agents. File-level doc is the best synthesizing answer."
+  },
+  {
+    "query": "how background automation refreshes context without anyone remembering to",
+    "expectedFiles": [".project-brain/modules/hooks.md"],
+    "note": "Hard: 'background automation refreshes context' vs hooks module's 'keeps the brain fresh without relying on the developer to remember'. Module doc is the genuinely-best target."
+  },
+  {
+    "query": "what makes a query count as an architecture or policy question",
+    "expectedFiles": ["scripts/retrieval.mjs"],
+    "note": "Hard: 'architecture or policy question' maps to retrieval's architectural-intent classifier (how/why + decision/policy/architecture regex). Concept lives in code with no matching symbol name in the query; file-level only (no expectedSymbols)."
+  },
+  {
+    "query": "saturation control for how much a repeated word can score",
+    "expectedFiles": ["scripts/retrieval.mjs"],
+    "note": "Hard: 'saturation control for a repeated word' is the BM25 k1 term-frequency-saturation parameter inside tfidfScore. Query uses no 'BM25/k1/tfidf' token; file-level dense recall test."
+  },
+  {
+    "query": "reading the leading comment to summarize what a source file is for",
+    "expectedFiles": ["scripts/chunk.mjs"],
+    "note": "Hard: 'leading comment to summarize a file' vs extractCodeIntent's 'leading JSDoc / first comment line intent sentence'. File-level only; symbol name deliberately not in query."
+  },
+  {
+    "query": "rules that reject a branch name before letting a commit through",
+    "expectedFiles": ["scripts/brain-guard.mjs"],
+    "note": "Hard: 'reject a branch name before a commit' vs brain-guard's pre-commit branch-base validation regexes. No 'guard' token in query; file is the genuinely-best target."
+  },
+  {
+    "query": "matching producers and consumers that share a topic or queue name",
+    "expectedFiles": ["scripts/edges/pubsub.mjs"],
+    "note": "Hard: 'producers and consumers sharing a topic' maps to the pubsub edge detector. The query avoids 'pubsub/edge'; this detector is the only place that pairs producer/consumer by topic name."
+  },
+  {
+    "query": "detecting when two services point at the same database schema",
+    "expectedFiles": ["scripts/edges/db-shared.mjs"],
+    "note": "Hard: 'two services point at the same database' vs the db-shared edge detector (shared migration dir / DATABASE_URL). No 'db-shared' token in query; detector is the best answer."
   }
 ]

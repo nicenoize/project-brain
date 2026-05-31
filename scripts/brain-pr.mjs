@@ -5,28 +5,37 @@
  * developer/agent can paste or `gh pr create --body-file`.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';
 import { activeStateJson } from './active-state.mjs';
-import { read, write } from './common.mjs';
+import { BRAIN_DIR, ROOT, ensureDir, exists, read, write } from './common.mjs';
+import { parseFeatureSpec, workstreamMatchesFeature } from './feature-spec.mjs';
+
+const KNOWN_COMMANDS = ['prepare', 'stage'];
 
 const args = process.argv.slice(2);
-const command = args[0] === 'prepare' ? args.shift() : 'prepare';
+const command = KNOWN_COMMANDS.includes(args[0]) ? args.shift() : 'prepare';
 const opts = parseArgs(args);
 
-if (opts.help || command !== 'prepare') {
+if (opts.help) {
   console.log(`Usage:
-  npm run brain:pr -- prepare [--task issue-123-auth] [--write .project-brain/pr-body.md] [--github]
+  npm run brain:pr -- prepare [--task issue-123-auth] [--write <path>] [--github]
+  npm run brain:pr -- stage   --feature <slug> [--write] [--out <dir>]
 `);
-  process.exit(opts.help ? 0 : 1);
+  process.exit(0);
 }
 
-const body = buildPrBody(opts);
-if (opts.write) {
-  write(opts.write, body);
-  console.log(`Wrote ${opts.write}`);
+if (command === 'prepare') {
+  const body = buildPrBody(opts);
+  if (opts.write) {
+    write(opts.write, body);
+    console.log(`Wrote ${opts.write}`);
+  }
+  if (opts.github) createOrUpdatePr(body, opts);
+  else console.log(body);
+} else if (command === 'stage') {
+  stageFeaturePrs(opts);
 }
-if (opts.github) createOrUpdatePr(body, opts);
-else console.log(body);
 
 function buildPrBody(opts) {
   const branch = sh('git rev-parse --abbrev-ref HEAD') || 'unknown';
@@ -171,8 +180,131 @@ function parseArgs(argv) {
     if (a === '--base') { opts.base = val; i += val ? 1 : 0; continue; }
     if (a === '--title') { opts.title = val; i += val ? 1 : 0; continue; }
     if (a === '--write') { opts.write = val || '.project-brain/pr-body.md'; i += val ? 1 : 0; continue; }
+    if (a === '--feature') { opts.feature = val; i += val ? 1 : 0; continue; }
+    if (a === '--out') { opts.out = val; i += val ? 1 : 0; continue; }
   }
   return opts;
+}
+
+/**
+ * Stage one PR body per project for a multi-repo feature. Reads the spec at
+ * .project-brain/features/<slug>.md, finds the linked workstreams in
+ * active_state.md (one per project), and writes one body per project to
+ * .project-brain/pr-bodies/<slug>-<project>.md (or --out dir).
+ */
+function stageFeaturePrs(o) {
+  const slug = (o.feature || '').trim();
+  if (!slug) {
+    process.stderr.write('[brain:pr] stage requires --feature <slug>\n');
+    process.exit(1);
+  }
+  const specPath = path.join(BRAIN_DIR, 'features', `${slug}.md`);
+  if (!exists(specPath)) {
+    process.stderr.write(`[brain:pr] feature spec not found: ${path.relative(ROOT, specPath)}\n`);
+    process.exit(1);
+  }
+  const specBody = read(specPath);
+  const meta = parseFeatureSpec(specBody);
+  const featureTitle = meta.title || slug;
+  const issue = meta.issue || '';
+
+  const state = (() => { try { return activeStateJson(); } catch { return { workstreams: [], leases: [] }; } })();
+  const linked = state.workstreams.filter(w => workstreamMatchesFeature(w, slug));
+
+  const projectBranches = new Map();
+  for (const w of linked) {
+    if (w.project && w.branch) projectBranches.set(w.project, w.branch);
+  }
+
+  let projectList = (meta.projects || []).slice();
+  if (!projectList.length && projectBranches.size) {
+    projectList = [...projectBranches.keys()];
+  }
+  if (!projectList.length) {
+    // Single-project fallback: emit one body labeled "this-repo".
+    const curBranch = linked[0]?.branch || sh('git rev-parse --abbrev-ref HEAD') || 'unknown';
+    projectList = ['this-repo'];
+    projectBranches.set('this-repo', curBranch);
+  }
+
+  const outDir = o.out || path.join(BRAIN_DIR, 'pr-bodies');
+  const bodies = [];
+  for (const project of projectList) {
+    const branch = projectBranches.get(project) || (issue ? `feature/${issue}-${slug}` : `feature/${slug}`);
+    const body = renderStageBody({
+      slug,
+      title: featureTitle,
+      issue,
+      project,
+      projects: projectList,
+      projectBranches,
+      branch,
+      specPath: path.relative(ROOT, specPath),
+      hasContractChanges: /^##\s+Contract changes/m.test(specBody)
+    });
+    bodies.push({ project, branch, body });
+
+    if (o.write) {
+      ensureDir(outDir);
+      const outPath = path.join(outDir, `${slug}-${project}.md`);
+      write(outPath, body);
+      console.log(`Wrote ${path.relative(ROOT, outPath)}`);
+    }
+  }
+
+  if (!o.write) {
+    for (const { project, body } of bodies) {
+      console.log(`\n=== ${project} ===\n`);
+      console.log(body);
+    }
+  }
+}
+
+function renderStageBody({ slug, title, issue, project, projects, projectBranches, branch, specPath, hasContractChanges }) {
+  const lines = [
+    '## Summary',
+    '',
+    `Part of feature [\`${slug}\`](${specPath}) — ${title}.`,
+    `Project: \`${project}\`. Branch: \`${branch}\`.`,
+    '',
+    '## Cross-repo coordination',
+    '',
+    `This PR is one of ${projects.length} linked PR${projects.length === 1 ? '' : 's'} for this feature.`,
+    ...(projects.length > 1 ? ['Linked branches (keep consistent across repos):', ''] : []),
+  ];
+  if (projects.length > 1) {
+    for (const p of projects) {
+      const b = projectBranches.get(p) || branch;
+      const marker = p === project ? ' ← **this PR**' : '';
+      lines.push(`- \`${p}\`: \`${b}\`${marker}`);
+    }
+    lines.push('');
+    lines.push('## Merge order');
+    lines.push('');
+    lines.push('Contract / schema changes (proto / openapi / shared types) merge first; downstream consumers follow.');
+    lines.push('');
+  }
+  lines.push('## Verification');
+  lines.push('');
+  lines.push('- [ ] `npm run brain:guard`');
+  lines.push('- [ ] Lint/typecheck/test from `repo_context.md`');
+  if (projects.length > 1) lines.push('- [ ] Cross-project consumers checked (`npm run brain:edges`)');
+  lines.push('- [ ] Feature spec acceptance criteria met');
+  lines.push('');
+  if (hasContractChanges) {
+    lines.push('## ⚠️ Contract changes');
+    lines.push('');
+    lines.push(`The feature spec lists contract changes — review the **Contract changes** section in [\`${specPath}\`](${specPath}) and confirm every downstream consumer in this PR.`);
+    lines.push('');
+  }
+  lines.push('## Feature spec');
+  lines.push('');
+  lines.push(`See [\`${specPath}\`](${specPath}) for goal, constraints, and acceptance criteria.`);
+  lines.push('');
+  if (issue) lines.push(`Closes #${issue}`);
+  else lines.push('<!-- Add Closes #<issue> if applicable -->');
+  lines.push('');
+  return lines.join('\n');
 }
 
 function sh(cmd) {
