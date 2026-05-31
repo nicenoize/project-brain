@@ -142,6 +142,15 @@ flowchart LR
 
 See [`docs/brain-architecture.md`](docs/brain-architecture.md) for the runtime data flow (chunk → embed → store → retrieve → rank) and the full hook map. Symbol-index roadmap: [`docs/roadmap-symbol-index.md`](docs/roadmap-symbol-index.md).
 
+## Solo multi-repo workflow
+
+If you're the only brain user working across many repos (multiple frontends,
+backends, k8s clusters, services), there's a focused guide at
+[`docs/solo-multi-repo-setup.md`](docs/solo-multi-repo-setup.md). It covers
+the sibling-checkout layout, the new commands (`brain:feature`,
+`brain:pack --for-agent`, `brain:pr stage`, `brain:handoff`), security gates,
+hand-off for vacation/illness, and AI-agent priming.
+
 ## Team workflow
 
 Each team member runs:
