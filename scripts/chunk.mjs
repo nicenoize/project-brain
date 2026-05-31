@@ -1,7 +1,24 @@
 import path from 'node:path';
 import { chunkText } from './common.mjs';
+import { extractLiteSymbols, isLiteCodeExt } from './lang-symbols.mjs';
 
 const DEFAULT_MAX_CHARS = 1800;
+
+/**
+ * Polyglot (Python/Go) lite symbol extraction is gated OFF by default behind
+ * BRAIN_POLYGLOT_SYMBOLS=1. When unset, indexing is byte-for-byte unchanged —
+ * .py/.go files fall through to the markdown chunker exactly as before. The
+ * intent is to flip this default-on after validation; tree-sitter precision is
+ * the documented follow-up.
+ */
+export function polyglotSymbolsEnabled() {
+  return process.env.BRAIN_POLYGLOT_SYMBOLS === '1';
+}
+
+/** Is this an extension we'll handle as a code file (TS/JS precise OR polyglot lite)? */
+function isHandledCodeExt(ext) {
+  return isCodeExt(ext) || (polyglotSymbolsEnabled() && isLiteCodeExt(ext));
+}
 
 export function chunkMarkdown(text, opts = {}) {
   const maxChars = opts.maxChars || DEFAULT_MAX_CHARS;
@@ -76,9 +93,51 @@ export async function chunkCode(text, filePath, opts = {}) {
   return chunks;
 }
 
+/**
+ * Polyglot-lite code chunker for languages outside the TS/JS AST path
+ * (Python/Go today). Splits on size only (no per-symbol windowing — that's a
+ * tree-sitter follow-up) but carries the regex-extracted symbols /
+ * exportedSymbols / references on EVERY chunk so the existing impact + graph
+ * machinery sees them. Only reached when BRAIN_POLYGLOT_SYMBOLS=1.
+ */
+export function chunkLiteCode(text, filePath, opts = {}) {
+  const maxChars = opts.maxChars || DEFAULT_MAX_CHARS;
+  const { symbols, exportedSymbols, references } = extractLiteSymbols(filePath, text);
+  const imports = findImports(text);
+  // Size-only splitting with bounded overlap. Small files (the common case)
+  // stay a single chunk. Per-symbol windowing is the tree-sitter follow-up.
+  const parts = splitBySize(text, maxChars, Math.min(opts.overlap || 250, Math.floor(maxChars / 4)));
+  return parts.filter(Boolean).map((part) => ({
+    text: part,
+    heading: symbols.length ? symbols.slice(0, 12).join(', ') : path.basename(filePath),
+    embeddingText: `${filePath}\n${part}`,
+    symbols,
+    symbolKinds: [],
+    exportedSymbols,
+    lineStart: 1,
+    lineEnd: lineNumberAt(part, part.length),
+    imports,
+    references
+  }));
+}
+
 export function chunkSummary(text, filePath, docData = {}, tsSemantics = null) {
   const ext = path.extname(filePath);
   const title = docData.title || path.basename(filePath);
+  if (!isCodeExt(ext) && polyglotSymbolsEnabled() && isLiteCodeExt(ext)) {
+    const { symbols, exportedSymbols } = extractLiteSymbols(filePath, text);
+    const names = uniqueStrings([...exportedSymbols, ...symbols]).slice(0, 40);
+    const imports = findImports(text).slice(0, 40);
+    const intent = extractCodeIntent(text);
+    return {
+      text: [`# ${title}`, `File: ${filePath}`, intent, names.length ? `Exports/symbols: ${names.join(', ')}` : 'No exported symbols detected.', imports.length ? `Imports: ${imports.join(', ')}` : ''].filter(Boolean).join('\n'),
+      heading: title,
+      isSummary: true,
+      symbols: names,
+      imports: uniqueStrings(imports).slice(0, 48),
+      references: []
+    };
+  }
   if (isCodeExt(ext)) {
     const symbols = findSymbolsRegex(text).map(symbol => symbol.name).slice(0, 40);
     const imports = findImports(text).slice(0, 40);
@@ -114,9 +173,17 @@ export function chunkSummary(text, filePath, docData = {}, tsSemantics = null) {
 export async function dispatchChunker(filePath, text, docData = {}, opts = {}) {
   const tsSemantics = opts.tsContext?.get?.(filePath) || null;
   const summary = chunkSummary(text, filePath, docData, tsSemantics);
-  const chunks = isCodeExt(path.extname(filePath))
-    ? await chunkCode(text, filePath, { ...opts, tsSemantics })
-    : chunkMarkdown(text, opts);
+  const ext = path.extname(filePath);
+  let chunks;
+  if (isCodeExt(ext)) {
+    // Precise TS/JS AST path — unchanged.
+    chunks = await chunkCode(text, filePath, { ...opts, tsSemantics });
+  } else if (polyglotSymbolsEnabled() && isLiteCodeExt(ext)) {
+    // Polyglot fallback (Python/Go), env-gated. Leaves the TS/JS path untouched.
+    chunks = chunkLiteCode(text, filePath, opts);
+  } else {
+    chunks = chunkMarkdown(text, opts);
+  }
   return [
     { ...summary, chunk: -1, embeddingText: `${filePath}\n${summary.text}` },
     ...chunks.map((chunk, index) => ({
@@ -316,6 +383,24 @@ function mergeSemanticsChunk(chunk, fullFileText, tsSemantics) {
 
 function uniqueStrings(list) {
   return [...new Set(list.map(String).filter(Boolean))];
+}
+
+/**
+ * Fixed-window split with a bounded overlap that always makes forward progress
+ * (avoids the overlap-underflow looping that bites the shared chunkText on
+ * inputs <= overlap). Used by the polyglot-lite code chunker.
+ */
+function splitBySize(text, maxChars, overlap) {
+  const clean = String(text).replace(/\r\n/g, '\n').trim();
+  if (!clean) return [];
+  if (clean.length <= maxChars) return [clean];
+  const step = Math.max(1, maxChars - Math.max(0, overlap));
+  const chunks = [];
+  for (let i = 0; i < clean.length; i += step) {
+    chunks.push(clean.slice(i, Math.min(i + maxChars, clean.length)).trim());
+    if (i + maxChars >= clean.length) break;
+  }
+  return chunks.filter(Boolean);
 }
 
 function lineRangeToOffsets(text, lineStart, lineEnd) {

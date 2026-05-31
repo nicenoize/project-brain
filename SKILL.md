@@ -193,6 +193,10 @@ The skill and Markdown layers improve **answer** quality; **`npm run brain:maint
 - `BRAIN_FAST=1` — fast iteration mode. Sync hooks become no-ops, retrieval uses the JSON store with summary-only results, and module/feature/project summaries are not rebuilt during indexing. Recommended local default during heavy edit loops; CI keeps it off so retrieval quality stays high.
 - `BRAIN_BACKGROUND=1` — pre-commit hook sets this so `brain:sync` self-decides foreground vs detached background indexing instead of blocking the commit. Manual `npm run brain:sync` runs foreground by default.
 
+### Polyglot symbols (Python + Go)
+
+- `BRAIN_POLYGLOT_SYMBOLS=1` — **default OFF.** When set, `.py` and `.go` files are indexed as `type:code` records with regex/heuristic-extracted `symbols`, `exportedSymbols`, and `references`, so `brain:impact` and `brain:graph` work in Python/Go repos (today they are effectively TS/JS-only, since precise extraction runs through the TypeScript compiler). Python exports = top-level `def`/`class`/module assignments not prefixed with `_`; Go exports = capitalized identifiers. With the flag unset, the indexed file set and every record are byte-for-byte unchanged. The intent is to flip this default-on after validation. This first increment is regex-based (lightweight, no native deps); **tree-sitter precision is the planned follow-up** and will replace the heuristics behind the same record interface.
+
 When asked to sync:
 
 ```bash
