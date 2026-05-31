@@ -127,6 +127,24 @@ npm run brain:ask -- "query text" --task issue-99-slug --actor cursor-worker-a -
 npm run brain:ask -- "query text" --explain          # show route decision without running
 ```
 
+### Reasoning cache (`brain:explain`)
+
+`brain:ask` answers are throwaway — the brain re-derives the same explanation every session. `brain:explain` is the reasoning cache: it captures a synthesized answer as a durable, cited `explainer` record under `.project-brain/explainers/<slug>.md` and tracks whether it has gone stale.
+
+```bash
+# Save an answer (text from stdin or --answer-file), citing the sources it came from.
+npm run brain:ask -- "how does sync flush work" | npm run brain:explain -- save --query "how does sync flush work" --sources scripts/brain-sync.mjs,scripts/common.mjs --actor cursor-worker-a
+npm run brain:explain -- save --query "..." --answer-file answer.md --sources a.mjs,b/c.md
+
+# Re-check freshness: an explainer is STALE if any cited source's content changed or the file is gone.
+npm run brain:explain -- check            # human report
+npm run brain:explain -- check --json     # machine-readable
+npm run brain:explain -- check --strict   # non-zero exit if any stale (CI / pre-commit gate)
+npm run brain:explain -- list             # explainers with fresh/stale status
+```
+
+Each record stores `query`, `created`/`updated`, `actor`, and `sources:` as `{ path, sha256 }` where the hash is the cited file's content at save time. `check`/`list` re-hash each source's current content; a mismatch (or missing file) marks the cached answer STALE — the staleness invalidation that pairs with the brain's drift philosophy. `save` is idempotent by slug (re-save updates the body + `updated` + re-hashes sources, preserves `created`). v1 deliberately does NOT touch retrieval ranking; a search boost for explainers is a planned follow-up.
+
 The router decides between direct file read, symbol search, doc summary, module summary, vector search, or budgeted pack. Only fall back to the lower-level commands when the router result is insufficient:
 
 ```bash
