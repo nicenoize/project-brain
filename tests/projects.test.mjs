@@ -87,6 +87,27 @@ test('discoverProjects: BRAIN_FLEET_EXCLUDE blacklist', () => {
   }
 });
 
+test('discoverProjects: BRAIN_FLEET_NESTED_DIRS descends into a container dir', () => {
+  const root = tmpFleet();
+  mkProject(root, 'backend', { 'go.mod': 'module backend' });
+  // modules/ has no marker of its own -> invisible to the depth-1 scan.
+  mkProject(root, 'modules/nmessenger', { 'go.mod': 'module x/nmessenger' });
+  mkProject(root, 'modules/s3storage', { 'go.mod': 'module x/s3storage' });
+  // default OFF: container stays invisible
+  assert.deepEqual(discoverProjects(root).map(p => p.name), ['backend']);
+  // opt-in via option
+  const viaOpt = discoverProjects(root, { nested: 'modules' });
+  assert.deepEqual(viaOpt.map(p => p.name), ['backend', 'nmessenger', 's3storage']);
+  assert.equal(viaOpt.find(p => p.name === 'nmessenger').dir, 'modules/nmessenger');
+  // opt-in via env
+  process.env.BRAIN_FLEET_NESTED_DIRS = 'modules';
+  try {
+    assert.deepEqual(discoverProjects(root).map(p => p.name), ['backend', 'nmessenger', 's3storage']);
+  } finally {
+    delete process.env.BRAIN_FLEET_NESTED_DIRS;
+  }
+});
+
 test('discoverProjects skips node_modules, skills, .git, hidden dirs', () => {
   const root = tmpFleet();
   mkProject(root, 'node_modules', { 'package.json': '{}' });
