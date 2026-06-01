@@ -495,7 +495,7 @@ What changes:
 
 - Every indexed record carries `project: <name>` (single-project mode keeps `''`).
 - Three new record kinds: `repo-summary` (`chunk:-7`), `fleet-summary` (`chunk:-8`), `cross-project-edge` (`chunk:-9`).
-- 11 pluggable edge detectors under `scripts/edges/` populate the cross-project graph: `k8s-image`, `http-client`, `grpc-client`, `proto-schema`, `openapi-schema`, `env-var`, `pubsub` (Kafka/RabbitMQ/Redis/SQS/PubSub), `db-shared`, `package-dep`, `go-replace` (+ `image-registry` registrar).
+- 12 pluggable edge detectors under `scripts/edges/` populate the cross-project graph: `k8s-image`, `http-client`, `grpc-client`, `proto-schema`, `openapi-schema`, `env-var`, `k8s-env-injection`, `pubsub` (Kafka/RabbitMQ/Redis/SQS/PubSub), `db-shared`, `package-dep`, `go-replace` (+ `image-registry` registrar). `k8s-env-injection` emits **directed** edges from an orchestrator that injects a workload env (Go `corev1.EnvVar{Name:"X"}` or Helm `env:`) → the project that reads it (`os.Getenv`, viper `mapstructure:"x"`, `env:`/`envconfig:` tags) — the operator→pod seam that import/schema detectors can't see.
 - `active_state.md` gets a `project` column on both workstreams + leases tables (legacy 6-/4-column files keep parsing).
 
 CLI surface:
@@ -523,6 +523,10 @@ Configuration:
 BRAIN_FLEET_MODE=0|1                      force off / on
 BRAIN_FLEET_PROJECTS=backend,workers      discovery whitelist
 BRAIN_FLEET_EXCLUDE=tooling,scripts       discovery blacklist
+BRAIN_FLEET_NESTED_DIRS=modules           descend one level into marker-less
+                                          container dirs (e.g. a modules/ monorepo
+                                          of many go.mod) so each child is a project;
+                                          default off = depth-1 scan unchanged
 BRAIN_FLEET_SERVICE_URLS=backend=https://backend.svc,...
                                           high-confidence http-client resolution
 BRAIN_EDGE_TIMEOUT_MS=30000               per-detector budget
