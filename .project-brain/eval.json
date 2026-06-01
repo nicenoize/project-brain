@@ -404,5 +404,216 @@
     "query": "flagging index entries that point at files no longer on disk",
     "expectedFiles": ["scripts/brain-health.mjs"],
     "note": "Hard: 'index entries pointing at files no longer on disk' vs the health report's ghost-path detection and store/mirror drift checks. Query avoids 'health'; this read-only report is the single home of those checks."
+  },
+
+  {
+    "query": "one command that figures out the question type and runs the right lookup so an agent need not chain steps",
+    "expectedFiles": ["scripts/brain-ask.mjs"],
+    "note": "Hard: 'figures out question type and runs the right lookup in one shot' vs brain-ask's top-level router classifying architectural-vs-symbol-vs-freeform and picking search/pack. Query avoids 'ask/router'; this is the single one-shot entry point."
+  },
+  {
+    "query": "tapping me on the shoulder with what I should know before I touch a set of files",
+    "expectedFiles": ["scripts/brain-brief.mjs"],
+    "note": "Hard: 'taps you on the shoulder before you touch files' vs brain-brief's proactive read-only pre-touch advisories (leases/ADRs/edges/sessions). Query avoids 'brief'; this push-not-pull advisory is the only file that does it."
+  },
+  {
+    "query": "scaffolding a numbered decision record from just a title with the frontmatter prefilled",
+    "expectedFiles": ["scripts/brain-adr.mjs"],
+    "note": "Hard: 'scaffolding a numbered decision record from a title' vs the ADR generator computing the next NNNN and filling module/feature/status frontmatter. Query avoids 'adr/decision file'; this is the only scaffolder."
+  },
+  {
+    "query": "saving a bounded resume note for the current thread when context is about to be trimmed",
+    "expectedFiles": ["scripts/brain-compact.mjs"],
+    "note": "Hard: 'bounded resume note when context is about to be trimmed' vs auto-compact writing a tight resume slice tagged with task/actor for the next session. Query avoids 'compact'; this is the dedicated auto-compaction writer."
+  },
+  {
+    "query": "keeping a reusable cited answer so we stop re-deriving the same explanation every session",
+    "expectedFiles": ["scripts/brain-explain.mjs"],
+    "note": "Hard: 'reusable cited answer so we stop re-deriving it' vs brain-explain's durable reasoning cache with source hashes and staleness. Query avoids 'explain/explainer'; this is the only durable-answer cache."
+  },
+  {
+    "query": "kicking off one piece of work across several repos with a worktree and a tracked stream per repo",
+    "expectedFiles": ["scripts/brain-feature.mjs"],
+    "note": "Hard: 'one piece of work across several repos, a worktree and tracked stream per repo' vs brain-feature's cross-repo coordination (spec + per-project worktree + workstream). Query avoids 'feature'; this is the only multi-repo coordinator."
+  },
+  {
+    "query": "a self-contained brief a colleague can read while I'm on leave even if they don't use the tool",
+    "expectedFiles": ["scripts/brain-handoff.mjs"],
+    "note": "Hard: 'self-contained brief for a colleague while I'm on leave' vs brain-handoff generating HANDOFF.md from state/git/decisions/PRs. Query avoids 'handoff'; this absence-brief generator uniquely owns it."
+  },
+  {
+    "query": "reserving a glob for one worker so others see it before editing the same path",
+    "expectedFiles": ["scripts/brain-lease.mjs"],
+    "note": "Hard: 'reserving a glob for one worker so others see it' vs the lease CLI managing the File Leases table via the state lock. Query avoids 'lease'; this CLI is the single owner of that reservation surface."
+  },
+  {
+    "query": "catching when a path mentioned inside the curated notes no longer exists in the tree",
+    "expectedFiles": ["scripts/brain-link-check.mjs"],
+    "note": "Hard: 'a path mentioned in the notes no longer exists' vs link-check verifying code-path references inside .project-brain/**.md against disk. Query avoids 'link-check'; distinct from symbol drift (brain-verify), this owns path rot."
+  },
+  {
+    "query": "blocking an edit that matches a forbidden regex pattern scoped to certain globs",
+    "expectedFiles": ["scripts/brain-lint-conventions.mjs"],
+    "note": "Hard: 'blocking an edit matching a forbidden regex scoped to globs' vs the convention enforcer reading rules from conventions.json as a PreToolUse hook. Query avoids 'convention/lint'; this is the only rule-pattern gate."
+  },
+  {
+    "query": "the recommended single entry point that freshens the index then runs a health check",
+    "expectedFiles": ["scripts/brain-maintain.mjs"],
+    "note": "Hard: 'single entry point that freshens index then health-checks' vs brain-maintain wrapping sync + health + optional eval. Query avoids 'maintain'; this orchestration wrapper is the recommended automation entry point."
+  },
+  {
+    "query": "assembling a structured change description from the branch's commits and its tracked stream",
+    "expectedFiles": ["scripts/brain-pr.mjs"],
+    "note": "Hard: 'structured change description from branch commits and tracked stream' vs brain-pr synthesizing a PR body from commits + active_state row + issue. Query avoids 'pr'; this assembler uniquely owns the body."
+  },
+  {
+    "query": "listing the discovered sibling repos with how many runtime links point in and out of each",
+    "expectedFiles": ["scripts/brain-projects.mjs"],
+    "note": "Hard: 'listing sibling repos with link counts in and out' vs brain-projects printing discovered fleet projects with their kinds and in/out edge counts. Query avoids 'projects'; this read-only lister is the single home."
+  },
+  {
+    "query": "wiping the local vector store and queuing a clean rebuild when the table schema gets wedged",
+    "expectedFiles": ["scripts/brain-repair.mjs"],
+    "note": "Hard: 'wiping the local vector store and queuing a clean rebuild when schema wedges' vs brain-repair nuking vector-db/mirror/manifest after Lance schema errors. Query avoids 'repair'; this is the only reset-and-rebuild tool."
+  },
+  {
+    "query": "computing which files actually changed since last time so only those get re-embedded",
+    "expectedFiles": ["scripts/brain-sync.mjs"],
+    "note": "Hard: 'which files changed since last time so only those re-embed' vs brain-sync diffing content hashes against the manifest and passing changed/deleted to the indexer. Query avoids 'sync'; this incremental driver owns it."
+  },
+  {
+    "query": "carving a big job into worker-sized chunks one agent can finish in a single sitting",
+    "expectedFiles": ["scripts/brain-ticket.mjs"],
+    "note": "Hard: 'carving a big job into worker-sized chunks for one sitting' vs brain-ticket splitting a task into N work packages sized by file count/domain breadth. Query avoids 'ticket'; this splitter uniquely owns work-package sizing."
+  },
+  {
+    "query": "warning when a curated note names a function that the code no longer defines",
+    "expectedFiles": ["scripts/brain-verify.mjs"],
+    "note": "Hard: 'a note names a function the code no longer defines' vs brain-verify's symbol-drift signal over indexed records. Distinct from link-check (paths); this drift detector owns symbol staleness against code."
+  },
+  {
+    "query": "opening and closing an agent's work on a single issue while recording it for others to see",
+    "expectedFiles": ["scripts/brain-work.mjs"],
+    "note": "Hard: 'opening/closing an agent's work on one issue, recorded for others' vs brain-work's single-workstream start/end writing the active_state row. Query avoids 'work/workstream'; this lifecycle CLI is the single owner."
+  },
+  {
+    "query": "the shared helpers other scripts import for atomic writes hashing and locating the brain folder",
+    "expectedFiles": ["scripts/common.mjs"],
+    "note": "Hard: 'shared helpers for atomic writes, hashing, locating the brain folder' vs common.mjs exporting ROOT/BRAIN_DIR/atomicWrite/sha256/ensureDir. Query avoids 'common'; this utilities module is the single source of those primitives."
+  },
+  {
+    "query": "the one parser that keeps the cross-repo spec format honest for both its writer and its readers",
+    "expectedFiles": ["scripts/feature-spec.mjs"],
+    "note": "Hard: 'one parser keeping the cross-repo spec format honest for writers and readers' vs feature-spec.mjs centralizing the feature frontmatter schema shared by brain:feature and brain:pr. Query avoids 'feature-spec'; this is the single schema owner."
+  },
+  {
+    "query": "merging our editor automation entries into whatever config the other tool already has",
+    "expectedFiles": ["scripts/install-cursor-hooks.mjs"],
+    "note": "Hard: 'merging our editor automation entries into the tool's existing config' vs install-cursor-hooks merging brain hooks into .cursor/hooks.json. Query avoids 'cursor/hooks'; this installer uniquely owns that merge."
+  },
+  {
+    "query": "the helper that pulls task and actor flags off the args and names the dated note file",
+    "expectedFiles": ["scripts/session-util.mjs"],
+    "note": "Hard: 'pulls task/actor flags off args and names the dated note file' vs session-util's parseSessionFlags + timestamped session path helpers. Query avoids 'session-util'; this shared helper is the single home of that logic."
+  },
+  {
+    "query": "the bootstrap step that writes our run commands and ignore entries into the host project file",
+    "expectedFiles": ["scripts/setup-package.mjs"],
+    "note": "Hard: 'writes our run commands and ignore entries into the host project file' vs setup-package merging scripts/deps into package.json and appending .gitignore entries. Query avoids 'setup-package'; this bootstrap step uniquely owns it."
+  },
+  {
+    "query": "loading the optional compiler so we can resolve real references when the package is present",
+    "expectedFiles": ["scripts/ts-graph.mjs"],
+    "note": "Hard: 'loading the optional compiler to resolve real references when present' vs ts-graph dynamically importing typescript for a compiler-backed graph, degrading when absent. Query avoids 'ts-graph/typescript'; this is the single compiler bridge."
+  },
+  {
+    "query": "deciding a folder counts as its own service by spotting stack marker files one level down",
+    "expectedFiles": ["scripts/projects.mjs"],
+    "note": "Hard: 'a folder counts as its own service by stack marker files one level down' vs projects.mjs classifying subdirs by package.json/go.mod/Chart.yaml markers. Query avoids 'fleet/discover'; this discovery module owns the marker classification."
+  },
+  {
+    "query": "linking an operator that sets a pod variable to the separate image that reads it at runtime",
+    "expectedFiles": ["scripts/edges/k8s-env-injection.mjs"],
+    "note": "Hard: 'operator that sets a pod variable to the image that reads it' vs k8s-env-injection's directed injector→reader edges on a shared env key. Distinct from env-var (undirected); this detector owns the operator→pod direction."
+  },
+  {
+    "query": "the diagram and prose explaining how one reusable package backs many separate memories",
+    "expectedFiles": ["docs/brain-architecture.md"],
+    "note": "Hard: 'how one reusable package backs many separate memories' vs the architecture doc's global-skill-vs-per-project-brain overview with its mermaid diagram. Query avoids 'architecture'; this doc uniquely owns the system picture."
+  },
+  {
+    "query": "why a full tree-sitter multi-language parsing pipeline is deliberately not on the near-term plan",
+    "expectedFiles": ["docs/roadmap-symbol-index.md"],
+    "note": "Hard: 'why full tree-sitter multi-language parsing is deliberately not planned' vs the roadmap doc explaining the deferred Phase-2 AST work. Query avoids 'roadmap/symbol-index'; this is the only place that rationale lives."
+  },
+  {
+    "query": "a walkthrough for one developer running this across many repos colleagues don't share discipline on",
+    "expectedFiles": ["docs/solo-multi-repo-setup.md"],
+    "note": "Hard: 'one developer running across many repos with undisciplined colleagues' vs the solo multi-repo guide for a single brain user over sibling repos. Query avoids 'solo/setup'; this practical guide uniquely owns that scenario."
+  },
+  {
+    "query": "the phased plan to move retrieval off a flat JSON full-scan onto a faster store",
+    "expectedFiles": ["docs/vector-db-upgrade-plan.md"],
+    "note": "Hard: 'phased plan to move off a flat JSON full-scan onto a faster store' vs the upgrade-plan doc's storage-abstraction-and-incremental-indexing phases. Query avoids 'vector-db/upgrade'; this roadmap doc owns the migration plan."
+  },
+  {
+    "query": "the house rules for branch names commit prefixes and requiring a test per change for this package",
+    "expectedFiles": ["CONTRIBUTING.md"],
+    "note": "Hard: 'house rules for branch names, commit prefixes, a test per change' vs CONTRIBUTING's branch/PR conventions and add-a-script template. Query avoids 'contributing'; this is the single contributor-rules doc for the package."
+  },
+  {
+    "query": "the agent-agnostic recipe for trimming context that works in Codex Gemini or any terminal assistant",
+    "expectedFiles": ["templates/agents/COMPACT_INSTRUCTIONS.md"],
+    "note": "Hard: 'agent-agnostic recipe for trimming context across Codex/Gemini/any terminal' vs the compact-instructions template. Distinct from scripts/brain-compact.mjs (the code); this doc is the cross-tool usage recipe."
+  },
+  {
+    "query": "the continuous-integration job definition that runs strict guard checks on every pull request",
+    "expectedFiles": ["templates/github-workflows/project-brain.yml"],
+    "note": "Hard: 'CI job definition running strict guard checks on every PR' vs the GitHub Actions workflow template. Query avoids 'workflow/yml'; this is the only CI pipeline definition shipped."
+  },
+  {
+    "query": "the script that runs before a commit lands to bar bad branches and kick off a background refresh",
+    "expectedFiles": ["templates/hooks/pre-commit"],
+    "note": "Hard: 'runs before a commit lands to bar bad branches and kick a background refresh' vs the pre-commit hook calling brain:guard then a deferred sync. Query avoids 'pre-commit'; this hook uniquely owns the pre-commit moment."
+  },
+  {
+    "query": "the hook that refreshes the brain right after pulling other people's merged changes",
+    "expectedFiles": ["templates/hooks/post-merge"],
+    "note": "Hard: 'refreshes the brain right after pulling merged changes' vs the post-merge hook running update-skill + maintain. Query avoids 'post-merge'; this hook owns the just-pulled moment (distinct from the pre-commit hook)."
+  },
+  {
+    "query": "the fill-in skeleton a contributor edits to describe what a change does and which issue it closes",
+    "expectedFiles": ["templates/PULL_REQUEST_TEMPLATE.md"],
+    "note": "Hard: 'fill-in skeleton describing a change and the issue it closes' vs the PR template with Summary/Linked Issue/Target Branch sections. Query avoids 'pull request template'; this boilerplate is the single owner."
+  },
+  {
+    "query": "a hand-kept table of major surfaces and what each depends on so agents orient without crawling everything",
+    "expectedFiles": ["templates/brain/MODULE_MAP.md"],
+    "note": "Hard: 'hand-kept table of major surfaces and their deps so agents orient' vs the MODULE_MAP template (explicitly not generated). Query avoids 'module map'; this hand-maintained orientation table is the single owner."
+  },
+  {
+    "query": "an editor rule telling the assistant to save a resume slice before losing thread history",
+    "expectedFiles": ["templates/cursor/rules/project-brain-compact.mdc"],
+    "note": "Hard: 'editor rule telling the assistant to save a resume slice before losing history' vs the cursor compact rule (.mdc). Distinct from the agent-agnostic doc and the code; this is the Cursor-specific rule file."
+  },
+  {
+    "query": "the suggested config that prints active state at session start and wires the trim hook",
+    "expectedFiles": ["templates/claude-code/settings.recommended.json"],
+    "note": "Hard: 'suggested config printing active state at session start and wiring the trim hook' vs the recommended Claude Code settings JSON with SessionStart/PreCompact hooks. Query avoids 'settings'; this is the single recommended-config file."
+  },
+  {
+    "query": "the one-time bootstrap that wires the package installs deps and builds the first index",
+    "expectedFiles": ["bin/setup.sh"],
+    "note": "Hard: 'one-time bootstrap that wires the package, installs deps, builds the first index' vs setup.sh running setup-package + npm install + brain:init + index. Query avoids 'setup'; this is the single bootstrap entry script."
+  },
+  {
+    "query": "the script that copies the git hook templates into the repository's hooks directory",
+    "expectedFiles": ["bin/install-hooks.sh"],
+    "note": "Hard: 'copies the git hook templates into the hooks directory' vs install-hooks.sh iterating templates/hooks and installing them. Distinct from setup.sh (full bootstrap) and the hook files themselves; this installer owns the copy step."
+  },
+  {
+    "query": "the script that refreshes the linked skill checkout to the newest shared package code",
+    "expectedFiles": ["bin/update.sh"],
+    "note": "Hard: 'refreshes the linked skill checkout to the newest shared package code' vs update.sh resolving the skill path and updating the checkout. Query avoids 'update'; this updater is the single owner of skill refresh."
   }
 ]
