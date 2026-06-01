@@ -45,44 +45,49 @@ export function projectKindsForDir(absDir) {
  * Discover sibling projects under `root`. Returns ProjectDescriptor[] sorted by name.
  * Throws on duplicate project basenames.
  *
+ * Nested containers: a depth-1 directory with no markers of its own (e.g. a
+ * `modules/` monorepo holding many sibling Go modules) is invisible to the
+ * depth-1 scan. Opt in via `BRAIN_FLEET_NESTED_DIRS=modules` (comma list) or
+ * `opts.nested` to descend one extra level into each named container and add
+ * each marker-bearing child as a project (name = child basename,
+ * dir = `<container>/<child>`). Default OFF — unset, behavior is unchanged.
+ *
  * @param {string} root - absolute fleet root
- * @param {{exclude?: string|string[], projects?: string|string[]}} [opts]
+ * @param {{exclude?: string|string[], projects?: string|string[], nested?: string|string[]}} [opts]
  */
 export function discoverProjects(root, opts = {}) {
   const exclude = new Set(splitList(opts.exclude ?? process.env.BRAIN_FLEET_EXCLUDE));
   const explicit = splitList(opts.projects ?? process.env.BRAIN_FLEET_PROJECTS);
   const explicitSet = new Set(explicit);
-
-  let entries;
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
+  const nested = new Set(splitList(opts.nested ?? process.env.BRAIN_FLEET_NESTED_DIRS));
 
   const projects = [];
   const seen = new Set();
+  let rootReal;
+  const resolveRootReal = () => (rootReal ??= fs.realpathSync(root));
 
-  for (const entry of entries) {
+  // Add one candidate dir as a project. `parentAbs` is its containing dir;
+  // `relPrefix` (POSIX) is prepended to the basename to form `dir`.
+  const addCandidate = (entry, parentAbs, relPrefix = '') => {
     const isDir = entry.isDirectory() || entry.isSymbolicLink();
-    if (!isDir) continue;
-    if (entry.name.startsWith('.')) continue;
-    if (SKIP_DIRS.has(entry.name)) continue;
-    if (exclude.has(entry.name)) continue;
-    if (explicitSet.size && !explicitSet.has(entry.name)) continue;
+    if (!isDir) return;
+    if (entry.name.startsWith('.')) return;
+    if (SKIP_DIRS.has(entry.name)) return;
+    if (exclude.has(entry.name)) return;
+    if (explicitSet.size && !explicitSet.has(entry.name)) return;
 
-    const absDir = path.join(root, entry.name);
+    const absDir = path.join(parentAbs, entry.name);
     // Reject symlinks that resolve to the fleet root itself or to an ancestor —
     // these are self-loops (e.g. a `project-brain -> .` symlink) and would
     // cause discoverProjects to report the host repo as its own subproject.
     if (entry.isSymbolicLink()) {
       let real;
-      try { real = fs.realpathSync(absDir); } catch { continue; }
-      const rootReal = fs.realpathSync(root);
-      if (real === rootReal || rootReal.startsWith(real + path.sep)) continue;
+      try { real = fs.realpathSync(absDir); } catch { return; }
+      const rr = resolveRootReal();
+      if (real === rr || rr.startsWith(real + path.sep)) return;
     }
     const kinds = projectKindsForDir(absDir);
-    if (!kinds.length) continue;
+    if (!kinds.length) return;
 
     if (seen.has(entry.name)) {
       throw new Error(`Duplicate project name "${entry.name}" under ${root}; project names must be unique across the fleet.`);
@@ -91,11 +96,29 @@ export function discoverProjects(root, opts = {}) {
 
     projects.push({
       name: entry.name,
-      dir: entry.name,
+      dir: relPrefix ? path.posix.join(relPrefix, entry.name) : entry.name,
       kinds,
       git: fs.existsSync(path.join(absDir, '.git')),
       hasReadme: ['README.md', 'README.MD', 'readme.md', 'Readme.md'].some(r => fs.existsSync(path.join(absDir, r)))
     });
+  };
+
+  let entries;
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  for (const entry of entries) addCandidate(entry, root);
+
+  // Descend one level into opt-in nested container dirs (e.g. `modules/`).
+  for (const container of nested) {
+    if (exclude.has(container)) continue;
+    const containerAbs = path.join(root, container);
+    let childEntries;
+    try { childEntries = fs.readdirSync(containerAbs, { withFileTypes: true }); } catch { continue; }
+    for (const child of childEntries) addCandidate(child, containerAbs, container);
   }
 
   return projects.sort((a, b) => a.name.localeCompare(b.name));
