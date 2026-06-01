@@ -226,6 +226,10 @@ export async function listIndexableFiles(opts = {}) {
     onlyFiles: true,
     ignore: [
       '**/node_modules/**', '**/.next/**', '**/dist/**', '**/build/**', '**/coverage/**',
+      // Vendored deps + language build caches — never index these (esp. with
+      // BRAIN_POLYGLOT_SYMBOLS=1, which globs **/*.go|**/*.py under dot:true and
+      // would otherwise pull in a whole Go module cache).
+      '**/vendor/**', '**/.gocache/**', '**/.go/pkg/**', '**/__pycache__/**', '**/.venv/**', '**/.tox/**',
       '.project-brain/vector-db/**', '.project-brain/search_index.json', '.project-brain/index_manifest.json',
       '.project-brain/.sync-state.json', '.project-brain/.sync-bg.log',
       '**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock',

@@ -23,6 +23,7 @@ import grpcClient from './grpc-client.mjs';
 import openapiSchema from './openapi-schema.mjs';
 import httpClient from './http-client.mjs';
 import envVar from './env-var.mjs';
+import k8sEnvInjection from './k8s-env-injection.mjs';
 import pubsub from './pubsub.mjs';
 import dbShared from './db-shared.mjs';
 import packageDep from './package-dep.mjs';
@@ -36,6 +37,7 @@ export const DETECTORS = [
   grpcClient,       // consumes grpcServices
   httpClient,       // consumes openapiServices
   envVar,           // collects env keys
+  k8sEnvInjection,  // directed operator→pod edges from injected→read env keys
   pubsub,           // SDK-specific producer/consumer patterns
   dbShared,         // migration dirs + DATABASE_URL overlap
   packageDep,       // internal npm package deps
