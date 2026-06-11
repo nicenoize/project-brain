@@ -3,7 +3,7 @@ import { execSync } from 'node:child_process';
 
 export async function retrieve(query, store, embedder, opts = {}) {
   const topK = Number(opts.topK || process.env.BRAIN_TOP_K || 8);
-  const candidates = Number(opts.candidates || Math.max(topK * 8, 32));
+  const candidates = Number(opts.candidates || process.env.BRAIN_CANDIDATES || Math.max(topK * 8, 32));
   const filter = opts.filter || {};
   const queryVector = await embedder.embed(query);
   const dense = (await store.search(queryVector, candidates, filter))
@@ -70,6 +70,30 @@ export async function retrieve(query, store, embedder, opts = {}) {
       };
     })
     .sort((a, b) => b.score - a.score);
+
+  // Diagnostic out-param (opt-in, zero behavior change): when the caller passes
+  // opts.trace = {}, expose the raw dense candidate list, the full sorted scored
+  // list (pre per-file capping / pre top-K truncation), and the query vector so
+  // eval tooling can distinguish candidate-generation misses from ranking misses.
+  if (opts.trace && typeof opts.trace === 'object') {
+    opts.trace.queryVector = queryVector;
+    opts.trace.broad = broad;
+    opts.trace.poolSize = pool.length;
+    opts.trace.denseCandidates = dense.map(record => ({
+      id: record.id, file: record.file, chunk: record.chunk, score: record.score
+    }));
+    opts.trace.scored = scored.map(record => ({
+      id: record.id,
+      file: record.file,
+      chunk: record.chunk,
+      type: record.type,
+      score: record.score,
+      denseScore: record.denseScore,
+      keywordScore: record.keywordScore,
+      symbolScore: record.symbolScore,
+      metadataScore: record.metadataScore
+    }));
+  }
 
   return limitChunksPerFile(scored, opts).slice(0, topK);
 }
@@ -418,7 +442,7 @@ function pathHeuristicAdjust(record, context) {
   return adj;
 }
 
-function isTestLikePath(file) {
+export function isTestLikePath(file) {
   if (!file) return false;
   return (
     /(\/__tests__\/|\/tests?\/|\/test\/|\/e2e\/|\/spec\/|\.(test|spec)\.[cm]?[jt]sx?$)/i.test(file) ||

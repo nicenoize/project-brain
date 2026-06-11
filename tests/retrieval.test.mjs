@@ -76,6 +76,36 @@ test('canonical-root boost recognizes .specify/memory/constitution.md', async ()
   assert.equal(result[0].id, 'a', `expected constitution to rank first, got: ${result.map(r => r.id).join(',')}`);
 });
 
+test('retrieve populates opts.trace without changing results', async () => {
+  const { retrieve } = await import('../scripts/retrieval.mjs');
+  const records = [
+    { id: 'a', file: 'scripts/a.mjs', chunk: 0, text: 'lease lock coordination', vector: [1, 0] },
+    { id: 'b', file: 'docs/b.md', chunk: 0, text: 'cooking pasta recipe', vector: [0.9, 0.1] },
+    { id: 'c', file: 'docs/c.md', chunk: 0, text: 'lease lock', vector: [0.8, 0.2] }
+  ];
+  const store = {
+    async search(_v, _k) { return records.map((r, i) => ({ ...r, score: 1 - i / 10 })); },
+    async getAll() { return records; }
+  };
+  const embedder = { async embed() { return [1, 0]; } };
+
+  const plain = await retrieve('lease lock', store, embedder, { topK: 3 });
+  const trace = {};
+  const traced = await retrieve('lease lock', store, embedder, { topK: 3, trace });
+
+  assert.deepEqual(traced.map(r => r.id), plain.map(r => r.id), 'trace must not change ranking');
+  assert.equal(trace.queryVector.length, 2);
+  assert.equal(trace.broad, false);
+  assert.equal(trace.poolSize, 3);
+  assert.deepEqual(trace.denseCandidates.map(r => r.id), ['a', 'b', 'c']);
+  assert.equal(trace.scored.length, 3, 'scored holds the full pre-truncation list');
+  for (const entry of trace.scored) {
+    for (const key of ['score', 'denseScore', 'keywordScore', 'symbolScore', 'metadataScore']) {
+      assert.equal(typeof entry[key], 'number', `scored entry missing ${key}`);
+    }
+  }
+});
+
 test('spec-kit BRAIN_SPEC_BOOST lifts spec records over docs on architectural queries', async () => {
   const { retrieve } = await import('../scripts/retrieval.mjs');
   const records = [
