@@ -132,19 +132,23 @@ itself; C1/C6 likely need to be evaluated as a combined change set
 | + C5 + C1 lexical union | **0.690** | **+0.095 [+0.024, +0.179]** | **0.533** | **+0.066 [+0.003, +0.131]** | **SIGNIFICANT** |
 | C5 → C2 pool=256 (info) | 0.690 | +0.036 [−0.048, +0.119] | 0.499 | +0.002 [−0.062, +0.068] | ns; no MRR benefit |
 | C5 → C6 substring guard | 0.643 | −0.012 [−0.036, 0] | 0.448 | **−0.049 [−0.090, −0.014]** | **HARMFUL — rejected** |
+| C5 → C3 rerank alone | 0.655 | 0 [−0.048, +0.048] | 0.508 | +0.011 [−0.048, +0.071] | ns — needs union first |
+| **+ C5 + C1 + C3 (full stack)** | **0.762** | **+0.167 [+0.071, +0.262]** | **0.591** | **+0.123 [+0.036, +0.213]** | **SIGNIFICANT** |
 
-- **Shipped:** C5 (default-on index patterns) + C1 (`BRAIN_LEXICAL_UNION=1`,
-  default OFF for ADR 0003 perf reasons; the C5+C1 bundle is the validated
-  change set — see [[0014-lexical-candidate-union]]).
+- **Shipped:** C5 (default-on index patterns) + C1 (`BRAIN_LEXICAL_UNION=1`)
+  + C3 (`BRAIN_RERANK=1`, cross-encoder over the scored head). C1/C3 are
+  default OFF for perf/latency reasons and designed to be enabled **as a
+  pair** — union gets targets into the pool (ranks 9–18), the reranker lifts
+  them into top-8; alone, rerank measured Δ 0. See
+  [[0014-lexical-candidate-union]] and [[0015-cross-encoder-rerank]].
 - **C6 rejected by measurement:** the fuzzy substring tier hands noise to
   distractors *and* rank-boosts targets whose symbols share a root with the
   query; removing it loses more than it gains. The flag remains available and
-  documented as measured-negative. A cross-encoder reranker stays the open
-  candidate for the remaining class-2 misses.
+  documented as measured-negative.
 - **Easy-set accounting (verified with a pre-C5 control rebuild):** easy was
   36/36 before C5 and 33/36 after — all three regressions are corpus-growth
-  effects of the new coverage, not scoring changes (C1 actually recovers one:
-  34/36 with the flag on). Two are strict-AND near-misses (expected file still
+  effects of the new coverage, not scoring changes (the C1+C3 flag pair
+  recovers two of them: 35/36; full-set hit@8 0.733 → 0.825 with the pair on). Two are strict-AND near-misses (expected file still
   ranks #1–2, but the case also demands the expected *symbol* in top-8 and new
   chunks displaced it by a slot or two); one is `SKILL.md` — which genuinely
   documents the asked-about fleet env var — outranking the listed

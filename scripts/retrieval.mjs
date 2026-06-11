@@ -97,6 +97,20 @@ export async function retrieve(query, store, embedder, opts = {}) {
     })
     .sort((a, b) => b.score - a.score);
 
+  // BRAIN_RERANK=1 (default OFF): cross-encoder rerank of the scored head
+  // (BRAIN_RERANK_TOP, default 20) before per-file capping. Targets that the
+  // hybrid layer misorders inside the pool — the class-2 failure mode in
+  // docs/eval-failure-analysis.md — get re-judged with the query and chunk
+  // read together. Dynamic import so the flag-off path never loads the model.
+  let ranked = scored;
+  if (opts.rerank ?? (process.env.BRAIN_RERANK === '1')) {
+    const { rerank } = await import('./rerank.mjs');
+    ranked = await rerank(query, scored, {
+      top: opts.rerankTop,
+      model: opts.rerankModel
+    });
+  }
+
   // Diagnostic out-param (opt-in, zero behavior change): when the caller passes
   // opts.trace = {}, expose the raw dense candidate list, the full sorted scored
   // list (pre per-file capping / pre top-K truncation), and the query vector so
@@ -108,7 +122,7 @@ export async function retrieve(query, store, embedder, opts = {}) {
     opts.trace.denseCandidates = dense.map(record => ({
       id: record.id, file: record.file, chunk: record.chunk, score: record.score
     }));
-    opts.trace.scored = scored.map(record => ({
+    opts.trace.scored = ranked.map(record => ({
       id: record.id,
       file: record.file,
       chunk: record.chunk,
@@ -121,7 +135,7 @@ export async function retrieve(query, store, embedder, opts = {}) {
     }));
   }
 
-  return limitChunksPerFile(scored, opts).slice(0, topK);
+  return limitChunksPerFile(ranked, opts).slice(0, topK);
 }
 
 /**
