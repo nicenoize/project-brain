@@ -146,6 +146,35 @@ export function classifyDistractors(records) {
 }
 
 /**
+ * Pair two brain:eval reports by query (queries are unique — enforced by
+ * tests/eval-cases.test.mjs). Throws when the case sets differ: a paired
+ * bootstrap is only meaningful over identical cases.
+ */
+export function pairCases(reportA, reportB, { hardOnly = false } = {}) {
+  const select = results => (results || []).filter(result => !hardOnly || result.hard);
+  const selectedA = select(reportA.results);
+  const selectedB = select(reportB.results);
+  const byQueryB = new Map(selectedB.map(result => [result.query, result]));
+  const missing = selectedA.filter(result => !byQueryB.has(result.query)).map(result => result.query);
+  const extra = selectedB.length - (selectedA.length - missing.length);
+  if (missing.length || extra) {
+    throw new Error(
+      `Case sets differ — paired bootstrap needs identical cases. ` +
+      `Missing from variant: ${missing.length ? missing.slice(0, 3).join(' | ') : 'none'}` +
+      `${missing.length > 3 ? ` (+${missing.length - 3} more)` : ''}; extra in variant: ${extra}.`
+    );
+  }
+  const pairsA = [];
+  const pairsB = [];
+  for (const result of selectedA) {
+    const other = byQueryB.get(result.query);
+    pairsA.push({ hit: result.hit ? 1 : 0, reciprocalRank: result.reciprocalRank || 0 });
+    pairsB.push({ hit: other.hit ? 1 : 0, reciprocalRank: other.reciprocalRank || 0 });
+  }
+  return { pairsA, pairsB, cases: pairsA.length };
+}
+
+/**
  * Paired bootstrap over two eval runs (same cases, paired by query).
  * `pairsA` / `pairsB` are arrays of { hit: 0|1, reciprocalRank: number } in
  * identical case order. Returns Δ point estimates (B − A) and 95% percentile
