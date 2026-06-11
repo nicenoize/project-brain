@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { cosine } from './common.mjs';
 
 export async function retrieve(query, store, embedder, opts = {}) {
   const topK = Number(opts.topK || process.env.BRAIN_TOP_K || 8);
@@ -44,6 +45,31 @@ export async function retrieve(query, store, embedder, opts = {}) {
   }
 
   const denseScores = new Map(dense.map(record => [record.id, record.score]));
+
+  // BRAIN_LEXICAL_UNION=1 (default OFF): merge the BM25 top-N over the full
+  // corpus into the candidate pool, so records that are lexically on-topic but
+  // outside the dense top-`candidates` neighborhood can still be scored.
+  // Unlike broad mode, union records get a REAL dense score (cosine against
+  // their stored vector) — with denseScore 0 the α=0.7 weighting buries them,
+  // which is exactly the class-1 failure mode in docs/eval-failure-analysis.md.
+  const lexicalUnion = opts.lexicalUnion ?? (process.env.BRAIN_LEXICAL_UNION === '1');
+  if (lexicalUnion && !broad) {
+    const unionTop = Number(opts.lexicalUnionTop || process.env.BRAIN_LEXICAL_UNION_TOP || 24);
+    const allRecords = (await store.getAll()).filter(record => recordMatches(record, filter));
+    const lexical = tfidfScore(query, allRecords);
+    const inPool = new Set(pool.map(record => record.id));
+    const unionRecords = allRecords
+      .filter(record => (lexical.get(record.id) || 0) > 0 && !inPool.has(record.id))
+      .sort((a, b) => (lexical.get(b.id) || 0) - (lexical.get(a.id) || 0))
+      .slice(0, Math.max(0, unionTop));
+    for (const record of unionRecords) {
+      pool.push(record);
+      if (Array.isArray(record.vector) && record.vector.length) {
+        denseScores.set(record.id, cosine(queryVector, record.vector));
+      }
+    }
+  }
+
   const keyword = tfidfScore(query, pool);
   const symbol = symbolScore(query, pool, opts);
   const maxKeyword = Math.max(1, ...keyword.values());
@@ -170,6 +196,23 @@ export function tfidfScore(query, records) {
 export function symbolScore(query, records, opts = {}) {
   const expected = new Set(splitList(opts.symbol || opts.expectedSymbol || '').map(normalizeSymbol));
   const queryTokens = new Set(tokenize(query).map(normalizeSymbol));
+  // BRAIN_SYMBOL_SUBSTRING_GUARD=1 (default OFF): restrict the fuzzy 0.45
+  // substring tier to tokens that show symbol intent — explicit --symbol mode,
+  // or identifier-shaped words in the raw query (camelCase hump, underscore,
+  // digit, $). Without the guard, plain-English tokens like "tree" substring-
+  // match symbols like `worktree` and hand a ×(1+0.6·0.45) multiplier to
+  // distractors on conceptual queries (class-2 hybrid demotion, see
+  // docs/eval-failure-analysis.md). Exact (1.0) and whole-token (0.85) tiers
+  // are unaffected.
+  const guard = opts.symbolSubstringGuard ?? (process.env.BRAIN_SYMBOL_SUBSTRING_GUARD === '1');
+  const substringTokens = !guard || expected.size
+    ? queryTokens
+    : new Set(
+      String(query || '')
+        .split(/[^A-Za-z0-9_$]+/)
+        .filter(word => word.length > 1 && /([a-z][A-Z])|[_$\d]/.test(word))
+        .map(normalizeSymbol)
+    );
   const scores = new Map();
   for (const record of records) {
     const symbols = [...(record.symbols || []), ...(record.exportedSymbols || [])].map(normalizeSymbol);
@@ -177,7 +220,7 @@ export function symbolScore(query, records, opts = {}) {
     for (const symbol of symbols) {
       if (expected.has(symbol)) score = Math.max(score, 1);
       else if (queryTokens.has(symbol)) score = Math.max(score, 0.85);
-      else if ([...queryTokens].some(token => token && symbol.includes(token))) score = Math.max(score, 0.45);
+      else if ([...substringTokens].some(token => token && symbol.includes(token))) score = Math.max(score, 0.45);
     }
     if (score) scores.set(record.id, score);
   }

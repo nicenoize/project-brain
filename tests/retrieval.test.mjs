@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tokenize, tfidfScore, hybridScore } from '../scripts/retrieval.mjs';
+import { tokenize, tfidfScore, hybridScore, symbolScore } from '../scripts/retrieval.mjs';
 
 test('tokenize lowercases and drops short tokens', () => {
   const out = tokenize('Hello, WORLD! a/b foo-bar');
@@ -104,6 +104,52 @@ test('retrieve populates opts.trace without changing results', async () => {
       assert.equal(typeof entry[key], 'number', `scored entry missing ${key}`);
     }
   }
+});
+
+test('lexical union pulls a dense-absent but lexically-relevant record into results (flag-gated)', async () => {
+  const { retrieve } = await import('../scripts/retrieval.mjs');
+  const target = { id: 'target', file: 'scripts/target.mjs', chunk: 0, text: 'lease lock coordination exclusive', vector: [0.7, 0.7] };
+  const noise = Array.from({ length: 3 }, (_, i) => ({
+    id: `n${i}`, file: `docs/n${i}.md`, chunk: 0, text: 'unrelated filler content', vector: [1, 0]
+  }));
+  const store = {
+    // Dense search "misses" the target: only noise comes back.
+    async search() { return noise.map((r, i) => ({ ...r, score: 0.9 - i / 10 })); },
+    async getAll() { return [...noise, target]; }
+  };
+  const embedder = { async embed() { return [1, 0]; } };
+
+  const without = await retrieve('lease lock', store, embedder, { topK: 4 });
+  assert.ok(!without.some(r => r.id === 'target'), 'target must be absent without the flag');
+
+  const withUnion = await retrieve('lease lock', store, embedder, { topK: 4, lexicalUnion: true });
+  const hit = withUnion.find(r => r.id === 'target');
+  assert.ok(hit, 'lexical union must surface the target');
+  assert.ok(hit.denseScore > 0, 'union record must get a real cosine dense score, not 0');
+  assert.equal(withUnion[0].id, 'target', 'on-topic union record should outrank filler');
+});
+
+test('symbol substring guard: plain-English tokens stop fuzzy-matching symbols (flag-gated)', () => {
+  const records = [
+    { id: 'wt', symbols: ['spawnWorktree'], text: '' },
+    { id: 'exact', symbols: ['tree'], text: '' }
+  ];
+  // Without guard: "tree" substring-matches spawnWorktree → 0.45 noise tier.
+  const noisy = symbolScore('catching paths in the tree', records, {});
+  assert.equal(noisy.get('wt'), 0.45);
+
+  // With guard: plain word "tree" no longer fuzzy-matches…
+  const guarded = symbolScore('catching paths in the tree', records, { symbolSubstringGuard: true });
+  assert.equal(guarded.get('wt'), undefined);
+  // …but the whole-token tier (0.85) still fires on an exact symbol token,
+  const stillExact = symbolScore('catching paths in the tree', records, { symbolSubstringGuard: true });
+  assert.equal(stillExact.get('exact'), 0.85);
+  // identifier-shaped words (camelCase hump) keep the substring tier,
+  const identifier = symbolScore('where is spawnWork handled', records, { symbolSubstringGuard: true });
+  assert.equal(identifier.get('wt'), 0.45);
+  // and explicit --symbol mode bypasses the guard entirely.
+  const explicit = symbolScore('catching paths in the tree', records, { symbolSubstringGuard: true, symbol: 'somethingElse' });
+  assert.equal(explicit.get('wt'), 0.45);
 });
 
 test('spec-kit BRAIN_SPEC_BOOST lifts spec records over docs on architectural queries', async () => {
