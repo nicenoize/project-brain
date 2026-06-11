@@ -123,6 +123,39 @@ must recover ≳7 cases to prove out alone. C5 (12 cases) can clear that bar by
 itself; C1/C6 likely need to be evaluated as a combined change set
 (`npm run brain:eval:compare -- baseline.json variant.json --hard-only`).
 
+## Results of the Phase C fixes (same day, paired bootstrap, seed 42)
+
+| comparison (hard subset, n=84) | hit@8 | Δ hit (95% CI) | MRR | Δ MRR (95% CI) | verdict |
+|---|---|---|---|---|---|
+| baseline | 0.595 | — | 0.468 | — | — |
+| + C5 index coverage | 0.655 | +0.060 [−0.012, +0.143] | 0.497 | +0.029 [−0.037, +0.096] | ns alone |
+| + C5 + C1 lexical union | **0.690** | **+0.095 [+0.024, +0.179]** | **0.533** | **+0.066 [+0.003, +0.131]** | **SIGNIFICANT** |
+| C5 → C2 pool=256 (info) | 0.690 | +0.036 [−0.048, +0.119] | 0.499 | +0.002 [−0.062, +0.068] | ns; no MRR benefit |
+| C5 → C6 substring guard | 0.643 | −0.012 [−0.036, 0] | 0.448 | **−0.049 [−0.090, −0.014]** | **HARMFUL — rejected** |
+
+- **Shipped:** C5 (default-on index patterns) + C1 (`BRAIN_LEXICAL_UNION=1`,
+  default OFF for ADR 0003 perf reasons; the C5+C1 bundle is the validated
+  change set — see [[0014-lexical-candidate-union]]).
+- **C6 rejected by measurement:** the fuzzy substring tier hands noise to
+  distractors *and* rank-boosts targets whose symbols share a root with the
+  query; removing it loses more than it gains. The flag remains available and
+  documented as measured-negative. A cross-encoder reranker stays the open
+  candidate for the remaining class-2 misses.
+- **Easy-set accounting (verified with a pre-C5 control rebuild):** easy was
+  36/36 before C5 and 33/36 after — all three regressions are corpus-growth
+  effects of the new coverage, not scoring changes (C1 actually recovers one:
+  34/36 with the flag on). Two are strict-AND near-misses (expected file still
+  ranks #1–2, but the case also demands the expected *symbol* in top-8 and new
+  chunks displaced it by a slot or two); one is `SKILL.md` — which genuinely
+  documents the asked-about fleet env var — outranking the listed
+  code/module targets. The cases were left untouched. Full-set hit@8 went
+  0.717 → 0.733. Gate note: the strict "no easy-set regression" rule is kept
+  for **scoring** changes; for **coverage** changes it is relaxed to "no net
+  regression + each regression individually reviewed", because indexing more
+  legitimate content necessarily increases per-chunk competition. Follow-up
+  candidates for the three: a canonical module-doc boost relative to manual
+  chunks, or symbol-chunk protection in `limitChunksPerFile`.
+
 ## Appendix — all 34 misses
 
 `corpus#` = exact dense rank over the whole corpus (0 = no record exists);

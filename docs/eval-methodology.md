@@ -1,8 +1,21 @@
 # Retrieval eval methodology
 
 `brain:eval` (`scripts/brain-eval.mjs`) runs the cases in `.project-brain/eval.json`
-and reports `hitAtK`, `fileHitAtK`, `symbolHitAtK`, and `mrr` at `--top-k` (default 8).
+and reports `hitAtK`, `fileHitAtK`, `symbolHitAtK`, and `mrr` at `--top-k` (default 8),
+plus hard-subset metrics (`hardCases`, `hardHitAtK`, `hardMrr`).
 It is the baseline-and-regression harness for any retrieval change.
+
+Flags beyond `--file`/`--top-k`:
+
+- `--hard-only` — restrict to the hard subset (cases whose `note` starts with
+  `Hard:`; that prefix is the discriminator, NOT a missing `expectedSymbols`).
+- `--diagnose` — per-case failure diagnosis: the expected file's rank in the
+  dense candidate pool, in the full hybrid-scored list, and its exact dense
+  rank over the whole corpus. Separates candidate-generation misses from
+  ranking misses; see `docs/eval-failure-analysis.md` for the taxonomy this
+  produced.
+- `--out <path>` — write the full JSON report to a file (stdout keeps the
+  summary). Reports written this way feed the comparison tool below.
 
 ## The saturated-set problem
 
@@ -42,17 +55,48 @@ The hard cases (added under the `## Eval methodology` rationale, each carrying a
 
 ## How to use it for retrieval changes
 
-The full set (currently 57 cases) mixes easy lookups and hard conceptual
-queries. The **hard subset is where new dense-retrieval features must show
-movement.** When you add or tune a retrieval feature (contextual retrieval,
-graph expansion, a different embedder, reranking, BM25 params), report
-**before/after on the hard subset**, not just the aggregate — the easy cases are
-already at 1.000 and will mask regressions or improvements on the cases that
-actually exercise dense recall.
+The full set (currently 120 cases: 36 easy + 84 hard) mixes easy lookups and
+hard conceptual queries. The **hard subset is where new dense-retrieval
+features must show movement.** When you add or tune a retrieval feature
+(contextual retrieval, graph expansion, a different embedder, reranking, BM25
+params), report **before/after on the hard subset**, not just the aggregate —
+the easy cases are already at 1.000 and will mask regressions or improvements
+on the cases that actually exercise dense recall.
 
 A feature that improves the aggregate only because it doesn't break the easy
 cases has demonstrated nothing. A feature that lifts the hard-subset `fileHitAtK`
 or `mrr` has earned its place.
+
+### The required validation procedure
+
+Point estimates lie at this sample size — bge-small looked like a +0.10 win at
+n=21, a +0.07 win at n=42, and dissolved into noise (hit@8 Δ +0.024, 95% CI
+[−0.060, +0.107]) under a paired bootstrap at n=84. The bootstrap is now a
+permanent tool; use it for every retrieval change:
+
+```bash
+BRAIN_QUIET=1 npm run brain:eval -- --hard-only --out /tmp/baseline.json
+# …apply the change / set the flag…
+BRAIN_QUIET=1 npm run brain:eval -- --hard-only --out /tmp/variant.json
+npm run brain:eval:compare -- /tmp/baseline.json /tmp/variant.json --hard-only
+```
+
+`brain:eval:compare` pairs cases by query, runs a seeded paired bootstrap
+(10 000 resamples), and prints Δ + 95% CI + a significance verdict for hit@K
+and MRR. Ship a change default-ON only when the hard-subset CI excludes 0 AND
+a full-set run shows no easy-case regression. Otherwise it lands as a
+documented opt-in flag. At n=84 the CI half-width is roughly ±0.08 on hit@8 —
+a fix must recover ~7+ cases to prove out alone; bundle related sub-threshold
+fixes into one validated change set rather than shipping them on vibes.
+
+### Absolute baseline (record deltas against this)
+
+Measured 2026-06-11 on a clean MiniLM-384 index, before the failure-analysis
+fixes: **hard subset (n=84) hit@8 = 0.595, MRR = 0.468**; easy subset
+saturated at 1.000. Per-miss breakdown: `docs/eval-failure-analysis.md` —
+notably, 12 of the 84 hard cases were unwinnable (targets outside the
+indexable file set) until the coverage fix, which also means earlier A/B
+experiments ran with ~16% dead weight in the denominator.
 
 ## Authoring more hard cases
 
