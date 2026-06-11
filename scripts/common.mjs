@@ -174,8 +174,17 @@ export async function listIndexableFiles(opts = {}) {
   const { default: fg } = await import('fast-glob');
   const patterns = [
     '.project-brain/**/*.md',
-    'README.md',
+    // Root-level markdown (README, CONTRIBUTING, SKILL, CHANGELOG, ...).
+    // Eval failure analysis showed CONTRIBUTING.md-style targets were
+    // unwinnable because only README.md was listed (docs/eval-failure-analysis.md).
+    '*.md',
     'docs/**/*.md',
+    // Repo plumbing newcomers ask about: setup/update scripts, scaffold
+    // templates (incl. extensionless git hooks), CI workflow definitions.
+    'bin/**/*.{sh,mjs,js}',
+    'templates/**/*.{md,mdc,yml,yaml,json,sh}',
+    'templates/hooks/*',
+    '.github/workflows/*.{yml,yaml}',
     'scripts/**/*.{mjs,js,ts,tsx}',
     'app/**/*.{ts,tsx,js,jsx,md,mdx}',
     'pages/**/*.{ts,tsx,js,jsx,md,mdx}',
