@@ -25,6 +25,7 @@
     "brain:impact": "node scripts/brain-impact.mjs",
     "brain:graph": "node scripts/brain-graph.mjs",
     "brain:eval": "node scripts/brain-eval.mjs",
+    "brain:eval:compare": "node scripts/brain-eval-compare.mjs",
     "brain:maintain": "node scripts/brain-maintain.mjs",
     "brain:compact": "node scripts/brain-compact.mjs",
     "brain:adr": "node scripts/brain-adr.mjs",
