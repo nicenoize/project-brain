@@ -7,7 +7,7 @@ Purpose: compact map agents load before search. Keep this under ~700 tokens; mov
 - **What:** reusable Project Brain skill package consumed by app repos via `skills/project-brain/`.
 - **Stack:** Node 20+ ESM, npm. Local MiniLM (default) or OpenAI embeddings. JSON / Lance / Qdrant stores.
 - **Canonical:** Git-tracked Markdown under `.project-brain/`. Generated indexes are local caches, never committed.
-- **Tests:** `npm test` → 45 cases, ~250 ms. CI: lint + test + setup smoke (`.github/workflows/ci.yml`).
+- **Tests:** `npm test` (node:test suite). CI: lint + test + setup smoke (`.github/workflows/ci.yml`).
 
 ## Current focus (2026-05)
 
@@ -51,6 +51,8 @@ Spec-kit (when `.specify/` or `specs/<id>/` exists, see `modules/spec-kit.md`):
 
 All aggregate records use `aggregate.mjs#buildAggregateSummaryTexts` so the embedding fits MiniLM's ~256-token window.
 
+The act / sensing / grill axes add durable indexed **doc records** (frontmatter Markdown under `.project-brain/<dir>/`, retrievable via `brain:search --type <kind>`): `finding` + `improve-plan` (act, ADR 0017), `explainer` (reasoning cache), `insight` (synthesis, ADR 0019), `history` (git archaeology, ADR 0019), `grill` (adversarial pre-implementation interview, ADR 0021). Each cites sources `{path, sha256}` and goes STALE when its evidence drifts (shared `evaluateExplainers`).
+
 ## Retrieval invariants
 
 - Scores compute over dense candidates (`topK·8`), not the full corpus. Escape: `BRAIN_BROAD_CANDIDATES=1`.
@@ -89,6 +91,7 @@ See `decisions/0012`.
 ## Commands (top-level)
 
 ```bash
+npm run brain:route                              # what should I do next? (deterministic dispatcher; auto-surfaced via hooks)
 npm run brain:ask    -- "where is X validated"   # routed search
 npm run brain:search -- "X"                      # hybrid search
 npm run brain:pack   -- "X" --mode resume        # token-budgeted context
@@ -98,10 +101,13 @@ npm run brain:maintain                           # sync + health
 npm run brain:guard                              # pre-commit gate
 npm run brain:eval                               # retrieval recall@K vs eval.json
 npm run brain:adr     "decision title"           # scaffold ADR
+npm run brain:audit   -- run --quick             # act axis: find problems → findings
+npm run brain:improve -- next                    # act axis: plan/execute/review the backlog
+npm run brain:grill   -- scaffold <finding>      # adversarial pre-implementation interview
 npm run brain:work    -- start ...               # workstream lifecycle
 npm run brain:orchestrate -- --concurrency 3 ... # multi-agent spawn
 npm run brain:worktree -- spawn --count N ...    # parallel branches
-npm test                                         # 88 unit tests
+npm test                                         # unit test suite (node:test)
 # Fleet mode (only when 2+ sibling projects discovered):
 npm run brain:edges                              # list cross-project edges
 npm run brain:edges -- --detect                  # force-rerun all detectors

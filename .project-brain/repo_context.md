@@ -17,10 +17,11 @@ The global Project Brain skill package. App repos consume it via `skills/project
 
 | Command | Purpose |
 |---|---|
-| `npm test` | Run the node:test suite (45 cases) |
+| `npm test` | Run the node:test suite |
+| `npm run brain:route` | Decide what to run next (deterministic dispatcher; auto-surfaced via hooks) |
 | `npm run brain:index` | Full incremental index of source + brain markdown |
 | `npm run brain:sync` | Diff manifest, re-embed deltas only |
-| `npm run brain:ask -- "query"` | Routed search (recommended entry point) |
+| `npm run brain:ask -- "query"` | Routed search (recommended retrieval entry point) |
 | `npm run brain:search -- "query"` | Hybrid semantic search |
 | `npm run brain:pack -- "query" --mode resume` | Token-budgeted context blob |
 | `npm run brain:maintain` | brain:sync + brain:health |
@@ -28,8 +29,10 @@ The global Project Brain skill package. App repos consume it via `skills/project
 | `npm run brain:guard` | Pre-commit gate (branch base, link-check) |
 | `npm run brain:eval` | Retrieval recall@K against `.project-brain/eval.json` |
 | `npm run brain:adr "title"` | Scaffold a new ADR |
+| `npm run brain:audit -- run` / `brain:improve -- next` | Act axis: find problems → plan/execute/review the backlog |
+| `npm run brain:grill -- scaffold <finding>` | Adversarial pre-implementation interview (grounded questions) |
 | `npm run brain:install-hooks` | Install Git hooks |
-| `npm run brain:install-cursor-hooks` | Install Cursor hooks |
+| `npm run brain:install-cursor-hooks` | Install Cursor hooks (incl. auto-routing rule) |
 
 See `package.json` for the full list (one npm script per `brain:*` command).
 

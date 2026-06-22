@@ -5,7 +5,7 @@ Project Brain has one reusable package and many project brains.
 ```mermaid
 flowchart TD
   Global["Global Project Brain repo"] --> Skill["Reusable skill<br/>SKILL.md + scripts/"]
-  Global --> Scripts["brain:index, brain:sync, brain:search, brain:ask, brain:pack,<br/>brain:guard, brain:health, brain:maintain,<br/>brain:session, brain:compact, brain:digest, brain:prune,<br/>brain:worktree, brain:orchestrate, brain:work, brain:ticket,<br/>brain:adr, brain:lint-conventions, brain:link-check, brain:eval"]
+  Global --> Scripts["brain:route (dispatcher), brain:index, brain:sync, brain:search, brain:ask, brain:pack,<br/>brain:guard, brain:health, brain:maintain,<br/>brain:session, brain:compact, brain:digest, brain:prune,<br/>brain:worktree, brain:orchestrate, brain:work, brain:ticket,<br/>brain:adr, brain:lint-conventions, brain:link-check, brain:eval,<br/>brain:audit, brain:improve, brain:grill, brain:diagram, brain:radar, brain:brief,<br/>brain:why, brain:gaps, brain:insight, brain:learn, brain:explain, brain:skill-audit"]
   Global --> Templates["Templates<br/>PR template, GitHub workflows, Git + Cursor hooks,<br/>conventions.example.json, agents/, brain/"]
   Global --> Conventions["GitFlow, code conventions, Cavemem + Caveman policy"]
 
@@ -19,7 +19,7 @@ flowchart TD
   Maintain --> Index
   Scripts --> Guard["brain:guard<br/>branch base, PR target, oversized context, brain link-check"]
   Templates --> CI["GitHub Actions<br/>brain:maintain --ci, brain:guard"]
-  Templates --> Hooks["Git hooks (pre-commit, post-merge, post-checkout)<br/>+ Cursor preCompact/stop<br/>+ Claude Code PreCompact/Stop → brain:digest, brain:prune"]
+  Templates --> Hooks["Git hooks (pre-commit, post-merge, post-checkout)<br/>+ Cursor preCompact/stop + alwaysApply route rule<br/>+ Claude Code PreCompact/Stop → brain:digest, brain:prune<br/>+ PreToolUse Edit|Write → brain:lint-conventions<br/>+ UserPromptSubmit/SessionStart → brain:route (auto-routing, ADR 0023)"]
 
   Dev["Developer / agent"] --> App
   Cavemem["Cavemem<br/>local/session recall"] -. "durable facts promoted" .-> AppBrain

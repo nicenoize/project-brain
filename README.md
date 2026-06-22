@@ -89,6 +89,10 @@ Enforced by `brain:guard` (pre-commit). Allowed integration bases include `epic/
 Use the project-brain skill. Audit this repository, ingest the master plan if present, update context_index, infer modules/features, and mark uncertain facts as Needs Review.
 ```
 
+## Auto-routing (the brain decides what to run next)
+
+You don't have to know which `brain:*` command fits — run `npm run brain:route` and the brain senses git/index/backlog state and prints the ranked next action(s) with reasons. `--auto` runs only the read-only/idempotent subset and stops at the first mutating boundary (never commits/pushes/merges). After `brain:update-skill` (Claude Code) / `brain:install-cursor-hooks` (Cursor), routing is **auto-surfaced** into the agent's context every prompt — so the brain is consulted automatically without a specific request. Before building a risky change, `npm run brain:grill -- scaffold <finding|plan|decision>` asks grounded adversarial questions first. See `SKILL.md` (Auto-activation) and `decisions/0021`–`0023`.
+
 ## Token-saving mode
 
 Project Brain pairs with the external **Caveman** skill for low-token agent communication. Install once per developer machine:
