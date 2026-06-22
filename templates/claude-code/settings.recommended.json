@@ -14,6 +14,24 @@
             "command": "echo '=== Project Brain: Active State ===' && cat .project-brain/active_state.md"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-route.mjs\" --hook --event sessionstart || true"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-route.mjs\" --hook --event userpromptsubmit || true"
+          }
+        ]
       }
     ],
     "PreCompact": [

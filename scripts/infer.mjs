@@ -27,6 +27,8 @@ export function inferType(file) {
   // 'improve-plan' (not 'plan') avoids colliding with the spec-kit plan.md type above.
   if (file.includes('.project-brain/findings/')) return 'finding';
   if (file.includes('.project-brain/plans/')) return 'improve-plan';
+  // Grill-axis record (decisions/0021): adversarial pre-implementation interview.
+  if (file.includes('.project-brain/grills/')) return 'grill';
   // Temporal-axis record (decisions/0019): git history; regenerable, gitignored.
   if (file.includes('.project-brain/history/')) return 'history';
   if (file.includes('/features/')) return 'feature';

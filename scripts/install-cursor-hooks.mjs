@@ -60,14 +60,19 @@ if (fs.existsSync(targetHooks)) {
 
 fs.writeFileSync(targetHooks, JSON.stringify(merged, null, 2) + '\n');
 
-const rulesSrc = path.join(skillRoot, 'templates', 'cursor', 'rules', 'project-brain-compact.mdc');
+// Install every brain-provided Cursor rule (additive; never clobber developer
+// edits). project-brain-route.mdc (alwaysApply) is what makes auto-routing
+// ambient in Cursor — the model is always reminded to consult `brain:route`.
+const rulesSrcDir = path.join(skillRoot, 'templates', 'cursor', 'rules');
 const rulesDir = path.join(targetDir, 'rules');
-if (fs.existsSync(rulesSrc)) {
+if (fs.existsSync(rulesSrcDir)) {
   fs.mkdirSync(rulesDir, { recursive: true });
-  const rulesDest = path.join(rulesDir, 'project-brain-compact.mdc');
-  if (!fs.existsSync(rulesDest)) {
-    fs.copyFileSync(rulesSrc, rulesDest);
-    console.log('Installed .cursor/rules/project-brain-compact.mdc');
+  for (const name of fs.readdirSync(rulesSrcDir)) {
+    if (!name.endsWith('.mdc')) continue;
+    const rulesDest = path.join(rulesDir, name);
+    if (fs.existsSync(rulesDest)) continue; // don't clobber developer edits
+    fs.copyFileSync(path.join(rulesSrcDir, name), rulesDest);
+    console.log(`Installed .cursor/rules/${name}`);
   }
 }
 

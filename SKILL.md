@@ -27,6 +27,8 @@ Choose the smallest workflow command that matches the user's intent:
 
 | User intent / situation | Default action |
 |-------------------------|----------------|
+| Unsure which command fits the current repo state | Run `npm run brain:route` — it senses git/index/backlog state and prints the ranked next `brain:*` action(s) with reasons (this table, made executable). `--auto` runs only the safe subset and stops at the first mutating boundary. |
+| About to implement a finding/plan/risky idea | Run `npm run brain:grill -- scaffold <finding\|plan\|decision>` first — it generates grounded adversarial questions (real blast-radius, governing ADRs, tests) to flush out issues before coding. |
 | Ask a repo/context question | Load `context_index.md` + `active_state.md`, then run `npm run brain:ask -- "query"`. |
 | Need exact implementation context | Use `brain:ask --pack --max-tokens 1200-3000`; fall back to direct file reads only for returned paths. |
 | Start non-trivial implementation | Prefer `npm run brain:work -- start ...` so branch, session, workstream, leases, and initial pack stay aligned. |
@@ -229,6 +231,48 @@ npm run brain:skill-audit -- ./skill --max-risk 40 --json    # gate: exit 1 if r
 
 First primitive of the trust axis / Constellation federation (`docs/vision-constellation.md`): verify-before-trust for any skill or brain fragment entering your brain. Dogfood it before adopting ecosystem skills (caveman, drawio-skill, ponytail, improve).
 
+### Adversarial pre-implementation grill (`brain:grill`)
+
+The brain *finds* problems (`brain:audit`/`brain:gaps`) and *synthesizes* (`brain:insight`), but `brain:grill` *challenges an idea before you build it* — an adversarial interviewer that flushes out issues while they're cheap. Its edge over a generic "grill me": the questions are generated **deterministically from the index** — real callers/tests of a symbol (`buildImpact`), the ADRs that govern the module, conflicting open findings — so the interview is specific, not boilerplate. Scaffold + recorder like `brain:audit`/`brain:adr`/`brain:insight`: the command poses grounded questions, **the agent answers** (the judgment a CLI can't supply), `save` records the Q&A + verdict. See `decisions/0021-grill-adversarial-axis.md`.
+
+```bash
+npm run brain:grill -- scaffold <finding-slug>          # grounded interview from the index
+npm run brain:grill -- scaffold improve-<plan> --context # also inject a retrieved context primer
+npm run brain:grill -- scaffold --title "free proposal" --category performance
+npm run brain:grill -- save --target <id> --verdict proceed|revise|block \
+    --sources scripts/retrieval.mjs --body-file answers.md
+npm run brain:grill -- check --strict                    # STALE when cited evidence drifts (CI gate)
+npm run brain:grill -- list
+```
+
+The `grill` record (`.project-brain/grills/<slug>.md`, indexed → `brain:search --type grill`) carries a `verdict` (`open`/`proceed`/`revise`/`block`) and cited `sources` ({path, sha256}); a grill goes STALE when its evidence changes (same machinery as explainers/findings). Evidence gathering is mostly model-free (ADRs + related findings from disk); only blast-radius needs the index and degrades gracefully without it. A grill on a `finding`/`improve-plan` flushes issues **before** `brain:improve execute`.
+
+### Autonomous dispatch — the brain decides what to run next (`brain:route`)
+
+Every other command answers "do X"; `brain:route` answers "what should I do NOW?". It is the **Default automation policy table above, made executable** — a deterministic sensor + rule engine (no LLM on the hot path) that senses git/index/backlog state and prints the ranked next `brain:*` action(s) with a reason for each, generalizing `brain:improve status/next` from one backlog to the whole command surface. See `decisions/0022-route-autonomous-dispatch-axis.md`.
+
+```bash
+npm run brain:route                          # ranked next actions + reasons (recommend only)
+npm run brain:route -- --explain             # every sensed signal + which rules fired
+npm run brain:route -- --json                # machine-readable envelope for the agent
+npm run brain:route -- --auto                # run ONLY the safe subset; STOP at the first mutating boundary
+npm run brain:route -- --auto --dry-run      # show what --auto would run vs. where it stops
+npm run brain:route -- --intent "start a PR" # bias ranking toward a stated goal (keyword match)
+npm run brain:route -- --no-index            # skip the optional index open (model-free, faster)
+```
+
+**Autonomy ceiling (inherits `decisions/0018`):** plain `brain:route` recommends only. `--auto` executes the read-only/advisory/idempotent subset (`ask`, `radar`, `brief`, `gaps`, `maintain`, `improve next`, …) and **stops at every mutating/irreversible boundary** — record writes, branch/worktree/PR creation, `improve execute` — printing what it stopped before and why. It re-checks the boundary before every execution and **never runs git commit/push/merge**. It delegates (never reimplements): retrieval → `brain:ask`, backlog → `brain:improve`, pre-touch → `buildBrief`.
+
+#### Auto-activation — the brain routes itself (no command needed)
+
+So you don't have to *ask* the brain which command to run, `brain:route --hook` is wired into the agent harness to surface routing **automatically**. It is fast (model-free `--no-index`), **silent on a quiet repo** (no per-prompt noise), and **always exits 0** (never blocks a prompt). It only nags on genuinely interrupt-worthy state (stale index, lease conflict, risky uncommitted change, open/planned backlog) — `brain:radar`/`brain:pr` are kept out of the per-prompt stream. See `decisions/0023-ambient-routing-activation.md`.
+
+- **Claude Code:** `brain:update-skill` merges two hooks into `.claude/settings.json` (via `setup-claude-settings.mjs`): a **`UserPromptSubmit`** hook (emits the JSON `additionalContext` envelope Claude Code requires) injects the current routing into context on every prompt, and a **`SessionStart`** hook (plain stdout) orients each new session. Additive + idempotent (deduped by command string).
+- **Cursor:** `brain:install-cursor-hooks` installs `.cursor/rules/project-brain-route.mdc` (`alwaysApply: true`) — the model is always reminded to consult `brain:route`.
+- **Other CLIs (Codex/Gemini/plain terminal):** no per-prompt hook; run `npm run brain:route` yourself (the Cursor rule's guidance applies), or add `brain:route --hook` to your own shell prompt wiring.
+
+**When you see a `Project Brain routing` block in context:** act on the **[safe to run]** items yourself; treat **[your call]** items as decisions (do them only when the task calls for it). Opt out with `PROJECT_BRAIN_SKIP_CLAUDE_SETTINGS=1` (Claude) or by deleting the rule/hook; `BRAIN_QUIET=1` and `--no-index` keep it fast.
+
 ### Pre-touch / PR radar (`brain:radar`)
 
 File-centric, deterministic, index-only (no LLM, no new embeddings) — surfaces what the brain already knows about files **before** you edit them. Turns the brain proactive.
@@ -306,6 +350,8 @@ npm run brain:work -- start --issue 99 --slug checkout-hardening --actor codex -
 npm run brain:lease -- add "lib/auth.ts" --task issue-99-checkout-hardening --actor codex
 npm run brain:pr -- prepare --write .project-brain/pr-body.md
 npm run brain:graph -- --format json
+npm run brain:route
+npm run brain:grill -- scaffold <finding-slug>
 npm run brain:eval
 npm run brain:maintain
 npm run brain:maintain -- --strict
