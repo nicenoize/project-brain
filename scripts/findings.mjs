@@ -29,6 +29,17 @@ export const FINDING_CATEGORIES = [
 
 export const FINDING_STATUSES = ['open', 'planned', 'wontfix', 'resolved'];
 
+export const GRILL_DIR = path.join(BRAIN_DIR, 'grills');
+
+// A grill's verdict is the agent's call after answering the adversarial
+// questions: open (not yet decided), proceed (defended — build it),
+// revise (issues found — change the plan first), block (don't build it).
+export const GRILL_VERDICTS = ['open', 'proceed', 'revise', 'block'];
+
+// What a grill challenges: an act-axis finding/plan, a decision (ADR), or a
+// free-form proposal the agent typed in (no record yet).
+export const GRILL_TARGET_TYPES = ['finding', 'improve-plan', 'decision', 'proposal'];
+
 /** Render a frontmatter scalar: plain tokens bare, anything else JSON-quoted. */
 function fmScalar(value) {
   const s = String(value ?? '');
@@ -163,6 +174,60 @@ export function parsePlan(content) {
 
 export function loadPlans() {
   return loadDir(PLANS_DIR, 'plans', parsePlan);
+}
+
+// ---------- grill (adversarial pre-implementation interview) ----------
+//
+// A `grill` record captures the act of challenging an idea BEFORE it is built
+// (decisions/0021). Like `finding`, it carries a nested `sources:` list (the
+// cited evidence the challenges were grounded in), so it shares this module's
+// (de)serialization rather than the scalar-only parseDoc. The body is the Q&A:
+// the deterministically-generated adversarial questions and the agent's
+// answers. brain:grill scaffolds the questions; the agent answers + records.
+
+export function serializeGrill(rec) {
+  const lines = ['---'];
+  lines.push('type: grill');
+  lines.push(`title: ${fmScalar(rec.title || '')}`);
+  lines.push(`target: ${fmScalar(rec.target || '')}`);
+  lines.push(`targetType: ${fmScalar(rec.targetType || 'proposal')}`);
+  lines.push(`category: ${fmScalar(rec.category || 'tech-debt')}`);
+  lines.push(`verdict: ${fmScalar(rec.verdict || 'open')}`);
+  lines.push(`created: ${rec.created}`);
+  lines.push(`updated: ${rec.updated}`);
+  lines.push(`actor: ${fmScalar(rec.actor || '')}`);
+  lines.push(`module: ${fmScalar(rec.module || '')}`);
+  lines.push('sources:');
+  for (const s of rec.sources || []) {
+    lines.push(`  - path: ${JSON.stringify(s.path)}`);
+    lines.push(`    sha256: ${s.sha256 == null ? 'null' : JSON.stringify(s.sha256)}`);
+  }
+  lines.push('---');
+  return `${lines.join('\n')}\n${(rec.body || '').replace(/\s*$/, '')}\n`;
+}
+
+export function parseGrill(content) {
+  const { fm, body } = splitFrontmatter(content);
+  const fmLines = fm.split('\n');
+  const sc = parseScalars(fmLines, ['title', 'target', 'targetType', 'category', 'verdict', 'created', 'updated', 'actor', 'module']);
+  return {
+    type: 'grill',
+    title: unq(sc.title) || '',
+    target: unq(sc.target) || '',
+    targetType: unq(sc.targetType) || 'proposal',
+    category: unq(sc.category) || 'tech-debt',
+    verdict: unq(sc.verdict) || 'open',
+    created: (sc.created || '').trim(),
+    updated: (sc.updated || '').trim(),
+    actor: unq(sc.actor) || '',
+    module: unq(sc.module) || '',
+    sources: parseSources(fmLines),
+    body
+  };
+}
+
+export function loadGrills() {
+  return loadDir(GRILL_DIR, 'grills', parseGrill);
 }
 
 // ---------- shared loader ----------

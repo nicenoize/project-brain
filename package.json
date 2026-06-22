@@ -51,6 +51,8 @@
     "brain:gaps": "node scripts/brain-gaps.mjs",
     "brain:insight": "node scripts/brain-insight.mjs",
     "brain:learn": "node scripts/brain-learn.mjs",
+    "brain:grill": "node scripts/brain-grill.mjs",
+    "brain:route": "node scripts/brain-route.mjs",
     "test": "node --test tests/*.test.mjs tests/**/*.test.mjs"
   },
   "dependencies": {

@@ -1,0 +1,30 @@
+---
+description: Let the brain decide which command to run next (auto-routing)
+globs:
+alwaysApply: true
+---
+
+# Project Brain — auto-routing
+
+Don't guess which `brain:*` command fits the situation — let the brain decide.
+
+Before acting on a non-trivial request, and whenever you're unsure what to do
+next, run:
+
+```
+npm run brain:route
+```
+
+It senses git / index / backlog state and prints the ranked next action(s) with
+a reason for each. Then:
+
+- Act on the **[safe to run]** items (read-only / advisory / idempotent) yourself.
+- Treat **[your call]** items (record writes, branch / worktree / PR creation,
+  `brain:improve execute`) as decisions — do them only when the task calls for it.
+- `npm run brain:route -- --auto` runs the safe subset and **stops** at the first
+  item that needs you. It never commits, pushes, or merges.
+
+Before implementing a finding, plan, or risky idea, challenge it first:
+`npm run brain:grill -- scaffold <finding|plan|decision>` — it asks grounded
+adversarial questions (real blast-radius, governing ADRs, tests) so issues
+surface before you build.
