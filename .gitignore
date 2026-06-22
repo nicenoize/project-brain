@@ -6,5 +6,9 @@ node_modules/
 .project-brain/search_index.json
 .project-brain/sessions/
 .project-brain/.sync-state.json
+.project-brain/.skill-audit-cache/
+.claude/worktrees/
+.project-brain/history/
+.project-brain/.eval-candidates/
 .worktrees/
 project-brain

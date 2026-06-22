@@ -45,6 +45,14 @@
       "forbid": "}\\s*catch\\s*\\(\\s*\\)\\s*\\{\\s*\\}",
       "message": "Hook scripts must log failures to process.stderr before exiting — never swallow with empty catch. See decisions/0005 + the brain-session-digest P1.5 commit.",
       "severity": "warn"
+    },
+    {
+      "name": "no-duplicate-common-helpers",
+      "match": ["scripts/brain-*.mjs"],
+      "exclude": ["scripts/common.mjs"],
+      "forbid": "^(?:export )?function\\s+(read|write|atomicWrite|sha256|slugify|parseDoc|truthyFrontmatter|chunkText|cosine)\\s*\\(",
+      "message": "This helper already exists in common.mjs — import it instead of redefining (ponytail rung 4: don't rewrite what's installed). See CONTRIBUTING.md 'no duplicate helpers'.",
+      "severity": "warn"
     }
   ]
 }

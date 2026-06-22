@@ -5,6 +5,8 @@
  * grepping. Uses ts-graph workspace references when `typescript` is
  * installed, regex fallback otherwise.
  */
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ROOT, listIndexableFiles, takeFlag } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { retrieve } from './retrieval.mjs';
@@ -12,24 +14,32 @@ import { openStore } from './store.mjs';
 import { findTsWorkspaceReferences } from './ts-graph.mjs';
 
 const GLOBAL_REFS = new Set(['JSON', 'String', 'Number', 'Boolean', 'Array', 'Object', 'Map', 'Set', 'Math', 'Date', 'Error', 'Promise']);
-const args = process.argv.slice(2);
-const json = takeFlag(args, '--json');
-const crossProject = takeFlag(args, '--cross-project');
-const symbol = args[0];
-if (!symbol) {
-  console.error('Usage: npm run brain:impact -- SymbolName [--cross-project] [--json]');
-  process.exit(1);
+async function main() {
+  const args = process.argv.slice(2);
+  const json = takeFlag(args, '--json');
+  const crossProject = takeFlag(args, '--cross-project');
+  const symbol = args[0];
+  if (!symbol) {
+    console.error('Usage: npm run brain:impact -- SymbolName [--cross-project] [--json]');
+    process.exit(1);
+  }
+
+  const embedder = openEmbedder();
+  const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
+  const records = await store.getAll();
+  const indexable = await listIndexableFiles();
+  const impact = await buildImpact(symbol, records, store, embedder, { root: ROOT, indexable, crossProject });
+  await store.close();
+
+  if (json) console.log(JSON.stringify(impact, null, 2));
+  else printImpact(impact);
 }
 
-const embedder = openEmbedder();
-const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
-const records = await store.getAll();
-const indexable = await listIndexableFiles();
-const impact = await buildImpact(symbol, records, store, embedder, { root: ROOT, indexable, crossProject });
-await store.close();
-
-if (json) console.log(JSON.stringify(impact, null, 2));
-else printImpact(impact);
+// Only run the CLI when invoked directly; importing buildImpact (e.g. from
+// brain-improve.mjs) must not parse argv, open the store, or call process.exit.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
 
 export async function buildImpact(symbol, records, store, embedder, options = {}) {
   const codeRecords = records.filter(record => record.type === 'code' && !record.isSummary);

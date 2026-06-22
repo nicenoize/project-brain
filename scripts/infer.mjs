@@ -21,6 +21,14 @@ export function inferType(file) {
   if (/^specs\/[^/]+\//.test(file)) return 'spec-support';
   // Reasoning-cache records: durable cited answers under .project-brain/explainers/.
   if (file.includes('.project-brain/explainers/')) return 'explainer';
+  // Synthesis-axis record (decisions/0019): cross-source claims, gated on >=2 cited sources.
+  if (file.includes('.project-brain/insights/')) return 'insight';
+  // Act-axis records (decisions/0017): audit findings and their remediation plans.
+  // 'improve-plan' (not 'plan') avoids colliding with the spec-kit plan.md type above.
+  if (file.includes('.project-brain/findings/')) return 'finding';
+  if (file.includes('.project-brain/plans/')) return 'improve-plan';
+  // Temporal-axis record (decisions/0019): git history; regenerable, gitignored.
+  if (file.includes('.project-brain/history/')) return 'history';
   if (file.includes('/features/')) return 'feature';
   if (file.includes('/modules/')) return 'module';
   if (file.includes('/decisions/')) return 'decision';

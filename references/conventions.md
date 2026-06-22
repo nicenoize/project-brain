@@ -86,8 +86,16 @@ Allowed commit types:
 - Prefer **one merge point** for `active_state.md`; use the leases / workstreams tables and `.project-brain/sessions/` for concurrent edits.
 - When packing context for a specific stream, set `BRAIN_TASK` / `BRAIN_ACTOR` or pass `--task` / `--actor` to `brain:pack` / `brain:ask` / `brain:search`.
 
-## Token Budget
+## Token budget & code minimalism
+
+Two independent levers — one on **how agents talk**, one on **how much code they write**. They compose; neither replaces the other.
+
+**Communication compression — Caveman** (affects wording only):
 
 - Use Caveman `$caveman ultra` for internal agent progress, handoffs, investigation notes, and review notes when available.
 - Keep user-facing summaries concise but clear enough to preserve order, risk, and decisions.
 - Disable compression for destructive confirmations, security warnings, or places where terse wording becomes ambiguous.
+
+**Code minimalism — ponytail** (affects generated code): apply the "lazy senior developer" ladder before writing anything new — does it need to exist (YAGNI) → does stdlib handle it → is there a native platform feature → is it already an installed dependency → can it be one line → only then write the minimum. Install: `/plugin install ponytail@ponytail` (Claude Code). This operationalizes at write-time the YAGNI/KISS/DRY + "no duplicate helpers" the brain already asserts (CONTRIBUTING.md, `.project-brain/conventions.json`). ponytail *prevents* over-engineering at write-time; `brain:audit` *detects* tech-debt at audit-time — together they close the loop.
+
+> Glossary (these three are easy to confuse): **Caveman** = communication compression (terse output). **Cavemem** = optional local/session memory tool. **ponytail** = code-generation minimalism. Caveman and ponytail are orthogonal — use both.

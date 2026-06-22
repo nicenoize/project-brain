@@ -42,6 +42,15 @@
     "brain:feature": "node scripts/brain-feature.mjs",
     "brain:explain": "node scripts/brain-explain.mjs",
     "brain:brief": "node scripts/brain-brief.mjs",
+    "brain:audit": "node scripts/brain-audit.mjs",
+    "brain:improve": "node scripts/brain-improve.mjs",
+    "brain:diagram": "node scripts/brain-diagram.mjs",
+    "brain:skill-audit": "node scripts/brain-skill-audit.mjs",
+    "brain:radar": "node scripts/brain-radar.mjs",
+    "brain:why": "node scripts/brain-why.mjs",
+    "brain:gaps": "node scripts/brain-gaps.mjs",
+    "brain:insight": "node scripts/brain-insight.mjs",
+    "brain:learn": "node scripts/brain-learn.mjs",
     "test": "node --test tests/*.test.mjs tests/**/*.test.mjs"
   },
   "dependencies": {

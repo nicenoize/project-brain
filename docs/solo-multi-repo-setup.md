@@ -7,7 +7,7 @@ same repos without brain discipline.
 
 > Sweet spot: 3–20 repos, 1 brain user, AI agents (Claude / Cursor / Codex) as
 > first-class collaborators. If your team grows past ~5 brain users you'll want
-> to revisit federation; see the vision doc.
+> to revisit federation; see [`vision-constellation.md`](vision-constellation.md).
 
 ## TL;DR
 
