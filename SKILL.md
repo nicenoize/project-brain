@@ -151,6 +151,137 @@ npm run brain:explain -- list             # explainers with fresh/stale status
 
 Each record stores `query`, `created`/`updated`, `actor`, and `sources:` as `{ path, sha256 }` where the hash is the cited file's content at save time. `check`/`list` re-hash each source's current content; a mismatch (or missing file) marks the cached answer STALE — the staleness invalidation that pairs with the brain's drift philosophy. `save` is idempotent by slug (re-save updates the body + `updated` + re-hashes sources, preserves `created`). v1 deliberately does NOT touch retrieval ranking; a search boost for explainers is a planned follow-up.
 
+### Act axis: audit → enriched plan (`brain:audit` / `brain:improve`)
+
+The brain is extractive (it retrieves); the act axis makes it executive. `brain:audit` is a 9-category audit scaffold (like `brain:adr`, the model does the judging); each confirmed problem becomes an indexed `finding`. `brain:improve` turns a finding into an `improve-plan` enriched from the brain's own index — real blast-radius, governing ADRs, the actual tests to run — then keeps the backlog honest. See `decisions/0017-build-native-improve-act-axis.md`.
+
+```bash
+# 1. Scaffold the audit, then record each confirmed problem as a finding.
+npm run brain:audit -- run --quick                     # taxonomy + evidence commands (or --categories a,b)
+npm run brain:audit -- add --title "..." --category performance --impact 4 \
+    --symbols hybridScore,tfidfScore --module scripts/retrieval --sources scripts/retrieval.mjs --body "evidence + fix"
+npm run brain:audit -- list                            # backlog by status/impact
+
+# 2. Turn a finding into an enriched, self-contained plan a cheaper model can execute.
+npm run brain:improve -- plan <finding-slug> --enrich  # injects buildImpact blast-radius + packPrompt context + buildPlan packages
+npm run brain:improve -- list
+
+# 3. Keep the backlog honest: cited sources gone → auto-resolved; changed → flagged stale for re-review.
+npm run brain:improve -- reconcile                     # add --dry-run to preview, --json for machines
+
+# 4. Execute / verify — REAL wiring over the existing coordinator + gate (decisions/0020):
+npm run brain:improve -- execute <plan-slug>           # DRY preview: materializes work-packages, prints what it WOULD spawn
+npm run brain:improve -- execute <plan-slug> --run     # spawns worktrees (brain:worktree); stops at the worktree boundary — no push/merge
+npm run brain:improve -- review  <plan-slug>           # brain:guard + brain:verify (+ brain:eval:compare for retrieval-affecting plans)
+```
+
+Both record types are indexed and retrievable via `brain:search --type finding|improve-plan`:
+
+| Type | Path | Holds |
+|------|------|-------|
+| `finding` | `.project-brain/findings/<slug>.md` | A problem: `category`, `impact`, `status` (open/planned/wontfix/resolved), cited `sources` (staleness anchors), `symbols`/`module` (drive enrichment). |
+| `improve-plan` | `.project-brain/plans/<slug>.md` | A remediation: the enriched, self-contained plan body. Named `improve-plan`, not `plan`, to avoid colliding with the spec-kit `plan` type. |
+
+`reconcile` reuses the explainer staleness machinery (`evaluateExplainers` + `hashSource`): a finding whose cited sources are all gone is auto-resolved; merely changed sources surface as stale (never auto-closed — avoids false-closing on churn). A `wontfix` finding stays indexed — the "what we decided NOT to do" record. Everything heavy (worktrees, orchestration, eval) is an existing `brain:*` primitive; the act axis adds no new dependency. A retrieval boost for these types is a planned, eval-gated follow-up.
+
+#### Running the act axis as an autonomous loop
+
+The act axis is a cycle — audit → plan → execute → verify → reconcile. Drive it with the `/loop` skill so the agent drains the backlog with minimal input:
+
+```
+/loop work the improvement backlog: run `brain:improve status`; if open findings exist run
+`brain:improve next` (it plans the top one); if findings are planned, `brain:improve execute <plan> --run`
+to spawn worktrees, do the work, then `brain:improve review <plan>`; if the backlog is clear,
+`brain:audit run` to find more. Stop when status shows nothing open or planned.
+```
+
+- `npm run brain:improve -- status` — backlog dashboard (open/planned/wontfix/resolved + the next action). The loop's situational awareness and stop condition.
+- `npm run brain:improve -- next` — advances the backlog ONE safe tick: plans the highest-impact open finding (the only auto-step). Never mutates code.
+- `npm run brain:improve -- execute <plan> [--run]` — REAL wiring (decisions/0020): materializes work-packages and routes them to `brain:worktree spawn` as a subprocess. **DRY preview by default** (prints what it would spawn); `--run` spawns; either way **stops at the worktree boundary — no push/merge.**
+- `npm run brain:improve -- review <plan> [--baseline f --variant f]` — the REAL gate: `brain:guard` + `brain:verify`, plus `brain:eval:compare --hard-only` for retrieval-affecting plans. It refuses regressions (a required-but-unproven eval gate FAILS) — that is what makes the loop effective rather than a token-burner.
+
+The LLM stays in the loop by design: **auditing** (judging what's worth fixing) and **reviewing** a diff need judgment a CLI can't supply — `next`/`execute`/`review` do the mechanical planning/spawning/gating, the agent does the judgment. Autonomy ceiling: execution is worktree-isolated, and the loop **stops at the merge boundary** — you merge (house rule). See `decisions/0018-autonomous-act-axis-loop.md` and `decisions/0020-real-execute-review-loop-closure.md`.
+
+### Diagrams (`brain:diagram`)
+
+The brain already computes the graph, so a diagram is a projection of the index — no re-parsing. Default output is Mermaid (renders in `docs/*.md` and on GitHub, zero deps); `--format drawio` emits `.drawio` XML (the draw.io desktop CLI is only needed to rasterize to PNG, and the brain never calls it). See `decisions/0016-ecosystem-skill-axis-map.md` (recall axis).
+
+```bash
+npm run brain:diagram                                   # module/feature/project overview
+npm run brain:diagram -- --module scripts/retrieval     # files + symbols inside one module
+npm run brain:diagram -- --feature checkout             # files/modules/decisions for a feature
+npm run brain:diagram -- --symbol hybridScore           # blast-radius ego-graph (reuses brain:impact)
+npm run brain:diagram -- --fleet                        # cross-project edges (fleet mode)
+npm run brain:diagram -- --module x --format drawio --out docs/diagrams/x.drawio
+```
+
+Pick at most one scope (default = overview). `--format mermaid|drawio|json`, `--direction TD|LR`, `--max-nodes N` (caps huge graphs). Writing a Mermaid block into a `.project-brain/**.md` round-trips it back into retrieval.
+
+### Skill trust / supply-chain audit (`brain:skill-audit`)
+
+Installing a third-party skill is a supply-chain risk. `brain:skill-audit <path|url>` shells out to [skillspector](https://github.com/NVIDIA/skillspector) (if installed) for a 0-100 risk score and gates adoption. OPT-IN and never vendored: install the scanner CLI, set `BRAIN_SKILLSPECTOR_BIN`, or run via Docker (`BRAIN_SKILLSPECTOR_DOCKER=1`, no local Python). Absent → the audit is skipped (a no-op, not an error), exactly like the `brain:guard` security scanners.
+
+```bash
+npm run brain:skill-audit -- ./path/to/skill                 # scan a local skill dir/file
+npm run brain:skill-audit -- https://github.com/owner/skill  # scan a remote skill
+npm run brain:skill-audit -- ./skill --max-risk 40 --json    # gate: exit 1 if risk > 40
+```
+
+First primitive of the trust axis / Constellation federation (`docs/vision-constellation.md`): verify-before-trust for any skill or brain fragment entering your brain. Dogfood it before adopting ecosystem skills (caveman, drawio-skill, ponytail, improve).
+
+### Pre-touch / PR radar (`brain:radar`)
+
+File-centric, deterministic, index-only (no LLM, no new embeddings) — surfaces what the brain already knows about files **before** you edit them. Turns the brain proactive.
+
+```bash
+npm run brain:radar -- --for scripts/retrieval.mjs   # one file (repeatable)
+npm run brain:radar -- --staged                       # git-staged files (PR briefing)
+npm run brain:radar                                    # working-tree changes; --json, --no-impact
+```
+Per file: active leases, governing ADRs (by module), downstream cross-project consumers, open findings citing it, and a one-line blast radius. Always exits 0 (advisory). Opt-in hook at `templates/hooks/brain-radar.sh` (`BRAIN_RADAR_ON_CHECKOUT=1` / `_ON_COMMIT=1`). See `decisions/0019`.
+
+### Git archaeology (`brain:why`)
+
+Make git history queryable so an agent can answer "why is this code like this?" instead of guessing. New indexed `history` record type.
+
+```bash
+npm run brain:why -- ingest [--limit N] [--since <ref>]   # git log → .project-brain/history/<sha>.md (then brain:index)
+npm run brain:why -- "why was rerank added" [--json]      # retrieve the commits/PRs that explain it
+```
+Ingest is **explicit** (not on every sync). Enriches with PR bodies if `gh` is available; degrades silently otherwise. `.project-brain/history/` is regenerable → gitignored. See `decisions/0019`.
+
+### Deterministic self-audit (`brain:gaps`)
+
+What the brain does NOT know / where it's stale or self-contradictory — all from the index, no LLM. READ-ONLY by default.
+
+```bash
+npm run brain:gaps                       # grouped-by-severity report; --json; --strict (CI gate)
+npm run brain:gaps -- --as-findings      # emit each gap as an indexed `finding` (feeds the act axis)
+```
+Three checks: coverage gaps (modules w/o ADR+doc, features w/o tests, empty rationales), decision-decay (old ADRs whose module churned), structural contradictions (doc names a missing symbol / cites a vanished file). Precision-biased (won't cry wolf). See `decisions/0019`.
+
+### Synthesis: cross-source insights (`brain:insight`)
+
+Where an `explainer` caches one answer, an `insight` is a SYNTHESIZED claim across multiple sources. A scaffold+recorder like `brain:adr` — **it never calls an LLM** (the agent synthesizes; the command records with guardrails). New indexed `insight` type.
+
+```bash
+npm run brain:insight -- scaffold "<topic>"            # guidance on what to synthesize + evidence cmds
+npm run brain:insight -- add --title "..." --claim "..." --sources a.mjs,b.md --confidence 0.7 --body "..."
+npm run brain:insight -- check [--strict] | list       # staleness via cited-source hashes
+```
+**Guardrail:** requires ≥2 cited sources (else refuses) + staleness tracking — a synthesized claim must be grounded, to protect the trust axis from hallucination. `.project-brain/insights/` is durable (committed). See `decisions/0019`.
+
+### Learning axis: usage grows the benchmark (`brain:learn`)
+
+Make the eval set learn from real usage **without ever changing ranking** (ranking stays human-approved + eval-gated — the house discipline). It grows only the *measurement*.
+
+```bash
+npm run brain:learn -- capture --query "..." --used a.mjs,b.mjs   # stage a usage-proven case
+npm run brain:learn -- promote [--min-uses N] [--dry-run]         # append de-duped cases to eval.json
+npm run brain:learn -- suggest                                     # propose an A/B knob to run via brain:eval:compare (applies nothing)
+```
+`capture` stages (gitignored); `promote` is the explicit, reviewable step that grows `eval.json` (file-level cases, not tagged `Hard:`). Nothing here changes ranking or runs automatically. See `decisions/0019`.
+
 The router decides between direct file read, symbol search, doc summary, module summary, vector search, or budgeted pack. Only fall back to the lower-level commands when the router result is insufficient:
 
 ```bash

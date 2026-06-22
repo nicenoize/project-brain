@@ -48,7 +48,8 @@ const targets = [
   path.join(BRAIN_DIR, 'vector-db'),
   path.join(BRAIN_DIR, 'search_index.json'),
   path.join(BRAIN_DIR, 'index_manifest.json'),
-  path.join(BRAIN_DIR, '.fleet-cache')
+  path.join(BRAIN_DIR, '.fleet-cache'),
+  path.join(BRAIN_DIR, '.skill-audit-cache')
 ];
 
 const existing = targets.filter(exists);

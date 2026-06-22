@@ -146,7 +146,16 @@ export function mergePackageScripts(pkg) {
     'brain:handoff': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-handoff.mjs',
     'brain:feature': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-feature.mjs',
     'brain:explain': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-explain.mjs',
-    'brain:brief': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-brief.mjs'
+    'brain:brief': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-brief.mjs',
+    'brain:audit': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-audit.mjs',
+    'brain:improve': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-improve.mjs',
+    'brain:diagram': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-diagram.mjs',
+    'brain:skill-audit': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-skill-audit.mjs',
+    'brain:radar': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-radar.mjs',
+    'brain:why': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-why.mjs',
+    'brain:gaps': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-gaps.mjs',
+    'brain:insight': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-insight.mjs',
+    'brain:learn': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-learn.mjs'
   };
   for (const [k, v] of Object.entries(scripts)) {
     if (!pkg.scripts[k] || pkg.scripts[k].includes('skills/project-brain/')) pkg.scripts[k] = v;

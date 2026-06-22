@@ -50,7 +50,7 @@ function usage() {
 }
 
 /** Hash a cited source file by its CURRENT on-disk content. Returns null if missing. */
-function hashSource(relPath) {
+export function hashSource(relPath) {
   const abs = path.isAbsolute(relPath) ? relPath : path.join(ROOT, relPath);
   if (!exists(abs)) return null;
   return sha256(read(abs));
