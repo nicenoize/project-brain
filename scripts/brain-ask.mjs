@@ -25,7 +25,7 @@ const positional = [];
 
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
-  if (a === '--explain' || a === '--json' || a === '--pack' || a === '--no-pack' || a === '--force-vector') {
+  if (a === '--explain' || a === '--json' || a === '--pack' || a === '--no-pack' || a === '--force-vector' || a === '--terse') {
     flags.add(a);
   } else if (a === '--max-tokens') {
     maxTokens = argv[++i] || '';
@@ -46,7 +46,7 @@ for (let i = 0; i < argv.length; i++) {
 
 const query = positional.join(' ').trim();
 if (!query) {
-  console.error('Usage: npm run brain:ask -- "<query>" [--max-tokens N] [--top-k N] [--scope module] [--task <id>] [--actor <label>] [--project name[,name2]] [--pack] [--no-pack] [--force-vector] [--explain] [--json]');
+  console.error('Usage: npm run brain:ask -- "<query>" [--max-tokens N] [--top-k N] [--scope module] [--task <id>] [--actor <label>] [--project name[,name2]] [--pack] [--no-pack] [--force-vector] [--terse] [--explain] [--json]');
   process.exit(1);
 }
 
@@ -78,6 +78,7 @@ if (decision.route === 'file') {
 if (decision.route === 'symbol') {
   const a = [searchScript, '--type', 'code', '--symbol', decision.target];
   if (flags.has('--json')) a.push('--json');
+  if (flags.has('--terse')) a.push('--terse');
   if (brainTask) a.push('--task', brainTask);
   if (brainActor) a.push('--actor', brainActor);
   if (brainProject) a.push('--project', brainProject);
@@ -93,6 +94,7 @@ if (decision.route === 'symbol') {
 if (decision.route === 'doc') {
   const a = [searchScript, '--summary-only'];
   if (flags.has('--json')) a.push('--json');
+  if (flags.has('--terse')) a.push('--terse');
   if (brainTask) a.push('--task', brainTask);
   if (brainActor) a.push('--actor', brainActor);
   if (brainProject) a.push('--project', brainProject);
@@ -107,6 +109,7 @@ if (decision.route === 'doc') {
 if (decision.route === 'module') {
   const a = [searchScript, '--modules-only'];
   if (flags.has('--json')) a.push('--json');
+  if (flags.has('--terse')) a.push('--terse');
   if (brainTask) a.push('--task', brainTask);
   if (brainActor) a.push('--actor', brainActor);
   if (brainProject) a.push('--project', brainProject);
@@ -136,6 +139,7 @@ if (wantsPack) {
 const searchArgs = [searchScript];
 if (isFastMode()) searchArgs.push('--summary-only');
 if (flags.has('--json')) searchArgs.push('--json');
+if (flags.has('--terse')) searchArgs.push('--terse');
 if (brainTask) searchArgs.push('--task', brainTask);
 if (brainActor) searchArgs.push('--actor', brainActor);
 if (brainProject) searchArgs.push('--project', brainProject);

@@ -21,11 +21,12 @@
  * is PURE and exported, so routing + the auto/stop classification are
  * unit-testable against fixture signals with no real index, git, or model.
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, execSync } from 'node:child_process';
 import {
-  ROOT, BRAIN_DIR, exists, takeFlag, takeOption, gitBranchSafe,
+  ROOT, BRAIN_DIR, exists, read, atomicWrite, sha256, takeFlag, takeOption, gitBranchSafe,
   staleIndexFromRecords, isFastMode
 } from './common.mjs';
 
@@ -473,6 +474,64 @@ function emitHook(event, text) {
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Per-session hook dedupe (decisions/0024). The UserPromptSubmit hook runs on
+// EVERY prompt; without dedupe it re-injects the identical routing payload for
+// as long as the triggering state persists (~85 tok × every prompt). We persist
+// the last-emitted {sessionId, textHash, ts} and re-emit only when the payload
+// changes or a TTL lapses (the TTL re-surfaces context after a compaction drops
+// it). Opt-out: BRAIN_HOOK_DEDUPE=0. The whole path is best-effort — any state
+// error FAILS OPEN (emits) and never blocks a prompt.
+// ---------------------------------------------------------------------------
+
+export const HOOK_DEDUPE_TTL_MS = 15 * 60 * 1000; // ~15 min
+const HOOK_STATE_FILE = path.join(BRAIN_DIR, '.route-hook-state.json');
+
+/**
+ * PURE dedupe decision. Given the previously persisted state (or null) and the
+ * current `{ sessionId, textHash, now }`, decide whether to re-emit. Re-emits
+ * (returns true) on: no/corrupt prior state, a different session, a changed
+ * payload hash, a corrupt/absent timestamp, or a lapsed TTL. Only an identical
+ * payload in the same session within the TTL is suppressed (returns false).
+ */
+export function shouldEmitHook(prev, current, ttlMs = HOOK_DEDUPE_TTL_MS) {
+  const { sessionId, textHash, now } = current || {};
+  if (!prev || typeof prev !== 'object') return true;      // no / corrupt state → fail open
+  if (prev.sessionId !== sessionId) return true;           // new session
+  if (prev.textHash !== textHash) return true;             // payload changed
+  const ts = Number(prev.ts);
+  if (!Number.isFinite(ts)) return true;                   // corrupt timestamp → fail open
+  if (Number(now) - ts >= ttlMs) return true;              // TTL lapsed
+  return false;                                            // identical + fresh → suppress
+}
+
+/** Read the persisted hook state; corrupt/absent → null (fail open). */
+function readHookState() {
+  try {
+    if (!exists(HOOK_STATE_FILE)) return null;
+    return JSON.parse(read(HOOK_STATE_FILE));
+  } catch { return null; }
+}
+
+/** Persist the last-emitted hook state (best-effort; errors are swallowed). */
+function writeHookState(state) {
+  try { atomicWrite(HOOK_STATE_FILE, JSON.stringify(state)); } catch { /* soft — never block */ }
+}
+
+/**
+ * Read the hook stdin JSON that Claude Code supplies (it carries `session_id`).
+ * Never blocks on an interactive TTY, and any read/parse error → {} (the empty
+ * session id still dedupes correctly within a single hook consumer).
+ */
+function readHookStdin() {
+  try {
+    if (process.stdin.isTTY) return {};
+    const raw = fs.readFileSync(0, 'utf8');
+    if (!raw.trim()) return {};
+    return JSON.parse(raw);
+  } catch { return {}; }
+}
+
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT_FOR = (command) => path.join(SCRIPTS_DIR, `${command.replace(/^brain:/, 'brain-')}.mjs`);
 
@@ -527,7 +586,9 @@ function helpText() {
     '  --hook [--event userpromptsubmit|sessionstart]',
     '                   auto-activation mode: fast (model-free), silent on a quiet repo,',
     '                   exit 0 always. UserPromptSubmit emits JSON additionalContext;',
-    '                   SessionStart emits plain stdout. Wired by the install hooks.'
+    '                   SessionStart emits plain stdout. Reads session_id from hook',
+    '                   stdin JSON and dedupes an identical payload per session',
+    '                   (~15 min TTL); opt-out BRAIN_HOOK_DEDUPE=0. Wired by install hooks.'
   ].join('\n');
 }
 
@@ -554,7 +615,20 @@ async function main() {
     try {
       const signals = await senseState({ files, noIndex });
       const result = applyRules(signals, { intent, project, top: 3 });
-      return emitHook(hookEvent, renderHookText(result));
+      const text = renderHookText(result);
+      if (!text) return 0; // quiet repo → inject nothing (leave dedupe state untouched)
+
+      // Per-session dedupe: suppress a byte-identical re-injection within the
+      // TTL (decisions/0024). Opt-out with BRAIN_HOOK_DEDUPE=0. Fails open on
+      // any state error — a dedupe bug must never swallow real routing signal.
+      if (process.env.BRAIN_HOOK_DEDUPE !== '0') {
+        const sessionId = String(readHookStdin().session_id || '');
+        const textHash = sha256(text);
+        const now = Date.now();
+        if (!shouldEmitHook(readHookState(), { sessionId, textHash, now })) return 0;
+        writeHookState({ sessionId, textHash, ts: now });
+      }
+      return emitHook(hookEvent, text);
     } catch { return 0; } // never block a prompt on a routing error
   }
 

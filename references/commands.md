@@ -229,6 +229,8 @@ The router decides between direct file read, symbol search, doc summary, module 
 
 ```bash
 npm run brain:search -- "query text"
+npm run brain:search -- "query text" --terse          # one line per hit (score file#chunk [type] heading); bodies omitted — token-lean
+npm run brain:search -- "query text" --explain        # add the dense=/keyword=/symbol=/metadata= diagnostics (default omits them)
 npm run brain:search -- "query text" --summary-only
 npm run brain:search -- "query text" --modules-only
 npm run brain:symbol -- SymbolName SymbolName
@@ -248,7 +250,9 @@ npm run brain:orchestrate -- --refill --concurrency 3 --spawn-worktrees --launch
 npm run brain:work -- start --issue 99 --slug checkout-hardening --actor codex --tool codex --files lib/auth.ts
 npm run brain:lease -- add "lib/auth.ts" --task issue-99-checkout-hardening --actor codex
 npm run brain:pr -- prepare --write .project-brain/pr-body.md
-npm run brain:graph -- --format json
+npm run brain:graph -- --stats                        # node/edge counts by type — inspect the index shape without dumping the whole graph
+npm run brain:graph -- --format json --write graph.json  # ALWAYS write to a file in a session: the full JSON can be multi-MB (a context bomb)
+npm run brain:graph -- --format json                  # to stdout; warns on stderr if >~200 KB is emitted to a terminal
 npm run brain:route
 npm run brain:grill -- scaffold <finding-slug>
 npm run brain:eval

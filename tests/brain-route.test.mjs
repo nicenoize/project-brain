@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // Pure exports — importing the script must NOT run its CLI (isMain guard).
-import { applyRules, classifyBoundary, scoreChange, renderHookText, capHookText, buildHookPayload, HOOK_MAX_BYTES_DEFAULT } from '../scripts/brain-route.mjs';
+import { applyRules, classifyBoundary, scoreChange, renderHookText, capHookText, buildHookPayload, HOOK_MAX_BYTES_DEFAULT, shouldEmitHook, HOOK_DEDUPE_TTL_MS } from '../scripts/brain-route.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROUTE_SCRIPT = path.resolve(here, '..', 'scripts', 'brain-route.mjs');
@@ -220,6 +220,88 @@ test('buildHookPayload: SessionStart emits capped plain stdout; empty text → n
 
 test('HOOK_MAX_BYTES_DEFAULT: documents the ~4000-byte cap', () => {
   assert.equal(HOOK_MAX_BYTES_DEFAULT, 4000);
+});
+
+// ---------------------------------------------------------------------------
+// shouldEmitHook — per-session dedupe decision (decisions/0024)
+// ---------------------------------------------------------------------------
+
+test('shouldEmitHook: no prior state → emit (fail open)', () => {
+  assert.equal(shouldEmitHook(null, { sessionId: 's1', textHash: 'h1', now: 1000 }), true);
+  assert.equal(shouldEmitHook(undefined, { sessionId: 's1', textHash: 'h1', now: 1000 }), true);
+  assert.equal(shouldEmitHook('corrupt-not-an-object', { sessionId: 's1', textHash: 'h1', now: 1000 }), true);
+});
+
+test('shouldEmitHook: identical payload in the same session within TTL → suppress', () => {
+  const prev = { sessionId: 's1', textHash: 'h1', ts: 1000 };
+  assert.equal(shouldEmitHook(prev, { sessionId: 's1', textHash: 'h1', now: 1000 + 60_000 }), false);
+});
+
+test('shouldEmitHook: changed payload hash → emit', () => {
+  const prev = { sessionId: 's1', textHash: 'h1', ts: 1000 };
+  assert.equal(shouldEmitHook(prev, { sessionId: 's1', textHash: 'h2', now: 1000 + 60_000 }), true);
+});
+
+test('shouldEmitHook: different session → emit', () => {
+  const prev = { sessionId: 's1', textHash: 'h1', ts: 1000 };
+  assert.equal(shouldEmitHook(prev, { sessionId: 's2', textHash: 'h1', now: 1000 + 60_000 }), true);
+});
+
+test('shouldEmitHook: TTL lapsed → emit even for an identical payload', () => {
+  const prev = { sessionId: 's1', textHash: 'h1', ts: 1000 };
+  assert.equal(shouldEmitHook(prev, { sessionId: 's1', textHash: 'h1', now: 1000 + HOOK_DEDUPE_TTL_MS + 1 }), true);
+  // Just under the TTL still suppresses.
+  assert.equal(shouldEmitHook(prev, { sessionId: 's1', textHash: 'h1', now: 1000 + HOOK_DEDUPE_TTL_MS - 1 }), false);
+});
+
+test('shouldEmitHook: corrupt/absent timestamp → emit (fail open)', () => {
+  assert.equal(shouldEmitHook({ sessionId: 's1', textHash: 'h1', ts: 'nope' }, { sessionId: 's1', textHash: 'h1', now: 2000 }), true);
+  assert.equal(shouldEmitHook({ sessionId: 's1', textHash: 'h1' }, { sessionId: 's1', textHash: 'h1', now: 2000 }), true);
+});
+
+// ---------------------------------------------------------------------------
+// CLI dedupe — twice with the same session emits once; opt-out re-emits
+// ---------------------------------------------------------------------------
+
+function actionableRepo() {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-route-dedupe-'));
+  fs.mkdirSync(path.join(cwd, '.project-brain', 'findings'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.project-brain', 'context_index.md'), '# index\n');
+  fs.writeFileSync(path.join(cwd, '.project-brain', 'index_manifest.json'), '{}\n');
+  fs.writeFileSync(path.join(cwd, '.project-brain', 'findings', 'bug.md'),
+    '---\ntype: finding\ntitle: Bug\ncategory: correctness\nstatus: open\nimpact: 4\ncreated: x\nupdated: x\nactor: \nmodule: \nsymbols: \nsources:\n---\nbody\n');
+  return cwd;
+}
+const runHook = (cwd, env = {}) => spawnSync(process.execPath, [ROUTE_SCRIPT, '--hook'], {
+  cwd, encoding: 'utf8', input: '{"session_id":"t1"}', env: { ...process.env, ...env }
+});
+
+test('CLI dedupe: second identical call in the same session emits nothing', () => {
+  const cwd = actionableRepo();
+  const first = runHook(cwd);
+  assert.equal(first.status, 0, first.stderr);
+  assert.ok(first.stdout.trim(), 'first call should surface actionable routing');
+  const second = runHook(cwd);
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(second.stdout.trim(), '', 'identical re-injection is suppressed');
+  // State file was written.
+  assert.ok(fs.existsSync(path.join(cwd, '.project-brain', '.route-hook-state.json')));
+});
+
+test('CLI dedupe: BRAIN_HOOK_DEDUPE=0 re-emits every call', () => {
+  const cwd = actionableRepo();
+  const first = runHook(cwd, { BRAIN_HOOK_DEDUPE: '0' });
+  const second = runHook(cwd, { BRAIN_HOOK_DEDUPE: '0' });
+  assert.ok(first.stdout.trim());
+  assert.equal(second.stdout.trim(), first.stdout.trim(), 'opt-out disables suppression');
+});
+
+test('CLI dedupe: a corrupt state file fails open and emits', () => {
+  const cwd = actionableRepo();
+  fs.writeFileSync(path.join(cwd, '.project-brain', '.route-hook-state.json'), '{not json');
+  const r = runHook(cwd);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.stdout.trim(), 'corrupt state must not swallow routing signal');
 });
 
 // ---------------------------------------------------------------------------
