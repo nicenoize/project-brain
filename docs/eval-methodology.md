@@ -98,6 +98,46 @@ notably, 12 of the 84 hard cases were unwinnable (targets outside the
 indexable file set) until the coverage fix, which also means earlier A/B
 experiments ran with ~16% dead weight in the denominator.
 
+## Consumer baseline — footprint measured in the field (#32)
+
+The retrieval eval above answers *relevance* ("did ranking get better?"). It says
+nothing about **cost**: how many tokens the brain injects into a real session, and
+how often each command is actually run. Those are a separate instrument — the
+**usage ledger** (`.project-brain/.usage.jsonl`, gated by `BRAIN_USAGE_LOG=1`, one
+JSONL line per `brain:*` invocation) plus the context-footprint audit in
+`brain:health --json`. Ranking stays eval-gated; footprint/usage stays ledger-gated.
+Two instruments, no overlap.
+
+Dev-repo self-measurement systematically **underestimates** cost: #21 read
+`active_state.md ≈ 110 tokens` from this repo, but the real consumer is ~70× that.
+So the measurement site is a live consumer, **club-ops**
+(`/Users/seebo/Coding/club-ops`): 84,206 index records, 34 ADRs, index synced
+2026-07-01. Every wave-1 acceptance run must be repeated there.
+
+### Baseline (measured 2026-07-10, club-ops) — this table is the "before"
+
+| Artifact | Size | Tokens (len/4) |
+|---|---|---|
+| `active_state.md` (cat on EVERY SessionStart) | 30,220 B | **≈7,555** |
+| `SKILL.md` (per skill activation) | 64,531 B | ≈16,132 |
+| `search_index.json` | 90 MB | n/a (disk) |
+| Session base cost before any work | | **≈24k tokens** |
+
+Record before/after against this table for each planned improvement:
+
+- **#26 SKILL.md split / #21·#22 token wave** — footprint delta in club-ops (the
+  ≈16,132-token `SKILL.md` is the pre-split "before").
+- **#17 tool-time nudge** — `brain:search` calls/session before vs. after the nudge
+  ships; the usage ledger is the denominator.
+- **#23 staleness banner** — banner-fire frequency = how often agents consumed stale
+  results silently before.
+- **Kill list** — after ~30 days, commands with zero invocations across both repos
+  (the `neverUsed` list in `brain:health --json`) are deprecation candidates
+  (48 commands today).
+
+The durable deliverable is the measurement discipline itself (the #8 lesson): a
+committed baseline plus a running ledger, not a point-in-time claim.
+
 ## Authoring more hard cases
 
 - Pick a concept that lives in exactly one ADR / module doc / code file.
