@@ -60,6 +60,10 @@ else
   git -C "$SKILL_DIR" fetch "$remote" "$branch" --prune
 fi
 
+# The ff-only merge below carries the whole package tree, including the lean
+# SKILL.md AND its skills/project-brain/references/*.md detail bundle (#26) — new
+# reference files propagate automatically as long as they are committed upstream.
+# brain:health reports any reference file that failed to land.
 before="$(git -C "$SKILL_DIR" rev-parse --short HEAD)"
 git -C "$SKILL_DIR" merge --ff-only "$target"
 after="$(git -C "$SKILL_DIR" rev-parse --short HEAD)"
