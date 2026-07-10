@@ -145,6 +145,24 @@ const required = isCanonicalPackage
 const missing = required.filter((p) => !fs.existsSync(p));
 let layoutOk = missing.length === 0;
 
+// SKILL.md ships lean; its detail lives in a bundled references/*.md set (#26).
+// setup.sh (in-place checkout) and brain:update-skill (git ff-merge) carry these
+// alongside SKILL.md — verify they actually landed. NON-FATAL on purpose: a
+// consumer on an old checkout has SKILL.md but not yet the references, and should
+// be nudged to update rather than have health fail (which would abort setup.sh).
+const skillRoot = isCanonicalPackage ? '.' : 'skills/project-brain';
+const REFERENCE_FILES = ['commands.md', 'workflows.md', 'retrieval-internals.md', 'tuning.md', 'fleet.md'];
+const missingReferences = fs.existsSync(path.join(skillRoot, 'SKILL.md'))
+  ? REFERENCE_FILES.map((f) => path.join(skillRoot, 'references', f)).filter((p) => !fs.existsSync(p))
+  : [];
+if (missingReferences.length && !jsonOut) {
+  console.warn(
+    `Project Brain: SKILL.md present but ${missingReferences.length} reference file(s) missing (` +
+      missingReferences.map((p) => path.basename(p)).join(', ') +
+      '). Run: npm run brain:update-skill'
+  );
+}
+
 if (!fs.existsSync('.gitignore') || !fs.readFileSync('.gitignore', 'utf8').includes('.project-brain/vector-db/')) {
   if (!jsonOut) console.error('Missing .project-brain/vector-db/ in .gitignore');
   layoutOk = false;
@@ -229,6 +247,7 @@ if (jsonOut) {
       {
         ok: finalOk,
         missing,
+        missingReferences,
         stale,
         strictStale,
         expiredSessionCount,
