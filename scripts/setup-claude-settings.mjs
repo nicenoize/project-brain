@@ -58,7 +58,7 @@ function mergeObjectMap(existing = {}, extra = {}) {
   return { merged: existing, added };
 }
 
-function collectCommands(hookGroups) {
+export function collectCommands(hookGroups) {
   const cmds = new Set();
   for (const group of hookGroups ?? []) {
     for (const h of group?.hooks ?? []) {
@@ -66,6 +66,41 @@ function collectCommands(hookGroups) {
     }
   }
   return cmds;
+}
+
+/**
+ * PURE. Report the drift between an installed `.claude/settings.json` object
+ * and the recommended template — i.e. what the additive merge WOULD still add.
+ * Focused on the wiring that silently rots when `bin/update.sh` refreshes
+ * scripts but not settings (issue #34): ambient-routing hooks (ADR 0023) and
+ * the recommended permission allow-list. Never mutates its inputs.
+ *
+ * @param {object} installed   parsed host .claude/settings.json (or {})
+ * @param {object} recommended parsed settings.recommended.json (or {})
+ * @returns {{ missingHooks: {event:string,command:string}[], missingAllow: string[], hookDrift: number, allowDrift: number, drift: boolean }}
+ */
+export function computeSettingsDrift(installed = {}, recommended = {}) {
+  const missingHooks = [];
+  const recHooks = recommended?.hooks ?? {};
+  const instHooks = installed?.hooks ?? {};
+  for (const [event, groups] of Object.entries(recHooks)) {
+    const have = collectCommands(instHooks[event]);
+    for (const group of groups ?? []) {
+      for (const h of group?.hooks ?? []) {
+        const cmd = typeof h?.command === 'string' ? h.command.trim() : '';
+        if (cmd && !have.has(cmd)) missingHooks.push({ event, command: cmd });
+      }
+    }
+  }
+  const haveAllow = new Set(installed?.permissions?.allow ?? []);
+  const missingAllow = (recommended?.permissions?.allow ?? []).filter((a) => !haveAllow.has(a));
+  return {
+    missingHooks,
+    missingAllow,
+    hookDrift: missingHooks.length,
+    allowDrift: missingAllow.length,
+    drift: missingHooks.length > 0 || missingAllow.length > 0
+  };
 }
 
 function mergeHooks(existing = {}, extra = {}) {

@@ -74,6 +74,29 @@ else
   echo "Project Brain updated: $before -> $after."
 fi
 
+# setup-package.mjs re-runs the additive .claude/settings.json merge (it calls
+# syncClaudeSettings), so an update refreshes settings the same way setup.sh does
+# — this is the settings-sync half of the update contract (issue #34). The merge
+# is additive: recommended ambient-routing hooks (ADR 0023) and permissions land,
+# but user-added hooks/permissions are preserved.
+settings_synced=0
 if command -v node >/dev/null 2>&1 && [ -f "$SKILL_PATH/scripts/setup-package.mjs" ]; then
   node "$SKILL_PATH/scripts/setup-package.mjs"
+  settings_synced=1
+fi
+
+# Fallback: if setup-package.mjs was unavailable (e.g. an old consumer checkout
+# whose package predates auto-wiring), still run the settings merge directly so
+# the ambient-routing hooks are never left inert. Additive + idempotent.
+if [ "$settings_synced" = "0" ] && command -v node >/dev/null 2>&1; then
+  settings_script=""
+  if [ -f "$SKILL_PATH/scripts/setup-claude-settings.mjs" ]; then
+    settings_script="$SKILL_PATH/scripts/setup-claude-settings.mjs"
+  elif [ -f scripts/setup-claude-settings.mjs ]; then
+    settings_script="scripts/setup-claude-settings.mjs"
+  fi
+  if [ -n "$settings_script" ]; then
+    echo "Refreshing .claude/settings.json (additive merge)…"
+    node "$settings_script" || echo "WARN: settings sync failed; run 'npm run brain:health' to inspect drift."
+  fi
 fi

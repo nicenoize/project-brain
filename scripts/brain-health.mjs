@@ -18,6 +18,7 @@ import {
   FOOTPRINT_THRESHOLDS,
   PACK_MAX_TOKENS_DEFAULT
 } from './footprint.mjs';
+import { computeSettingsDrift } from './setup-claude-settings.mjs';
 
 const HEALTH_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,6 +47,37 @@ function contextFootprintReport() {
   const fp = { skills, activeState, hooks, packDefaults, thresholds: FOOTPRINT_THRESHOLDS };
   fp.warnings = footprintWarnings(fp, FOOTPRINT_THRESHOLDS);
   return fp;
+}
+
+function readJsonSafe(abs) {
+  try {
+    return JSON.parse(fs.readFileSync(abs, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Settings-drift audit (issue #34): `bin/update.sh` refreshes the skill scripts
+ * but a consumer whose setup predates the ambient-routing wiring can end up with
+ * current scripts and a stale `.claude/settings.json` — ADR 0023's routing hooks
+ * installed as code but inert. Compare the host settings against the recommended
+ * template and report which recommended hooks / allow-list entries are missing.
+ * Non-fatal: a warning that nudges `npm run brain:update-skill` (additive merge,
+ * user hooks preserved), consistent with the context-footprint discipline
+ * (decisions/0024) this extends.
+ */
+function settingsDriftReport(root) {
+  const templateAbs = path.join(ROOT, root, 'templates', 'claude-code', 'settings.recommended.json');
+  const hostAbs = path.join(ROOT, '.claude', 'settings.json');
+  if (!fs.existsSync(templateAbs)) {
+    return { checked: false, hostExists: fs.existsSync(hostAbs), missingHooks: [], missingAllow: [], hookDrift: 0, allowDrift: 0, drift: false };
+  }
+  const recommended = readJsonSafe(templateAbs) ?? {};
+  const hostExists = fs.existsSync(hostAbs);
+  const installed = hostExists ? readJsonSafe(hostAbs) ?? {} : {};
+  const d = computeSettingsDrift(installed, recommended);
+  return { checked: true, hostExists, ...d };
 }
 
 const KEY_BRAIN_FILES = ['context_index.md', 'repo_context.md', 'master_plan.md', 'active_state.md'];
@@ -212,6 +244,7 @@ let brainRefIssues = { missing: [] };
 let activeStateMergeMarkers = false;
 const docFresh = fs.existsSync(BRAIN_DIR) ? brainDocFreshnessReport() : { entries: [], warnings: [], staleDaysConfigured: 0, repoContextOlderThanPackage: false };
 const footprint = contextFootprintReport();
+const settingsDrift = settingsDriftReport(skillRoot);
 
 if (docFresh.warnings.length && !jsonOut) {
   for (const w of docFresh.warnings) console.warn(`Project Brain doc freshness: ${w}`);
@@ -231,6 +264,24 @@ if (!jsonOut) {
   fpParts.push(`pack≤${footprint.packDefaults.BRAIN_PACK_MAX_TOKENS}tok`);
   console.log(`Context footprint (per-session injection, ~len/4 tokens): ${fpParts.join('; ')}`);
   for (const w of footprint.warnings) console.warn(`Project Brain context footprint: ${w}`);
+}
+
+// Only warn about drift when a host .claude/settings.json actually exists: an
+// absent file is "not wired yet" (e.g. the canonical dev repo, or a fresh
+// consumer before setup.sh), not silent drift of an installed-but-stale config
+// — the club-ops case #34 targets. The JSON payload still reports the full diff.
+if (settingsDrift.checked && settingsDrift.hostExists && settingsDrift.drift && !jsonOut) {
+  if (settingsDrift.missingHooks.length) {
+    const events = [...new Set(settingsDrift.missingHooks.map((h) => h.event))].join(', ');
+    console.warn(
+      `Project Brain settings drift: ${settingsDrift.missingHooks.length} recommended hook(s) not in .claude/settings.json (${events}) — ambient routing / session hooks are installed as code but INERT (issue #34). Run: npm run brain:update-skill (additive merge; your own hooks are preserved).`
+    );
+  }
+  if (settingsDrift.missingAllow.length) {
+    console.warn(
+      `Project Brain settings drift: ${settingsDrift.missingAllow.length} recommended permission(s) missing from .claude/settings.json (${settingsDrift.missingAllow.join(', ')}). Run: npm run brain:update-skill.`
+    );
+  }
 }
 
 if (fs.existsSync(path.join(BRAIN_DIR, 'active_state.md'))) {
@@ -305,7 +356,8 @@ if (jsonOut) {
         brainDocFreshness: docFresh.entries,
         docFreshnessWarnings: docFresh.warnings,
         repoContextOlderThanPackageJson: docFresh.repoContextOlderThanPackage,
-        contextFootprint: footprint
+        contextFootprint: footprint,
+        settingsDrift
       },
       null,
       2
