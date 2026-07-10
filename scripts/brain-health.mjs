@@ -10,7 +10,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ROOT, BRAIN_DIR, exists, read, JSON_INDEX, staleIndexFromRecords } from './common.mjs';
+import { ROOT, BRAIN_DIR, exists, read, JSON_INDEX, USAGE_LOG, staleIndexFromRecords } from './common.mjs';
+import { parseUsageLog, summarizeUsage, commandUniverseFromPackageScripts } from './usage.mjs';
 import {
   measureFile,
   measureHook,
@@ -78,6 +79,31 @@ function settingsDriftReport(root) {
   const installed = hostExists ? readJsonSafe(hostAbs) ?? {} : {};
   const d = computeSettingsDrift(installed, recommended);
   return { checked: true, hostExists, ...d };
+}
+
+/**
+ * Usage-ledger audit (issue #32): the QUANTITY/footprint instrument that sits
+ * next to the context-footprint (#21) and settings-drift (#34) sections above.
+ * When BRAIN_USAGE_LOG=1, every brain:* invocation appends one JSONL line to
+ * `.project-brain/.usage.jsonl` (the choke point in common.mjs). Here we read
+ * it back read-only — per-command counts over a trailing 30d window and the
+ * never-used list (commands in package.json that the ledger has never seen).
+ *
+ * Always safe to call: an absent/unreadable log yields zero counts with the
+ * full command set as "never used". Reporting is independent of the write flag
+ * so a ledger captured earlier still surfaces even if the flag is now off.
+ */
+function usageReport(windowDays = 30) {
+  const pkg = readJsonSafe(path.join(ROOT, 'package.json')) ?? {};
+  const universe = commandUniverseFromPackageScripts(pkg.scripts || {});
+  const logExists = fs.existsSync(USAGE_LOG);
+  const records = logExists ? parseUsageLog(read(USAGE_LOG)) : [];
+  const summary = summarizeUsage(records, { windowDays, commands: universe });
+  return {
+    enabledNow: process.env.BRAIN_USAGE_LOG === '1',
+    logExists,
+    ...summary
+  };
 }
 
 const KEY_BRAIN_FILES = ['context_index.md', 'repo_context.md', 'master_plan.md', 'active_state.md'];
@@ -245,6 +271,7 @@ let activeStateMergeMarkers = false;
 const docFresh = fs.existsSync(BRAIN_DIR) ? brainDocFreshnessReport() : { entries: [], warnings: [], staleDaysConfigured: 0, repoContextOlderThanPackage: false };
 const footprint = contextFootprintReport();
 const settingsDrift = settingsDriftReport(skillRoot);
+const usage = usageReport();
 
 if (docFresh.warnings.length && !jsonOut) {
   for (const w of docFresh.warnings) console.warn(`Project Brain doc freshness: ${w}`);
@@ -264,6 +291,22 @@ if (!jsonOut) {
   fpParts.push(`pack≤${footprint.packDefaults.BRAIN_PACK_MAX_TOKENS}tok`);
   console.log(`Context footprint (per-session injection, ~len/4 tokens): ${fpParts.join('; ')}`);
   for (const w of footprint.warnings) console.warn(`Project Brain context footprint: ${w}`);
+}
+
+if (!jsonOut) {
+  if (usage.logExists) {
+    const top = usage.perCommand
+      .slice(0, 5)
+      .map((c) => `${c.cmd}×${c.count}`)
+      .join(', ');
+    console.log(
+      `Usage ledger (#32, last ${usage.windowDays}d): ${usage.totalInWindow} invocation(s) across ${usage.perCommand.length}/${usage.universeSize} command(s)` +
+        (top ? `; top: ${top}` : '') +
+        (usage.neverUsed.length ? `; never used (${usage.neverUsed.length}): ${usage.neverUsed.slice(0, 8).join(', ')}${usage.neverUsed.length > 8 ? ', …' : ''}` : '')
+    );
+  } else if (usage.enabledNow) {
+    console.log('Usage ledger (#32): BRAIN_USAGE_LOG=1 but no invocations recorded yet.');
+  }
 }
 
 // Only warn about drift when a host .claude/settings.json actually exists: an
@@ -357,7 +400,8 @@ if (jsonOut) {
         docFreshnessWarnings: docFresh.warnings,
         repoContextOlderThanPackageJson: docFresh.repoContextOlderThanPackage,
         contextFootprint: footprint,
-        settingsDrift
+        settingsDrift,
+        usage
       },
       null,
       2

@@ -58,7 +58,9 @@ export function measureHook(routeScript, event, cwd) {
       // Measure the RAW per-event payload, not the deduped runtime behaviour —
       // the audit reports what a fresh injection costs (decisions/0024 dedupe
       // would otherwise zero out the second event, which shares session id '').
-      env: { ...process.env, BRAIN_HOOK_DEDUPE: '0' }
+      // BRAIN_USAGE_LOG=0: this route spawn is a measurement, not a real
+      // invocation — it must not pollute the usage ledger (#32) it feeds.
+      env: { ...process.env, BRAIN_HOOK_DEDUPE: '0', BRAIN_USAGE_LOG: '0' }
     });
     const out = String(r.stdout || '');
     const bytes = Buffer.byteLength(out, 'utf8');
