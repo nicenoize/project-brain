@@ -66,6 +66,44 @@ one surface (the hook) that runs on every single turn.*
    net, not a behaviour change: measured payloads are ~10× under the cap. The pure
    `capHookText` / `buildHookPayload` are exported and unit-tested.
 
+3. **Per-session hook dedupe** (`brain-route.mjs`, #22). The UserPromptSubmit
+   hook fires on **every** prompt and, while the triggering state persists,
+   re-injects the byte-identical routing payload each time — a 100-prompt session
+   wastes ~8k tokens on repetition. In `--hook` mode the script now reads the hook
+   stdin JSON (Claude Code supplies `session_id`), keeps
+   `.project-brain/.route-hook-state.json` (`{sessionId, textHash, ts}`) via the
+   existing `atomicWrite`, and re-emits **only** when the payload hash changes or a
+   ~15 min TTL lapses (the TTL re-surfaces context after a compaction drops it —
+   the PreCompact digest hook already exists). Opt-out: `BRAIN_HOOK_DEDUPE=0`. The
+   dedupe decision is the PURE, exported, unit-tested `shouldEmitHook(prev,
+   current, ttlMs)`; every failure mode (no/corrupt state, corrupt timestamp,
+   stdin read error) **fails open** (emits) and the whole path stays try/catch +
+   exit 0 — a state-file bug must never block a prompt or swallow real signal. The
+   footprint audit spawns the hook with `BRAIN_HOOK_DEDUPE=0` so it still measures
+   the raw per-event payload, not the deduped runtime behaviour.
+
+4. **Token-lean retrieval output** (`brain-search.mjs` / `brain-ask.mjs`, #22).
+   `brain:search` default output emitted ~5.5 kB (~1,370 tok): 8 hits × 900-char
+   bodies **plus** a `dense=/keyword=/symbol=/metadata=` diagnostics line the agent
+   rarely needs. Two changes, **output only — ranking is untouched, so no eval
+   gate**: (a) a new `--terse` prints **one line per hit** (`score file#chunk
+   [type] heading`, bodies omitted) — the token-lean mode for agents that only need
+   paths; `brain:ask` forwards `--terse` to its search subprocess. (b) the
+   diagnostics line moves **behind `--explain` / `--json`** — the default verbose
+   output no longer leaks it. The pure renderers (`terseHitLine`, `scoringLine`,
+   `verboseHitHeader`) live in `scripts/search-format.mjs`, exported and
+   unit-tested (kept out of the CLI script, which opens the store at import).
+
+5. **`brain:graph` size guard** (`brain-graph.mjs`, #22). `--format json` can emit
+   multi-MB (~600k tokens) straight into a session — a context bomb. New: a
+   `--stats` flag prints a compact node/edge histogram (totals + per-type, edge
+   types bucketed by their `:`-prefix) instead of the full graph; a one-line
+   **stderr** nudge fires when an oversized payload (> ~200 KB) is written to a
+   **TTY** (pointing at `--stats` / `--write <file>`); and a `--write <file>`
+   option streams the graph to a file instead of stdout. The **default format is
+   never changed** (pipe back-compat). `graphStats` / `renderStats` are PURE,
+   exported, and unit-tested.
+
 ## Consequences
 
 ### Positive

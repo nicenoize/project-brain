@@ -54,7 +54,11 @@ export function measureHook(routeScript, event, cwd) {
     const r = spawnSync(process.execPath, [routeScript, '--hook', '--event', event], {
       cwd,
       encoding: 'utf8',
-      timeout: 20000
+      timeout: 20000,
+      // Measure the RAW per-event payload, not the deduped runtime behaviour —
+      // the audit reports what a fresh injection costs (decisions/0024 dedupe
+      // would otherwise zero out the second event, which shares session id '').
+      env: { ...process.env, BRAIN_HOOK_DEDUPE: '0' }
     });
     const out = String(r.stdout || '');
     const bytes = Buffer.byteLength(out, 'utf8');
