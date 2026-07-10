@@ -80,6 +80,25 @@ This package is consumed via `brain:update-skill` from application repos, so `ma
 - Breaking schema changes (record fields, env var renames) must include a recovery path: e.g. `BRAIN_AUTO_RECOVER=1` for the Lance schema, or a one-shot migration script.
 - Tag releases when shipping a breaking schema change so consumers can pin (`PROJECT_BRAIN_UPSTREAM_REF=v1.2.0`).
 
+## The update contract: `bin/setup.sh` vs `bin/update.sh`
+
+Two entry points, one rule of thumb: **`update.sh` must refresh everything a consumer needs to keep the brain working, not just the scripts.** A consumer that only got new `scripts/` but a stale `.claude/settings.json` runs with the flagship wiring installed as dead code — e.g. ADR 0023's ambient-routing hooks present on disk but never registered (issue #34).
+
+| Concern | `setup.sh` (one-time) | `update.sh` (every refresh) |
+| --- | --- | --- |
+| Package tree (`SKILL.md`, `references/*.md`, scripts) | copies/links in place | git ff-merge from upstream |
+| `package.json` scripts/deps, `.gitignore`, PR template, CI workflow | `setup-package.mjs` | `setup-package.mjs` |
+| `.claude/settings.json` (hooks, permissions, plugins) | `setup-claude-settings.mjs` (via `setup-package.mjs`) | **`setup-claude-settings.mjs` (via `setup-package.mjs`, with a direct fallback)** |
+| Git hooks, `brain:init`, first index | yes | no (state, not wiring) |
+
+`.claude/settings.json` is merged **additively** by `setup-claude-settings.mjs`:
+
+- recommended hooks are appended per event only when their `command` is not already present — **user-added hooks and permissions are never dropped**;
+- existing scalar values are never overwritten;
+- bypass with `PROJECT_BRAIN_SKIP_CLAUDE_SETTINGS=1` for repos that hand-manage their settings.
+
+`brain:health` audits this: it compares the installed `.claude/settings.json` against `templates/claude-code/settings.recommended.json` and warns (non-fatal) when recommended hooks/permissions are missing — the same section as the context-footprint audit (`decisions/0024`). If you add a hook or permission to `settings.recommended.json`, that warning is how consumers who haven't re-run `update.sh` discover the drift; the additive merge is how they fix it.
+
 ## Reporting issues
 
 Open an issue at <https://github.com/nicenoize/project-brain/issues> with:
