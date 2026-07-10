@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // Pure exports — importing the script must NOT run its CLI (isMain guard).
-import { applyRules, classifyBoundary, scoreChange, renderHookText } from '../scripts/brain-route.mjs';
+import { applyRules, classifyBoundary, scoreChange, renderHookText, capHookText, buildHookPayload, HOOK_MAX_BYTES_DEFAULT } from '../scripts/brain-route.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROUTE_SCRIPT = path.resolve(here, '..', 'scripts', 'brain-route.mjs');
@@ -172,6 +172,54 @@ test('renderHookText: surfaces interrupt-worthy state, suppresses chatty radar/p
   assert.doesNotMatch(text, /brain:radar/);
   assert.doesNotMatch(text, /brain:pr/);
   assert.match(text, /safe to run/); // improve next is auto
+});
+
+// ---------------------------------------------------------------------------
+// Hook byte cap (decisions/0024) — truncate TEXT pre-envelope, envelope valid
+// ---------------------------------------------------------------------------
+
+test('capHookText: passes short text through unchanged', () => {
+  assert.equal(capHookText('hello', 4000), 'hello');
+  assert.equal(capHookText('', 4000), '');
+});
+
+test('capHookText: truncates over-budget text and appends a truncation note', () => {
+  const text = 'a'.repeat(10000);
+  const capped = capHookText(text, 4000);
+  assert.ok(Buffer.byteLength(capped, 'utf8') <= 4000);
+  assert.match(capped, /… truncated — run npm run brain:route$/);
+  assert.ok(capped.length < text.length);
+});
+
+test('capHookText: never leaves a replacement char from a split multi-byte codepoint', () => {
+  // 3-byte codepoints; a byte budget that lands mid-codepoint must not yield �.
+  const text = '★'.repeat(3000);
+  const capped = capHookText(text, 4000);
+  assert.doesNotMatch(capped.replace(/… truncated.*$/, ''), /�/);
+  assert.ok(Buffer.byteLength(capped, 'utf8') <= 4000);
+});
+
+test('buildHookPayload: UserPromptSubmit envelope stays valid JSON with capped text', () => {
+  const text = 'x'.repeat(20000);
+  const payload = buildHookPayload('userpromptsubmit', text, 4000);
+  const env = JSON.parse(payload); // envelope is NOT truncated → parseable
+  const ctx = env.hookSpecificOutput.additionalContext;
+  assert.equal(env.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  // the injected TEXT (not the envelope) is what got capped
+  assert.ok(Buffer.byteLength(ctx, 'utf8') <= 4000);
+  assert.match(ctx, /… truncated/);
+});
+
+test('buildHookPayload: SessionStart emits capped plain stdout; empty text → nothing', () => {
+  assert.equal(buildHookPayload('sessionstart', ''), '');
+  assert.equal(buildHookPayload('userpromptsubmit', ''), '');
+  const payload = buildHookPayload('sessionstart', 'y'.repeat(9000), 4000);
+  assert.ok(Buffer.byteLength(payload, 'utf8') <= 4001); // + trailing newline
+  assert.match(payload, /… truncated/);
+});
+
+test('HOOK_MAX_BYTES_DEFAULT: documents the ~4000-byte cap', () => {
+  assert.equal(HOOK_MAX_BYTES_DEFAULT, 4000);
 });
 
 // ---------------------------------------------------------------------------

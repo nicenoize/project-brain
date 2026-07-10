@@ -9,7 +9,44 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { ROOT, BRAIN_DIR, exists, read, JSON_INDEX, staleIndexFromRecords } from './common.mjs';
+import {
+  measureFile,
+  measureHook,
+  footprintWarnings,
+  FOOTPRINT_THRESHOLDS,
+  PACK_MAX_TOKENS_DEFAULT
+} from './footprint.mjs';
+
+const HEALTH_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Context-footprint audit (decisions/0024): how many tokens the brain injects
+ * into every session. Measures the SKILL.md variant(s), active_state.md (cat'd
+ * raw on SessionStart), and the actual stdout of the route hooks (spawned).
+ */
+function contextFootprintReport() {
+  const skills = [
+    measureFile(path.join(ROOT, 'SKILL.md'), 'SKILL.md'),
+    measureFile(path.join(ROOT, 'skills/project-brain/SKILL.md'), 'skills/project-brain/SKILL.md')
+  ].filter((s) => s.exists);
+
+  const activeState = measureFile(path.join(BRAIN_DIR, 'active_state.md'), '.project-brain/active_state.md');
+
+  const routeScript = path.join(HEALTH_DIR, 'brain-route.mjs');
+  const hooks = fs.existsSync(routeScript)
+    ? ['sessionstart', 'userpromptsubmit'].map((ev) => measureHook(routeScript, ev, ROOT))
+    : [];
+
+  const packDefaults = {
+    BRAIN_PACK_MAX_TOKENS: Number(process.env.BRAIN_PACK_MAX_TOKENS) || PACK_MAX_TOKENS_DEFAULT
+  };
+
+  const fp = { skills, activeState, hooks, packDefaults, thresholds: FOOTPRINT_THRESHOLDS };
+  fp.warnings = footprintWarnings(fp, FOOTPRINT_THRESHOLDS);
+  return fp;
+}
 
 const KEY_BRAIN_FILES = ['context_index.md', 'repo_context.md', 'master_plan.md', 'active_state.md'];
 
@@ -174,6 +211,7 @@ let indexParseError = false;
 let brainRefIssues = { missing: [] };
 let activeStateMergeMarkers = false;
 const docFresh = fs.existsSync(BRAIN_DIR) ? brainDocFreshnessReport() : { entries: [], warnings: [], staleDaysConfigured: 0, repoContextOlderThanPackage: false };
+const footprint = contextFootprintReport();
 
 if (docFresh.warnings.length && !jsonOut) {
   for (const w of docFresh.warnings) console.warn(`Project Brain doc freshness: ${w}`);
@@ -183,6 +221,16 @@ if (docFresh.entries.some((e) => e.exists) && !jsonOut) {
     .filter((e) => e.exists)
     .map((e) => `${path.basename(e.file)} ~${formatAgeDays(e.ageDays)} (${e.source})`);
   if (parts.length) console.log(`Brain root doc ages (git last commit, else mtime): ${parts.join('; ')}`);
+}
+
+if (!jsonOut) {
+  const fpParts = [];
+  for (const s of footprint.skills) fpParts.push(`${path.basename(s.file)} ${s.bytes}B≈${s.tokens}tok`);
+  if (footprint.activeState.exists) fpParts.push(`active_state.md ${footprint.activeState.bytes}B≈${footprint.activeState.tokens}tok`);
+  for (const h of footprint.hooks) fpParts.push(`hook:${h.event} ${h.bytes}B≈${h.tokens}tok`);
+  fpParts.push(`pack≤${footprint.packDefaults.BRAIN_PACK_MAX_TOKENS}tok`);
+  console.log(`Context footprint (per-session injection, ~len/4 tokens): ${fpParts.join('; ')}`);
+  for (const w of footprint.warnings) console.warn(`Project Brain context footprint: ${w}`);
 }
 
 if (fs.existsSync(path.join(BRAIN_DIR, 'active_state.md'))) {
@@ -256,7 +304,8 @@ if (jsonOut) {
         brainRefs: { checked: checkBrainRefs, missing: brainRefIssues.missing },
         brainDocFreshness: docFresh.entries,
         docFreshnessWarnings: docFresh.warnings,
-        repoContextOlderThanPackageJson: docFresh.repoContextOlderThanPackage
+        repoContextOlderThanPackageJson: docFresh.repoContextOlderThanPackage,
+        contextFootprint: footprint
       },
       null,
       2

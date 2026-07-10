@@ -415,23 +415,61 @@ export function renderHookText(result) {
   return lines.join('\n');
 }
 
+// Hard cap on the TEXT the hook injects (decisions/0024). A safety net, not a
+// behaviour change — measured payloads are ~10× under this. The cap applies to
+// the injected text BEFORE JSON.stringify, so the envelope always stays valid.
+export const HOOK_MAX_BYTES_DEFAULT = 4000;
+const TRUNC_NOTE = '\n… truncated — run npm run brain:route';
+
+function hookMaxBytes() {
+  const v = Number(process.env.BRAIN_HOOK_MAX_BYTES);
+  return Number.isFinite(v) && v > 0 ? v : HOOK_MAX_BYTES_DEFAULT;
+}
+
 /**
- * Emit the hook payload for the given Claude Code event. UserPromptSubmit
- * requires a JSON `hookSpecificOutput.additionalContext` envelope (plain stdout
- * is ignored there); SessionStart accepts plain stdout. Empty text → emit
+ * Truncate `text` to at most `maxBytes` UTF-8 bytes, appending a truncation
+ * note (which is itself counted against the budget). PURE. Never splits a
+ * multi-byte codepoint into a replacement char at the tail.
+ */
+export function capHookText(text, maxBytes = hookMaxBytes()) {
+  const t = String(text || '');
+  if (!t) return '';
+  if (Buffer.byteLength(t, 'utf8') <= maxBytes) return t;
+  const noteBytes = Buffer.byteLength(TRUNC_NOTE, 'utf8');
+  const budget = Math.max(0, maxBytes - noteBytes);
+  let cut = Buffer.from(t, 'utf8').subarray(0, budget).toString('utf8');
+  // Drop a trailing U+FFFD left by a codepoint split at the byte boundary.
+  cut = cut.replace(/�+$/, '');
+  return cut + TRUNC_NOTE;
+}
+
+/**
+ * Build the raw stdout payload for a hook event, capping the injected TEXT
+ * (never the JSON envelope). PURE. Returns '' when there is nothing to inject.
+ * UserPromptSubmit requires a JSON `hookSpecificOutput.additionalContext`
+ * envelope (plain stdout is ignored there); SessionStart accepts plain stdout.
+ */
+export function buildHookPayload(event, text, maxBytes = hookMaxBytes()) {
+  if (!text) return '';
+  const capped = capHookText(text, maxBytes);
+  const ev = String(event || 'userpromptsubmit').toLowerCase();
+  if (ev === 'sessionstart') {
+    return capped + '\n'; // plain stdout is added to session context
+  }
+  // UserPromptSubmit (default): must be JSON to inject context.
+  return JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: capped }
+  }) + '\n';
+}
+
+/**
+ * Emit the hook payload for the given Claude Code event. Empty text → emit
  * nothing (no injection, no noise). Always exit 0 (never block a prompt).
  */
 function emitHook(event, text) {
-  if (!text) return 0;
-  const ev = String(event || 'userpromptsubmit').toLowerCase();
-  if (ev === 'sessionstart') {
-    process.stdout.write(text + '\n'); // plain stdout is added to session context
-    return 0;
-  }
-  // UserPromptSubmit (default): must be JSON to inject context.
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: text }
-  }) + '\n');
+  const payload = buildHookPayload(event, text);
+  if (!payload) return 0;
+  process.stdout.write(payload);
   return 0;
 }
 
