@@ -71,6 +71,24 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-lint-conventions.mjs\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-route-tool.mjs\" --surface bash || true"
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-route-tool.mjs\" --surface read || true"
+          }
+        ]
       }
     ]
   },
