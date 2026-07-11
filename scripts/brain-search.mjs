@@ -9,13 +9,16 @@
 import fs from 'node:fs';
 import { JSON_INDEX, MANIFEST, read, takeFlag, takeOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
-import { retrieve } from './retrieval.mjs';
+import { retrieve, staleResults, staleBanner } from './retrieval.mjs';
 import { openStore } from './store.mjs';
+import { terseHitLine, verboseHitHeader } from './search-format.mjs';
 
 const args = process.argv.slice(2);
 const summaryOnly = takeFlag(args, '--summary-only');
 const modulesOnly = takeFlag(args, '--modules-only');
 const json = takeFlag(args, '--json');
+const terse = takeFlag(args, '--terse');
+const explain = takeFlag(args, '--explain');
 const type = takeOption(args, '--type');
 const symbol = takeOption(args, '--symbol');
 const taskOpt = takeOption(args, '--task');
@@ -24,7 +27,7 @@ const projectOpt = takeOption(args, '--project');
 const edgeKindOpt = takeOption(args, '--edge-kind');
 const query = args.join(' ').trim();
 if (!query) {
-  console.error('Usage: npm run brain:search -- "query" [--summary-only] [--modules-only] [--type doc] [--symbol SymbolName] [--task <id>] [--actor <label>] [--project name[,name2]] [--edge-kind k8s-image|http-call|...] [--json]');
+  console.error('Usage: npm run brain:search -- "query" [--terse] [--explain] [--summary-only] [--modules-only] [--type doc] [--symbol SymbolName] [--task <id>] [--actor <label>] [--project name[,name2]] [--edge-kind k8s-image|http-call|...] [--json]');
   process.exit(1);
 }
 if (!fs.existsSync(JSON_INDEX) && !fs.existsSync(MANIFEST)) {
@@ -54,13 +57,26 @@ const results = await retrieve(query, store, embedder, {
 });
 await store.close();
 
+// Query-time staleness banner (ADR 0025): warn when a result file drifted from
+// the index. Default-on; opt-out BRAIN_STALE_BANNER=0. Output-only, no ranking.
+const banner = staleBanner(results);
+
 if (json) {
-  console.log(JSON.stringify({ query, results: results.map(toJsonResult) }, null, 2));
+  console.log(JSON.stringify({
+    query,
+    stale: process.env.BRAIN_STALE_BANNER === '0' ? [] : staleResults(results),
+    results: results.map(toJsonResult)
+  }, null, 2));
+} else if (terse) {
+  // One line per hit, bodies omitted, no diagnostics — the token-lean default
+  // for agents that only need paths (decisions/0024).
+  if (banner) console.log(banner);
+  for (const r of results) console.log(terseHitLine(r));
 } else {
+  // Verbose: header (+ diagnostics only under --explain) then the chunk body.
+  if (banner) console.log(banner);
   for (const r of results) {
-    const flags = [r.type, r.isModuleSummary ? 'module-summary' : '', r.isProjectSummary ? 'project-summary' : '', r.isSummary ? 'summary' : ''].filter(Boolean).join(',');
-    const scoring = `dense=${r.denseScore.toFixed(3)} keyword=${r.keywordScore.toFixed(3)} symbol=${r.symbolScore.toFixed(3)} metadata=${r.metadataScore.toFixed(3)}`;
-    console.log(`\n--- ${r.score.toFixed(4)} ${r.file}#chunk-${r.chunk} [${flags}] ${scoring}`);
+    console.log(`\n${verboseHitHeader(r, { explain })}`);
     console.log(r.text.slice(0, 900).trim());
   }
 }

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execSync, spawnSync } from 'node:child_process';
+import { buildUsageRecord, usageCmdFromScript } from './usage.mjs';
 
 export const ROOT = process.cwd();
 export const BRAIN_DIR = path.join(ROOT, '.project-brain');
@@ -12,6 +13,7 @@ export const JSON_INDEX = path.join(BRAIN_DIR, 'search_index.json');
 export const MANIFEST = path.join(BRAIN_DIR, 'index_manifest.json');
 export const SYNC_STATE = path.join(BRAIN_DIR, '.sync-state.json');
 export const SYNC_BG_LOG = path.join(BRAIN_DIR, '.sync-bg.log');
+export const USAGE_LOG = path.join(BRAIN_DIR, '.usage.jsonl');
 
 export function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); }
 export function exists(p) { return fs.existsSync(p); }
@@ -64,6 +66,7 @@ export function classifyChange(file) {
   if (!file) return 'ignored';
   if (file.startsWith('.project-brain/sessions/')) return 'ignored';
   if (file.startsWith('.project-brain/.sync-')) return 'ignored';
+  if (file === '.project-brain/.usage.jsonl') return 'ignored';
   if (file.startsWith('.project-brain/') && /\.md$/i.test(file)) return 'brain-relevant';
   return 'code-relevant';
 }
@@ -350,3 +353,68 @@ export function cosine(a, b) {
   }
   return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
 }
+
+// --- Usage ledger (issue #32) -----------------------------------------------
+// A QUANTITY/footprint instrument, distinct from #28's quality events. Gated
+// behind BRAIN_USAGE_LOG=1: zero writes and zero overhead when off. Append-only,
+// fail-silent, sidecar — it must never break or slow a command.
+
+/** Append one usage record as a JSONL line. Fail-silent, append-only, sidecar. */
+export function appendUsageRecord(record, logPath = USAGE_LOG) {
+  try {
+    ensureDir(path.dirname(logPath));
+    fs.appendFileSync(logPath, JSON.stringify(record) + '\n');
+    return true;
+  } catch {
+    // The ledger is measurement, never load-bearing — swallow all I/O errors.
+    return false;
+  }
+}
+
+let usageInstrumented = false;
+
+/**
+ * THE single choke point. When BRAIN_USAGE_LOG=1, instrument the current
+ * brain:* process so exactly one JSONL line is appended on exit. Called once at
+ * module load (below), so every command that imports common.mjs — directly or
+ * transitively — is logged with no per-script wiring. Returns whether it armed.
+ *
+ * Guarantees: returns immediately (no listeners, no stdout wrapping, no writes)
+ * when the flag is off, and only arms for a recognised `brain-*.mjs` entry point
+ * (so embed/aggregate workers and test runners are never logged as commands).
+ */
+export function instrumentUsage(argv = process.argv) {
+  if (process.env.BRAIN_USAGE_LOG !== '1') return false;
+  if (usageInstrumented) return false;
+  const cmd = usageCmdFromScript(argv && argv[1]);
+  if (!cmd) return false;
+  usageInstrumented = true;
+
+  const startMs = Date.now();
+  let stdoutBytes = 0;
+  try {
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk, enc, cb) => {
+      try {
+        stdoutBytes += Buffer.byteLength(chunk, typeof enc === 'string' ? enc : 'utf8');
+      } catch { /* non-buffer/odd chunk — ignore in the counter only */ }
+      return orig(chunk, enc, cb);
+    };
+  } catch { /* stdout not writable/patchable — still log with stdoutBytes=0 */ }
+
+  process.on('exit', (code) => {
+    appendUsageRecord(
+      buildUsageRecord({
+        cmd,
+        ts: new Date().toISOString(),
+        exitCode: code,
+        stdoutBytes,
+        durationMs: Date.now() - startMs
+      })
+    );
+  });
+  return true;
+}
+
+// Arm the ledger at import time (the choke point). No-op unless BRAIN_USAGE_LOG=1.
+instrumentUsage();
