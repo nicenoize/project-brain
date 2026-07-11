@@ -55,8 +55,8 @@ The hard cases (added under the `## Eval methodology` rationale, each carrying a
 
 ## How to use it for retrieval changes
 
-The full set (currently 120 cases: 36 easy + 84 hard) mixes easy lookups and
-hard conceptual queries. The **hard subset is where new dense-retrieval
+The full set (currently 138 cases: 36 easy + 102 class-tagged hard, see #33)
+mixes easy lookups and hard conceptual queries. The **hard subset is where new dense-retrieval
 features must show movement.** When you add or tune a retrieval feature
 (contextual retrieval, graph expansion, a different embedder, reranking, BM25
 params), report **before/after on the hard subset**, not just the aggregate —
@@ -137,6 +137,73 @@ Record before/after against this table for each planned improvement:
 
 The durable deliverable is the measurement discipline itself (the #8 lesson): a
 committed baseline plus a running ledger, not a point-in-time claim.
+
+## Hard-case classes — per-class breakdown + provenance (#33)
+
+The old hard subset (n≤84) was too small to trust point estimates: the #8
+paired-bootstrap reversals flipped sign on n≤42. #33 grows it to **n≥100** and
+tags every hard case with a `class` so `brain:eval:compare --hard-only` reports
+*which kind* of hard query moved, not just the blended hard-set number. The three
+classes each stress a different retrieval weakness:
+
+| `class` | what it stresses | example query → target |
+|---|---|---|
+| `vocabulary-mismatch` | dense recall when the query shares no filename/symbol tokens with the target | "how do we stop two agents clobbering the same shared file" → `decisions/0005-active-state-exclusive-lock.md` |
+| `why-style` | rationale that lives only in an ADR — answerable from the decision, not the code | "why add a second judging pass when the blended score already ordered them" → `decisions/0015-cross-encoder-rerank.md` |
+| `cross-file/structural` | answers that are a projection over the indexed graph (cross-project edges, symbol impact) | "figuring out which services actually talk to each other at runtime" → `decisions/0010-cross-project-edge-detection.md` |
+
+Current distribution (`.project-brain/eval.json`, tagged via the `class` field
+`brain:eval` ignores; `caseClass()` in `scripts/eval-lib.mjs` validates it):
+
+| `class` | count |
+|---|---|
+| `vocabulary-mismatch` | 71 |
+| `why-style` | 14 |
+| `cross-file/structural` | 17 |
+| **hard total** | **102** |
+
+### Collection provenance
+
+- **84 curated cases** — the original hand-authored hard subset (each `note`
+  states why the named file uniquely owns the concept), retro-tagged into the
+  three classes.
+- **18 authored under #33** — real query→file pairs from *this* repo, kept honest
+  per the "What makes a fair hard case" rules above: 10 `why-style` questions
+  targeting the rationale ADRs `decisions/0014`–`0024` (none previously used as a
+  target), 7 `vocabulary-mismatch` cases over newcomer-synonym queries against
+  un-targeted scripts (`brain-radar`, `brain-why`, `brain-insight`, `brain-gaps`,
+  `footprint`, `brain-audit`, `rerank`), and 1 `cross-file/structural` case
+  (`brain-diagram`, the graph projection).
+- **The preferred growth mechanism going forward is `brain:learn`** — harvest
+  real query→used-file pairs from live sessions in both repos (point `capture`
+  at club-ops), then `promote` the de-duped candidates. Usage-learned cases enter
+  *unclassified* (their `note` is not prefixed `Hard:`); a human reviews and,
+  where a case is genuinely hard, prefixes the note and assigns a `class` — so
+  the curated hard subset never grows without review, and `caseClass()` keeps an
+  untagged case out of the per-class deltas rather than mislabelling it.
+
+### Per-class deltas in `brain:eval:compare`
+
+Under `--hard-only`, the compare tool adds a `byClass` array (one row per class:
+`baseline`/`variant` hit@K + MRR and their `delta`). These are **point estimates**
+— the paired *bootstrap* CI stays on the whole hard subset because per-class n
+(14–71) is still thin; the per-class rows orient which class a change moved so a
+regression in one class isn't masked by a gain in another. The pure aggregation
+(`perClassDeltas` in `scripts/eval-lib.mjs`) is unit-tested in
+`tests/eval-compare.test.mjs`; run the actual comparison with
+`npm run brain:eval:compare -- baseline.json variant.json --hard-only`.
+
+### Re-baseline (supersedes the n≤42 / 0.762 hard-set number)
+
+Because the hard subset changed (n=84 → 102 with class tags), the current stack's
+hard-set hit@8 must be re-measured before it means anything. Record it with:
+
+```
+npm run brain:eval -- --hard-only
+```
+
+Then treat that number as the new "before" for #19, #29, and #18's
+`BRAIN_REFLECT_BOOST` experiment.
 
 ## Authoring more hard cases
 

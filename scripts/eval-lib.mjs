@@ -15,6 +15,22 @@ export function isHardCase(item) {
   return /^hard:/i.test(String(item?.note || '').trim());
 }
 
+/**
+ * The hard subset is tagged by *type* so `--hard-only` deltas can be reported
+ * per class (issue #33). Three classes, each exercising a different retrieval
+ * weakness — see docs/eval-methodology.md:
+ *   - vocabulary-mismatch: query synonyms, no filename/symbol overlap
+ *   - why-style: rationale answerable only from an ADR ("why does X use Y?")
+ *   - cross-file/structural: answer is a projection over the indexed graph
+ */
+export const HARD_CLASSES = ['vocabulary-mismatch', 'why-style', 'cross-file/structural'];
+
+/** The case's `class` when it is one of HARD_CLASSES, else 'unclassified'. */
+export function caseClass(item) {
+  const cls = String(item?.class || '').trim();
+  return HARD_CLASSES.includes(cls) ? cls : 'unclassified';
+}
+
 export function evaluateCase(item, found, topK) {
   const fileRank = firstRank(found, record => matchesAny(record.file, item.expectedFiles));
   const symbolRank = firstRank(found, record => intersects(record.symbols, item.expectedSymbols) || intersects(record.exportedSymbols, item.expectedSymbols));
@@ -30,6 +46,7 @@ export function evaluateCase(item, found, topK) {
     expectedSymbols: item.expectedSymbols || [],
     expectedTypes: item.expectedTypes || [],
     hard: isHardCase(item),
+    class: caseClass(item),
     note: item.note || '',
     hit,
     ranks: { file: fileRank, symbol: symbolRank, type: typeRank },
@@ -172,6 +189,50 @@ export function pairCases(reportA, reportB, { hardOnly = false } = {}) {
     pairsB.push({ hit: other.hit ? 1 : 0, reciprocalRank: other.reciprocalRank || 0 });
   }
   return { pairsA, pairsB, cases: pairsA.length };
+}
+
+/**
+ * PURE: per-class hit@K / MRR deltas over two paired eval reports (issue #33).
+ * Pairs cases by query (respecting `hardOnly`), groups the paired set by the
+ * case's class (taken from report A; falls back to caseClass, then
+ * 'unclassified' for pre-#33 reports), and returns one row per class present.
+ * Point estimates only — the paired *bootstrap* CI stays on the whole hard
+ * subset (per-class n is too small to bootstrap; these deltas orient which
+ * class moved). Deterministic order: HARD_CLASSES first, then any extras
+ * alphabetically. Rows carry no side effects.
+ *
+ * @returns {Array<{class, cases, baseline:{hitAtK,mrr}, variant:{hitAtK,mrr}, delta:{hit,mrr}}>}
+ */
+export function perClassDeltas(reportA, reportB, { hardOnly = false } = {}) {
+  const select = results => (results || []).filter(result => !hardOnly || result.hard);
+  const byQueryB = new Map(select(reportB.results).map(result => [result.query, result]));
+  const groups = new Map();
+  for (const a of select(reportA.results)) {
+    const b = byQueryB.get(a.query);
+    if (!b) continue; // only cases present in both runs are comparable
+    const cls = a.class || caseClass(a);
+    if (!groups.has(cls)) groups.set(cls, []);
+    groups.get(cls).push([a, b]);
+  }
+  const order = cls => {
+    const i = HARD_CLASSES.indexOf(cls);
+    return i === -1 ? HARD_CLASSES.length : i;
+  };
+  return [...groups.entries()]
+    .sort((x, y) => order(x[0]) - order(y[0]) || x[0].localeCompare(y[0]))
+    .map(([cls, pairs]) => {
+      const baseHit = avg(pairs.map(([a]) => (a.hit ? 1 : 0)));
+      const varHit = avg(pairs.map(([, b]) => (b.hit ? 1 : 0)));
+      const baseMrr = avg(pairs.map(([a]) => a.reciprocalRank || 0));
+      const varMrr = avg(pairs.map(([, b]) => b.reciprocalRank || 0));
+      return {
+        class: cls,
+        cases: pairs.length,
+        baseline: { hitAtK: round(baseHit), mrr: round(baseMrr) },
+        variant: { hitAtK: round(varHit), mrr: round(varMrr) },
+        delta: { hit: round(varHit - baseHit), mrr: round(varMrr - baseMrr) }
+      };
+    });
 }
 
 /**
