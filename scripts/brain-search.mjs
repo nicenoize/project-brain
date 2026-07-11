@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import { JSON_INDEX, MANIFEST, read, takeFlag, takeOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
-import { retrieve } from './retrieval.mjs';
+import { retrieve, staleResults, staleBanner } from './retrieval.mjs';
 import { openStore } from './store.mjs';
 import { terseHitLine, verboseHitHeader } from './search-format.mjs';
 
@@ -57,14 +57,24 @@ const results = await retrieve(query, store, embedder, {
 });
 await store.close();
 
+// Query-time staleness banner (ADR 0025): warn when a result file drifted from
+// the index. Default-on; opt-out BRAIN_STALE_BANNER=0. Output-only, no ranking.
+const banner = staleBanner(results);
+
 if (json) {
-  console.log(JSON.stringify({ query, results: results.map(toJsonResult) }, null, 2));
+  console.log(JSON.stringify({
+    query,
+    stale: process.env.BRAIN_STALE_BANNER === '0' ? [] : staleResults(results),
+    results: results.map(toJsonResult)
+  }, null, 2));
 } else if (terse) {
   // One line per hit, bodies omitted, no diagnostics — the token-lean default
   // for agents that only need paths (decisions/0024).
+  if (banner) console.log(banner);
   for (const r of results) console.log(terseHitLine(r));
 } else {
   // Verbose: header (+ diagnostics only under --explain) then the chunk body.
+  if (banner) console.log(banner);
   for (const r of results) {
     console.log(`\n${verboseHitHeader(r, { explain })}`);
     console.log(r.text.slice(0, 900).trim());

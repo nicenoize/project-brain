@@ -1,6 +1,64 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { cosine } from './common.mjs';
+import { cosine, sha256 } from './common.mjs';
+
+/**
+ * Query-time staleness detector (ADR 0025, extends the ADR 0013 lazy-sync
+ * story). Given the ≤ topK result `records`, return the distinct source files
+ * whose on-disk content has drifted from what the index recorded — the files a
+ * consumer should read directly (or re-sync) rather than trust the chunk for.
+ *
+ * OUTPUT-ONLY: this never touches ranking. It is a two-stage check, bounded at
+ * ≤ `opts.max` (default 8) distinct file reads:
+ *   1. `fs.stat` mtime vs `record.mtime` — cheap gate; skip files not newer.
+ *   2. ONLY for mtime-newer files, confirm sha256(content) vs `record.hash`.
+ * Stage 2 kills the git-branch-switch false positive: a checkout rewrites file
+ * mtimes to "now" with byte-identical content, so mtime looks newer but the
+ * hash matches → NOT reported. A real unsynced edit changes the hash → reported.
+ *
+ * Records without both `mtime` and `hash` are skipped (nothing to compare),
+ * which also naturally excludes synthetic aggregate records whose placeholder
+ * `file` paths don't exist on disk. Missing files are skipped (a deleted result
+ * can't be "read directly"; deletion staleness is common.mjs's concern — #32).
+ * Read/stat errors are swallowed so this can never break a query.
+ *
+ * Kept deliberately disjoint from common.mjs `staleIndexFromRecords` (whole-
+ * corpus, unbounded, hashes every file) — this is the bounded hot-path variant.
+ */
+export function staleResults(records = [], opts = {}) {
+  const root = opts.root || process.cwd();
+  const max = Number.isFinite(opts.max) ? opts.max : 8;
+  const stale = [];
+  const seen = new Set();
+  for (const record of records) {
+    const file = record && record.file;
+    if (!file || seen.has(file)) continue;
+    if (!record.mtime || !record.hash) continue;
+    if (seen.size >= max) break;
+    seen.add(file);
+    const full = path.isAbsolute(file) ? file : path.join(root, file);
+    let st;
+    try { st = fs.statSync(full); } catch { continue; } // missing → skip
+    const recMtime = Date.parse(record.mtime);
+    if (!Number.isFinite(recMtime)) continue;
+    // Stage 1: mtime gate. Not newer on disk → cannot be a fresh edit.
+    if (st.mtimeMs <= recMtime) continue;
+    // Stage 2: hash confirmation (kills the branch-switch mtime-bump case).
+    let current;
+    try { current = sha256(fs.readFileSync(full, 'utf8')); } catch { continue; }
+    if (current !== record.hash) stale.push(file);
+  }
+  return stale;
+}
+
+/** Build the one-line staleness banner, or '' when nothing is stale. */
+export function staleBanner(records = [], opts = {}) {
+  if (process.env.BRAIN_STALE_BANNER === '0') return '';
+  const stale = staleResults(records, opts);
+  if (!stale.length) return '';
+  return `⚠ index stale for ${stale.length} file(s): ${stale.join(', ')} — read those files directly or run npm run brain:sync`;
+}
 
 export async function retrieve(query, store, embedder, opts = {}) {
   const topK = Number(opts.topK || process.env.BRAIN_TOP_K || 8);
