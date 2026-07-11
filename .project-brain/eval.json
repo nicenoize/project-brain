@@ -1,619 +1,1217 @@
 [
   {
     "query": "Qdrant adapter",
-    "expectedFiles": ["scripts/store.mjs"],
-    "expectedSymbols": ["QdrantStore"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/store.mjs"
+    ],
+    "expectedSymbols": [
+      "QdrantStore"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "prompt token budget",
-    "expectedFiles": ["scripts/brain-pack.mjs"],
-    "expectedSymbols": ["packPrompt"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/brain-pack.mjs"
+    ],
+    "expectedSymbols": [
+      "packPrompt"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "changed file boost",
-    "expectedFiles": ["scripts/retrieval.mjs"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/retrieval.mjs"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "AST chunking",
-    "expectedFiles": ["scripts/chunk.mjs"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/chunk.mjs"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "where are GitFlow branch naming conventions documented",
-    "expectedFiles": [".project-brain/repo_context.md", "README.md", "SKILL.md"],
-    "expectedTypes": ["doc"]
+    "expectedFiles": [
+      ".project-brain/repo_context.md",
+      "README.md",
+      "SKILL.md"
+    ],
+    "expectedTypes": [
+      "doc"
+    ]
   },
   {
     "query": "how does hybrid score combine dense vector keyword and symbol signals",
-    "expectedFiles": ["scripts/retrieval.mjs", ".project-brain/decisions/0001-hybrid-score-normalization.md"],
-    "expectedSymbols": ["hybridScore"],
-    "expectedTypes": ["code", "decision"]
+    "expectedFiles": [
+      "scripts/retrieval.mjs",
+      ".project-brain/decisions/0001-hybrid-score-normalization.md"
+    ],
+    "expectedSymbols": [
+      "hybridScore"
+    ],
+    "expectedTypes": [
+      "code",
+      "decision"
+    ]
   },
   {
     "query": "why did we replace TF-IDF with BM25",
-    "expectedFiles": [".project-brain/decisions/0002-bm25-keyword-scoring.md"],
-    "expectedTypes": ["decision"]
+    "expectedFiles": [
+      ".project-brain/decisions/0002-bm25-keyword-scoring.md"
+    ],
+    "expectedTypes": [
+      "decision"
+    ]
   },
   {
     "query": "how is active_state.md protected from concurrent writes",
-    "expectedFiles": ["scripts/active-state.mjs", ".project-brain/decisions/0005-active-state-exclusive-lock.md"],
-    "expectedSymbols": ["withStateLock"],
-    "expectedTypes": ["code", "decision"]
+    "expectedFiles": [
+      "scripts/active-state.mjs",
+      ".project-brain/decisions/0005-active-state-exclusive-lock.md"
+    ],
+    "expectedSymbols": [
+      "withStateLock"
+    ],
+    "expectedTypes": [
+      "code",
+      "decision"
+    ]
   },
   {
     "query": "orchestrator concurrency cap and slot lease",
-    "expectedFiles": ["scripts/brain-orchestrate.mjs", ".project-brain/decisions/0006-orchestrator-slot-lease.md"],
-    "expectedTypes": ["code", "decision"]
+    "expectedFiles": [
+      "scripts/brain-orchestrate.mjs",
+      ".project-brain/decisions/0006-orchestrator-slot-lease.md"
+    ],
+    "expectedTypes": [
+      "code",
+      "decision"
+    ]
   },
   {
     "query": "incremental module summary rebuild on changed directories",
-    "expectedFiles": ["scripts/brain-index.mjs", ".project-brain/decisions/0007-incremental-summary-rebuild.md"],
-    "expectedTypes": ["code", "decision"]
+    "expectedFiles": [
+      "scripts/brain-index.mjs",
+      ".project-brain/decisions/0007-incremental-summary-rebuild.md"
+    ],
+    "expectedTypes": [
+      "code",
+      "decision"
+    ]
   },
   {
     "query": "package summary record monorepo packages/* apps/*",
-    "expectedFiles": ["scripts/aggregate.mjs", ".project-brain/decisions/0008-aggregate-vector-records.md"],
-    "expectedSymbols": ["buildPackageSummary", "discoverPackages"],
-    "expectedTypes": ["code", "decision"]
+    "expectedFiles": [
+      "scripts/aggregate.mjs",
+      ".project-brain/decisions/0008-aggregate-vector-records.md"
+    ],
+    "expectedSymbols": [
+      "buildPackageSummary",
+      "discoverPackages"
+    ],
+    "expectedTypes": [
+      "code",
+      "decision"
+    ]
   },
   {
     "query": "what does the retrieval module do",
-    "expectedFiles": [".project-brain/modules/retrieval.md"],
-    "expectedTypes": ["module"]
+    "expectedFiles": [
+      ".project-brain/modules/retrieval.md"
+    ],
+    "expectedTypes": [
+      "module"
+    ]
   },
   {
     "query": "where do we configure the embedder model",
-    "expectedFiles": ["scripts/embed.mjs"],
-    "expectedSymbols": ["LocalProvider", "OpenAIProvider"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/embed.mjs"
+    ],
+    "expectedSymbols": [
+      "LocalProvider",
+      "OpenAIProvider"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "OpenAI rate limit retry backoff",
-    "expectedFiles": ["scripts/embed.mjs"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/embed.mjs"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "Lance schema mismatch auto recovery",
-    "expectedFiles": ["scripts/store.mjs"],
-    "expectedSymbols": ["LanceStore"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/store.mjs"
+    ],
+    "expectedSymbols": [
+      "LanceStore"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "extractCodeIntent JSDoc parser",
-    "expectedFiles": ["scripts/chunk.mjs"],
-    "expectedSymbols": ["extractCodeIntent"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/chunk.mjs"
+    ],
+    "expectedSymbols": [
+      "extractCodeIntent"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "result deduplication per file in retrieval",
-    "expectedFiles": ["scripts/retrieval.mjs", ".project-brain/decisions/0004-result-deduplication-per-file.md"],
-    "expectedTypes": ["code", "decision"]
+    "expectedFiles": [
+      "scripts/retrieval.mjs",
+      ".project-brain/decisions/0004-result-deduplication-per-file.md"
+    ],
+    "expectedTypes": [
+      "code",
+      "decision"
+    ]
   },
   {
     "query": "session handoff frontmatter task_id actor tool",
-    "expectedFiles": ["scripts/brain-session.mjs"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/brain-session.mjs"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "Claude Code PreCompact Stop digest hook",
-    "expectedFiles": ["scripts/brain-session-digest.mjs"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/brain-session-digest.mjs"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "where do we cap embeddings to fit MiniLM context",
-    "expectedFiles": ["scripts/aggregate.mjs"],
-    "expectedSymbols": ["buildAggregateSummaryTexts"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/aggregate.mjs"
+    ],
+    "expectedSymbols": [
+      "buildAggregateSummaryTexts"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "how does coordination work across multiple agents",
-    "expectedFiles": [".project-brain/modules/coordination.md"],
-    "expectedTypes": ["module"]
+    "expectedFiles": [
+      ".project-brain/modules/coordination.md"
+    ],
+    "expectedTypes": [
+      "module"
+    ]
   },
   {
     "query": "git worktree symlink repair idempotent",
-    "expectedFiles": ["scripts/brain-worktree.mjs"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/brain-worktree.mjs"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "what hooks does Claude Code wire up automatically",
-    "expectedFiles": [".project-brain/modules/hooks.md", "scripts/setup-claude-settings.mjs"],
-    "expectedTypes": ["module", "code"]
+    "expectedFiles": [
+      ".project-brain/modules/hooks.md",
+      "scripts/setup-claude-settings.mjs"
+    ],
+    "expectedTypes": [
+      "module",
+      "code"
+    ]
   },
   {
     "query": "how does fleet mode auto-activate across sibling projects",
-    "expectedFiles": ["scripts/projects.mjs", ".project-brain/decisions/0009-fleet-mode-discovery.md"],
-    "expectedSymbols": ["discoverProjects", "isFleetMode"],
-    "expectedTypes": ["code", "decision"]
+    "expectedFiles": [
+      "scripts/projects.mjs",
+      ".project-brain/decisions/0009-fleet-mode-discovery.md"
+    ],
+    "expectedSymbols": [
+      "discoverProjects",
+      "isFleetMode"
+    ],
+    "expectedTypes": [
+      "code",
+      "decision"
+    ]
   },
   {
     "query": "where are cross-project edge detectors registered",
-    "expectedFiles": ["scripts/edges/index.mjs"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/edges/index.mjs"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "what does the k8s-image detector resolve",
-    "expectedFiles": ["scripts/edges/k8s-image.mjs"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/edges/k8s-image.mjs"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "how is the cross-project edge record stored",
-    "expectedFiles": ["scripts/edges/materialize.mjs", ".project-brain/decisions/0010-cross-project-edge-detection.md"],
-    "expectedSymbols": ["candidateToRecord"],
-    "expectedTypes": ["code", "decision"]
+    "expectedFiles": [
+      "scripts/edges/materialize.mjs",
+      ".project-brain/decisions/0010-cross-project-edge-detection.md"
+    ],
+    "expectedSymbols": [
+      "candidateToRecord"
+    ],
+    "expectedTypes": [
+      "code",
+      "decision"
+    ]
   },
   {
     "query": "what fleet env var enables high-confidence http resolution",
-    "expectedFiles": ["scripts/edges/http-client.mjs", ".project-brain/modules/fleet.md"],
-    "expectedTypes": ["code", "module"]
+    "expectedFiles": [
+      "scripts/edges/http-client.mjs",
+      ".project-brain/modules/fleet.md"
+    ],
+    "expectedTypes": [
+      "code",
+      "module"
+    ]
   },
   {
     "query": "how does the active_state project column work",
-    "expectedFiles": ["scripts/active-state.mjs", ".project-brain/decisions/0011-fleet-active-state-coordination.md"],
-    "expectedTypes": ["code", "decision"]
+    "expectedFiles": [
+      "scripts/active-state.mjs",
+      ".project-brain/decisions/0011-fleet-active-state-coordination.md"
+    ],
+    "expectedTypes": [
+      "code",
+      "decision"
+    ]
   },
   {
     "query": "where is the fleet summary record built",
-    "expectedFiles": ["scripts/aggregate.mjs"],
-    "expectedSymbols": ["buildFleetSummary"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/aggregate.mjs"
+    ],
+    "expectedSymbols": [
+      "buildFleetSummary"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "what does brain edges --detect do",
-    "expectedFiles": ["scripts/brain-edges.mjs"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/brain-edges.mjs"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "how does brain integrate with spec-kit",
-    "expectedFiles": [".project-brain/decisions/0012-spec-kit-integration.md", ".project-brain/modules/spec-kit.md"],
-    "expectedTypes": ["decision", "module"]
+    "expectedFiles": [
+      ".project-brain/decisions/0012-spec-kit-integration.md",
+      ".project-brain/modules/spec-kit.md"
+    ],
+    "expectedTypes": [
+      "decision",
+      "module"
+    ]
   },
   {
     "query": "where is spec.md routed in inferType",
-    "expectedFiles": ["scripts/infer.mjs"],
-    "expectedSymbols": ["inferType"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/infer.mjs"
+    ],
+    "expectedSymbols": [
+      "inferType"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "brain speckit tasks subcommand parses task list",
-    "expectedFiles": ["scripts/brain-speckit.mjs"],
-    "expectedTypes": ["code"]
+    "expectedFiles": [
+      "scripts/brain-speckit.mjs"
+    ],
+    "expectedTypes": [
+      "code"
+    ]
   },
   {
     "query": "what slash commands does brain ship for spec-kit",
-    "expectedFiles": ["templates/claude-code/commands/brain-speckit-tasks.md", ".project-brain/modules/spec-kit.md"],
-    "expectedTypes": ["doc", "module"]
+    "expectedFiles": [
+      "templates/claude-code/commands/brain-speckit-tasks.md",
+      ".project-brain/modules/spec-kit.md"
+    ],
+    "expectedTypes": [
+      "doc",
+      "module"
+    ]
   },
   {
     "query": "constitution canonical-root boost",
-    "expectedFiles": ["scripts/retrieval.mjs", ".project-brain/decisions/0012-spec-kit-integration.md"],
-    "expectedSymbols": ["canonicalBrainBoost"],
-    "expectedTypes": ["code", "decision"]
+    "expectedFiles": [
+      "scripts/retrieval.mjs",
+      ".project-brain/decisions/0012-spec-kit-integration.md"
+    ],
+    "expectedSymbols": [
+      "canonicalBrainBoost"
+    ],
+    "expectedTypes": [
+      "code",
+      "decision"
+    ]
   },
-
   {
     "query": "how do we stop two agents clobbering the same shared file",
-    "expectedFiles": [".project-brain/decisions/0005-active-state-exclusive-lock.md"],
-    "note": "Hard: query says 'clobbering/shared file'; target speaks of 'exclusive lock' and 'overwrite' — zero filename/symbol overlap, dense must earn it. ADR is the genuinely-best answer (it is the decision that introduced the write protection)."
+    "expectedFiles": [
+      ".project-brain/decisions/0005-active-state-exclusive-lock.md"
+    ],
+    "note": "Hard: query says 'clobbering/shared file'; target speaks of 'exclusive lock' and 'overwrite' — zero filename/symbol overlap, dense must earn it. ADR is the genuinely-best answer (it is the decision that introduced the write protection).",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "what keeps a crashed worker from leaving the system jammed forever",
-    "expectedFiles": [".project-brain/decisions/0005-active-state-exclusive-lock.md"],
-    "note": "Hard: 'crashed worker / jammed' vs the ADR's 'stale lock takeover'. No lexical overlap; the stale-lock takeover rule lives only in this decision."
+    "expectedFiles": [
+      ".project-brain/decisions/0005-active-state-exclusive-lock.md"
+    ],
+    "note": "Hard: 'crashed worker / jammed' vs the ADR's 'stale lock takeover'. No lexical overlap; the stale-lock takeover rule lives only in this decision.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "preventing duplicate work when two coordinators start at once",
-    "expectedFiles": [".project-brain/decisions/0006-orchestrator-slot-lease.md"],
-    "note": "Hard: 'duplicate work / coordinators' maps to 'orchestrator slot lease / over-spawn'. The concept (racing orchestrators) is described only here, with different vocabulary."
+    "expectedFiles": [
+      ".project-brain/decisions/0006-orchestrator-slot-lease.md"
+    ],
+    "note": "Hard: 'duplicate work / coordinators' maps to 'orchestrator slot lease / over-spawn'. The concept (racing orchestrators) is described only here, with different vocabulary.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "avoiding redundant recomputation of folder digests after a tiny edit",
-    "expectedFiles": [".project-brain/decisions/0007-incremental-summary-rebuild.md"],
-    "note": "Hard: 'folder digests / redundant recomputation' vs 'module summary incremental rebuild / dirty dirs'. Genuinely-best target; the dirty-set rebuild rationale is unique to this ADR."
+    "expectedFiles": [
+      ".project-brain/decisions/0007-incremental-summary-rebuild.md"
+    ],
+    "note": "Hard: 'folder digests / redundant recomputation' vs 'module summary incremental rebuild / dirty dirs'. Genuinely-best target; the dirty-set rebuild rationale is unique to this ADR.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "keeping the editor responsive while the background reindex runs",
-    "expectedFiles": [".project-brain/decisions/0013-lazy-sync-performance.md"],
-    "note": "Hard: 'editor responsive / background reindex' vs 'nice + ionice, bg-sync priority'. No keyword overlap; the CPU/IO-priority decision is only in this ADR."
+    "expectedFiles": [
+      ".project-brain/decisions/0013-lazy-sync-performance.md"
+    ],
+    "note": "Hard: 'editor responsive / background reindex' vs 'nice + ionice, bg-sync priority'. No keyword overlap; the CPU/IO-priority decision is only in this ADR.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "skip re-embedding chunks whose text did not actually change",
-    "expectedFiles": [".project-brain/decisions/0013-lazy-sync-performance.md"],
-    "note": "Hard: 'skip re-embedding unchanged chunks' is the vector-reuse idea; ADR phrases it as 'chunk-level vector reuse keyed by sha256(embeddingText)'. Same decision doc, different words."
+    "expectedFiles": [
+      ".project-brain/decisions/0013-lazy-sync-performance.md"
+    ],
+    "note": "Hard: 'skip re-embedding unchanged chunks' is the vector-reuse idea; ADR phrases it as 'chunk-level vector reuse keyed by sha256(embeddingText)'. Same decision doc, different words.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "why one strong vector match should not be drowned out by tag bonuses",
-    "expectedFiles": [".project-brain/decisions/0001-hybrid-score-normalization.md"],
-    "note": "Hard: 'tag bonuses drowning a strong match' vs 'metadata clamp / symbol multiplier / score cap'. The scoring-balance rationale is unique to this normalization ADR."
+    "expectedFiles": [
+      ".project-brain/decisions/0001-hybrid-score-normalization.md"
+    ],
+    "note": "Hard: 'tag bonuses drowning a strong match' vs 'metadata clamp / symbol multiplier / score cap'. The scoring-balance rationale is unique to this normalization ADR.",
+    "class": "why-style"
   },
   {
     "query": "stop one long file from hogging every top result slot",
-    "expectedFiles": [".project-brain/decisions/0004-result-deduplication-per-file.md"],
-    "note": "Hard: 'hogging result slots' vs 'cap non-summary chunks per file / dedup'. The per-file diversity cap rationale lives only in this ADR."
+    "expectedFiles": [
+      ".project-brain/decisions/0004-result-deduplication-per-file.md"
+    ],
+    "note": "Hard: 'hogging result slots' vs 'cap non-summary chunks per file / dedup'. The per-file diversity cap rationale lives only in this ADR.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "why we only re-rank the nearest neighbours instead of the whole library",
-    "expectedFiles": [".project-brain/decisions/0003-dense-candidate-only-scoring.md"],
-    "note": "Hard: 'nearest neighbours vs whole library' vs 'score only over the dense candidate set'. The O(N) full-corpus-scan removal rationale is unique to this decision."
+    "expectedFiles": [
+      ".project-brain/decisions/0003-dense-candidate-only-scoring.md"
+    ],
+    "note": "Hard: 'nearest neighbours vs whole library' vs 'score only over the dense candidate set'. The O(N) full-corpus-scan removal rationale is unique to this decision.",
+    "class": "why-style"
   },
   {
     "query": "fitting long directory descriptions into the small embedding window",
-    "expectedFiles": [".project-brain/decisions/0008-aggregate-vector-records.md"],
-    "note": "Hard: 'small embedding window / long directory descriptions' vs 'MiniLM 256-token context truncation, tighter folder embeddings'. The truncation fix is described only here."
+    "expectedFiles": [
+      ".project-brain/decisions/0008-aggregate-vector-records.md"
+    ],
+    "note": "Hard: 'small embedding window / long directory descriptions' vs 'MiniLM 256-token context truncation, tighter folder embeddings'. The truncation fix is described only here.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "automatically noticing several related codebases sitting side by side",
-    "expectedFiles": [".project-brain/decisions/0009-fleet-mode-discovery.md"],
-    "note": "Hard: 'noticing related codebases side by side' vs 'fleet-mode discovery of sibling project directories'. No 'fleet' token in the query; discovery rationale is unique to this ADR."
+    "expectedFiles": [
+      ".project-brain/decisions/0009-fleet-mode-discovery.md"
+    ],
+    "note": "Hard: 'noticing related codebases side by side' vs 'fleet-mode discovery of sibling project directories'. No 'fleet' token in the query; discovery rationale is unique to this ADR.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "telling apart same-named files that belong to different services",
-    "expectedFiles": [".project-brain/decisions/0011-fleet-active-state-coordination.md"],
-    "note": "Hard: 'same-named files in different services' vs 'project column so backend/lib/auth.ts and frontend/lib/auth.ts don't collide'. The project-column disambiguation is only in this ADR."
+    "expectedFiles": [
+      ".project-brain/decisions/0011-fleet-active-state-coordination.md"
+    ],
+    "note": "Hard: 'same-named files in different services' vs 'project column so backend/lib/auth.ts and frontend/lib/auth.ts don't collide'. The project-column disambiguation is only in this ADR.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "figuring out which services actually talk to each other at runtime",
-    "expectedFiles": [".project-brain/decisions/0010-cross-project-edge-detection.md"],
-    "note": "Hard: 'which services talk to each other' vs 'cross-project edge detection via pluggable detectors'. The runtime-relationship materialization rationale is unique to this decision."
+    "expectedFiles": [
+      ".project-brain/decisions/0010-cross-project-edge-detection.md"
+    ],
+    "note": "Hard: 'which services talk to each other' vs 'cross-project edge detection via pluggable detectors'. The runtime-relationship materialization rationale is unique to this decision.",
+    "class": "cross-file/structural"
   },
   {
     "query": "letting the assistant pick up where a teammate's chat left off",
-    "expectedFiles": [".project-brain/modules/coordination.md"],
-    "note": "Hard: 'pick up where a teammate left off' vs the coordination module's shared active_state surface for multiple agents. File-level doc is the best synthesizing answer."
+    "expectedFiles": [
+      ".project-brain/modules/coordination.md"
+    ],
+    "note": "Hard: 'pick up where a teammate left off' vs the coordination module's shared active_state surface for multiple agents. File-level doc is the best synthesizing answer.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "how background automation refreshes context without anyone remembering to",
-    "expectedFiles": [".project-brain/modules/hooks.md"],
-    "note": "Hard: 'background automation refreshes context' vs hooks module's 'keeps the brain fresh without relying on the developer to remember'. Module doc is the genuinely-best target."
+    "expectedFiles": [
+      ".project-brain/modules/hooks.md"
+    ],
+    "note": "Hard: 'background automation refreshes context' vs hooks module's 'keeps the brain fresh without relying on the developer to remember'. Module doc is the genuinely-best target.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "what makes a query count as an architecture or policy question",
-    "expectedFiles": ["scripts/retrieval.mjs"],
-    "note": "Hard: 'architecture or policy question' maps to retrieval's architectural-intent classifier (how/why + decision/policy/architecture regex). Concept lives in code with no matching symbol name in the query; file-level only (no expectedSymbols)."
+    "expectedFiles": [
+      "scripts/retrieval.mjs"
+    ],
+    "note": "Hard: 'architecture or policy question' maps to retrieval's architectural-intent classifier (how/why + decision/policy/architecture regex). Concept lives in code with no matching symbol name in the query; file-level only (no expectedSymbols).",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "saturation control for how much a repeated word can score",
-    "expectedFiles": ["scripts/retrieval.mjs"],
-    "note": "Hard: 'saturation control for a repeated word' is the BM25 k1 term-frequency-saturation parameter inside tfidfScore. Query uses no 'BM25/k1/tfidf' token; file-level dense recall test."
+    "expectedFiles": [
+      "scripts/retrieval.mjs"
+    ],
+    "note": "Hard: 'saturation control for a repeated word' is the BM25 k1 term-frequency-saturation parameter inside tfidfScore. Query uses no 'BM25/k1/tfidf' token; file-level dense recall test.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "reading the leading comment to summarize what a source file is for",
-    "expectedFiles": ["scripts/chunk.mjs"],
-    "note": "Hard: 'leading comment to summarize a file' vs extractCodeIntent's 'leading JSDoc / first comment line intent sentence'. File-level only; symbol name deliberately not in query."
+    "expectedFiles": [
+      "scripts/chunk.mjs"
+    ],
+    "note": "Hard: 'leading comment to summarize a file' vs extractCodeIntent's 'leading JSDoc / first comment line intent sentence'. File-level only; symbol name deliberately not in query.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "rules that reject a branch name before letting a commit through",
-    "expectedFiles": ["scripts/brain-guard.mjs"],
-    "note": "Hard: 'reject a branch name before a commit' vs brain-guard's pre-commit branch-base validation regexes. No 'guard' token in query; file is the genuinely-best target."
+    "expectedFiles": [
+      "scripts/brain-guard.mjs"
+    ],
+    "note": "Hard: 'reject a branch name before a commit' vs brain-guard's pre-commit branch-base validation regexes. No 'guard' token in query; file is the genuinely-best target.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "matching producers and consumers that share a topic or queue name",
-    "expectedFiles": ["scripts/edges/pubsub.mjs"],
-    "note": "Hard: 'producers and consumers sharing a topic' maps to the pubsub edge detector. The query avoids 'pubsub/edge'; this detector is the only place that pairs producer/consumer by topic name."
+    "expectedFiles": [
+      "scripts/edges/pubsub.mjs"
+    ],
+    "note": "Hard: 'producers and consumers sharing a topic' maps to the pubsub edge detector. The query avoids 'pubsub/edge'; this detector is the only place that pairs producer/consumer by topic name.",
+    "class": "cross-file/structural"
   },
   {
     "query": "detecting when two services point at the same database schema",
-    "expectedFiles": ["scripts/edges/db-shared.mjs"],
-    "note": "Hard: 'two services point at the same database' vs the db-shared edge detector (shared migration dir / DATABASE_URL). No 'db-shared' token in query; detector is the best answer."
+    "expectedFiles": [
+      "scripts/edges/db-shared.mjs"
+    ],
+    "note": "Hard: 'two services point at the same database' vs the db-shared edge detector (shared migration dir / DATABASE_URL). No 'db-shared' token in query; detector is the best answer.",
+    "class": "cross-file/structural"
   },
-
   {
     "query": "why a giant generated lockfile shouldn't outrank a tiny on-topic snippet just for repeating a word",
-    "expectedFiles": [".project-brain/decisions/0002-bm25-keyword-scoring.md"],
-    "note": "Hard: 'giant file outranking a tiny snippet by repetition' vs the ADR's document-length-normalization rationale (replace raw TF-IDF with BM25, b-parameter). No 'BM25/tfidf/length' token in query; this decision uniquely owns the fix."
+    "expectedFiles": [
+      ".project-brain/decisions/0002-bm25-keyword-scoring.md"
+    ],
+    "note": "Hard: 'giant file outranking a tiny snippet by repetition' vs the ADR's document-length-normalization rationale (replace raw TF-IDF with BM25, b-parameter). No 'BM25/tfidf/length' token in query; this decision uniquely owns the fix.",
+    "class": "why-style"
   },
   {
     "query": "treating an upstream feature-authoring toolkit as something we read rather than absorb",
-    "expectedFiles": [".project-brain/decisions/0012-spec-kit-integration.md"],
-    "note": "Hard: 'read rather than absorb an upstream toolkit' vs the ADR's 'additive overlay, treat spec-kit as upstream consumer'. Query avoids 'spec-kit/overlay'; the absorb-vs-consume decision lives only here."
+    "expectedFiles": [
+      ".project-brain/decisions/0012-spec-kit-integration.md"
+    ],
+    "note": "Hard: 'read rather than absorb an upstream toolkit' vs the ADR's 'additive overlay, treat spec-kit as upstream consumer'. Query avoids 'spec-kit/overlay'; the absorb-vs-consume decision lives only here.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "how new files get sorted into kinds like decision or module from just their path",
-    "expectedFiles": ["scripts/infer.mjs"],
-    "note": "Hard: 'sorting files into kinds from their path' vs inferType's path/frontmatter-to-record-type classification. Query uses no 'inferType/type' symbol token; this pure helper is the single home of that logic."
+    "expectedFiles": [
+      "scripts/infer.mjs"
+    ],
+    "note": "Hard: 'sorting files into kinds from their path' vs inferType's path/frontmatter-to-record-type classification. Query uses no 'inferType/type' symbol token; this pure helper is the single home of that logic.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the end-to-end walk from listing files to a queryable vector store",
-    "expectedFiles": [".project-brain/modules/indexing.md"],
-    "note": "Hard: 'walk from listing files to a queryable store' vs the indexing module's pipeline overview (list → chunk → embed → upsert). Module doc is the genuinely-best synthesizing answer; query avoids 'index/pipeline' jargon."
+    "expectedFiles": [
+      ".project-brain/modules/indexing.md"
+    ],
+    "note": "Hard: 'walk from listing files to a queryable store' vs the indexing module's pipeline overview (list → chunk → embed → upsert). Module doc is the genuinely-best synthesizing answer; query avoids 'index/pipeline' jargon.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "spanning several neighbouring repos as if they were one knowledge base",
-    "expectedFiles": [".project-brain/modules/fleet.md"],
-    "note": "Hard: 'spanning several neighbouring repos as one' vs the fleet module's 'one brain across N sibling project directories'. Distinct from the discovery ADR — the module doc is the architecture overview; query avoids 'fleet'."
+    "expectedFiles": [
+      ".project-brain/modules/fleet.md"
+    ],
+    "note": "Hard: 'spanning several neighbouring repos as one' vs the fleet module's 'one brain across N sibling project directories'. Distinct from the discovery ADR — the module doc is the architecture overview; query avoids 'fleet'.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the order things go through to turn a question into ranked passages",
-    "expectedFiles": [".project-brain/modules/retrieval.md"],
-    "note": "Hard: 'turning a question into ranked passages' vs the retrieval module's query→candidates→score→dedup overview. Module doc owns the end-to-end narrative; query carries no 'retrieval/hybrid' token."
+    "expectedFiles": [
+      ".project-brain/modules/retrieval.md"
+    ],
+    "note": "Hard: 'turning a question into ranked passages' vs the retrieval module's query→candidates→score→dedup overview. Module doc owns the end-to-end narrative; query carries no 'retrieval/hybrid' token.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "reusing yesterday's relationship findings for repos nobody touched",
-    "expectedFiles": ["scripts/edges/cache.mjs"],
-    "note": "Hard: 'reusing prior findings for untouched repos' vs the per-detector incremental edge cache (restore cached candidates for clean pairs). Query avoids 'cache/detector'; this file uniquely implements the reuse."
+    "expectedFiles": [
+      "scripts/edges/cache.mjs"
+    ],
+    "note": "Hard: 'reusing prior findings for untouched repos' vs the per-detector incremental edge cache (restore cached candidates for clean pairs). Query avoids 'cache/detector'; this file uniquely implements the reuse.",
+    "class": "cross-file/structural"
   },
   {
     "query": "spotting a shared backbone when several apps read the same configuration key",
-    "expectedFiles": ["scripts/edges/env-var.mjs"],
-    "note": "Hard: 'several apps read the same configuration key' vs env-var detector pairing projects that reference the same env variable. Query avoids 'env/variable'; this detector is the only one keyed on shared config keys."
+    "expectedFiles": [
+      "scripts/edges/env-var.mjs"
+    ],
+    "note": "Hard: 'several apps read the same configuration key' vs env-var detector pairing projects that reference the same env variable. Query avoids 'env/variable'; this detector is the only one keyed on shared config keys.",
+    "class": "cross-file/structural"
   },
   {
     "query": "linking a stub-call site to the place its remote contract is declared",
-    "expectedFiles": ["scripts/edges/grpc-client.mjs"],
-    "note": "Hard: 'stub-call site to its remote contract' vs grpc-client matching generated-client constructions to a .proto service in another project. Distinct from proto-schema (which indexes the .proto import itself); this file owns client→service resolution."
+    "expectedFiles": [
+      "scripts/edges/grpc-client.mjs"
+    ],
+    "note": "Hard: 'stub-call site to its remote contract' vs grpc-client matching generated-client constructions to a .proto service in another project. Distinct from proto-schema (which indexes the .proto import itself); this file owns client→service resolution.",
+    "class": "cross-file/structural"
   },
   {
     "query": "registering each service's published address from its REST contract file",
-    "expectedFiles": ["scripts/edges/openapi-schema.mjs"],
-    "note": "Hard: 'published address from a REST contract file' vs openapi-schema's registrar extracting server URLs from openapi specs into facts. Query avoids 'openapi/swagger'; this registrar uniquely supplies base URLs for http resolution."
+    "expectedFiles": [
+      "scripts/edges/openapi-schema.mjs"
+    ],
+    "note": "Hard: 'published address from a REST contract file' vs openapi-schema's registrar extracting server URLs from openapi specs into facts. Query avoids 'openapi/swagger'; this registrar uniquely supplies base URLs for http resolution.",
+    "class": "cross-file/structural"
   },
   {
     "query": "one node project pulling in another's published library by its declared name",
-    "expectedFiles": ["scripts/edges/package-dep.mjs"],
-    "note": "Hard: 'pulling in another project's published library by name' vs package-dep matching a dependency against a sibling package.json#name. Query avoids 'package/dep'; this detector owns Node name-match edges."
+    "expectedFiles": [
+      "scripts/edges/package-dep.mjs"
+    ],
+    "note": "Hard: 'pulling in another project's published library by name' vs package-dep matching a dependency against a sibling package.json#name. Query avoids 'package/dep'; this detector owns Node name-match edges.",
+    "class": "cross-file/structural"
   },
   {
     "query": "drawing a link when one repo imports another's interface definition file",
-    "expectedFiles": ["scripts/edges/proto-schema.mjs"],
-    "note": "Hard: 'imports another's interface definition file' vs proto-schema linking a .proto import across projects and publishing grpcServices. Distinct from grpc-client; this file owns the .proto import edge itself."
+    "expectedFiles": [
+      "scripts/edges/proto-schema.mjs"
+    ],
+    "note": "Hard: 'imports another's interface definition file' vs proto-schema linking a .proto import across projects and publishing grpcServices. Distinct from grpc-client; this file owns the .proto import edge itself.",
+    "class": "cross-file/structural"
   },
   {
     "query": "guessing the container tag a project would publish so manifests can point back at it",
-    "expectedFiles": ["scripts/edges/image-registry.mjs"],
-    "note": "Hard: 'guessing the container tag a project would publish' vs image-registry deriving each project's image ref and publishing imageRegistry. Distinct from k8s-image (the consumer); this registrar owns ref derivation."
+    "expectedFiles": [
+      "scripts/edges/image-registry.mjs"
+    ],
+    "note": "Hard: 'guessing the container tag a project would publish' vs image-registry deriving each project's image ref and publishing imageRegistry. Distinct from k8s-image (the consumer); this registrar owns ref derivation.",
+    "class": "cross-file/structural"
   },
   {
     "query": "a Go module overriding a dependency to point at a sibling folder on disk",
-    "expectedFiles": ["scripts/edges/go-replace.mjs"],
-    "note": "Hard: 'Go module overriding a dependency to a sibling folder' vs go-replace matching `replace => ../sibling` directives. Query avoids 'go-replace'; this detector uniquely handles replace-directive edges."
+    "expectedFiles": [
+      "scripts/edges/go-replace.mjs"
+    ],
+    "note": "Hard: 'Go module overriding a dependency to a sibling folder' vs go-replace matching `replace => ../sibling` directives. Query avoids 'go-replace'; this detector uniquely handles replace-directive edges.",
+    "class": "cross-file/structural"
   },
   {
     "query": "the shared agreement every relationship-finder plugin must satisfy",
-    "expectedFiles": ["scripts/edges/types.mjs"],
-    "note": "Hard: 'shared agreement every plugin must satisfy' vs the detector contract typedefs (DetectorContext, EdgeCandidate). Query avoids 'type/contract'; this file is the single source of the detector interface."
+    "expectedFiles": [
+      "scripts/edges/types.mjs"
+    ],
+    "note": "Hard: 'shared agreement every plugin must satisfy' vs the detector contract typedefs (DetectorContext, EdgeCandidate). Query avoids 'type/contract'; this file is the single source of the detector interface.",
+    "class": "cross-file/structural"
   },
   {
     "query": "prepending a little where-am-I blurb to a snippet before turning it into a vector",
-    "expectedFiles": ["scripts/contextual.mjs"],
-    "note": "Hard: 'prepending a where-am-I blurb before vectorizing' vs contextual retrieval's deterministic situating-prefix generator. Query avoids 'contextual'; this module uniquely builds the per-chunk prefix."
+    "expectedFiles": [
+      "scripts/contextual.mjs"
+    ],
+    "note": "Hard: 'prepending a where-am-I blurb before vectorizing' vs contextual retrieval's deterministic situating-prefix generator. Query avoids 'contextual'; this module uniquely builds the per-chunk prefix.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "answering what else breaks if I rename this identifier",
-    "expectedFiles": ["scripts/brain-impact.mjs"],
-    "note": "Hard: 'what breaks if I rename this identifier' vs the symbol impact analyzer gathering callers/callees/tests/ADRs. Query avoids 'impact'; this script is the single tool for blast-radius lookup."
+    "expectedFiles": [
+      "scripts/brain-impact.mjs"
+    ],
+    "note": "Hard: 'what breaks if I rename this identifier' vs the symbol impact analyzer gathering callers/callees/tests/ADRs. Query avoids 'impact'; this script is the single tool for blast-radius lookup.",
+    "class": "cross-file/structural"
   },
   {
     "query": "emitting a picture of how files modules and symbols connect for other tooling",
-    "expectedFiles": ["scripts/brain-graph.mjs"],
-    "note": "Hard: 'a picture of how files/modules/symbols connect' vs brain-graph exporting JSON/Mermaid of the indexed edges. Query avoids 'graph'; this script owns the export."
+    "expectedFiles": [
+      "scripts/brain-graph.mjs"
+    ],
+    "note": "Hard: 'a picture of how files/modules/symbols connect' vs brain-graph exporting JSON/Mermaid of the indexed edges. Query avoids 'graph'; this script owns the export.",
+    "class": "cross-file/structural"
   },
   {
     "query": "pulling symbols out of Python and Go where the TypeScript compiler can't help",
-    "expectedFiles": ["scripts/lang-symbols.mjs"],
-    "note": "Hard: 'symbols from Python and Go without the TS compiler' vs the language-agnostic lite extractor covering the languages chunk.mjs's TS path doesn't. Query avoids 'lang-symbols'; this is the only polyglot extractor."
+    "expectedFiles": [
+      "scripts/lang-symbols.mjs"
+    ],
+    "note": "Hard: 'symbols from Python and Go without the TS compiler' vs the language-agnostic lite extractor covering the languages chunk.mjs's TS path doesn't. Query avoids 'lang-symbols'; this is the only polyglot extractor.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "moving long-finished items out of the working notes into a dated archive",
-    "expectedFiles": ["scripts/brain-prune.mjs"],
-    "note": "Hard: 'moving long-finished items into a dated archive' vs prune relocating >=30d-complete bullets from active_state.md into history/YYYY-MM.md. Query avoids 'prune'; this script uniquely owns durable-memory trimming."
+    "expectedFiles": [
+      "scripts/brain-prune.mjs"
+    ],
+    "note": "Hard: 'moving long-finished items into a dated archive' vs prune relocating >=30d-complete bullets from active_state.md into history/YYYY-MM.md. Query avoids 'prune'; this script uniquely owns durable-memory trimming.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "flagging index entries that point at files no longer on disk",
-    "expectedFiles": ["scripts/brain-health.mjs"],
-    "note": "Hard: 'index entries pointing at files no longer on disk' vs the health report's ghost-path detection and store/mirror drift checks. Query avoids 'health'; this read-only report is the single home of those checks."
+    "expectedFiles": [
+      "scripts/brain-health.mjs"
+    ],
+    "note": "Hard: 'index entries pointing at files no longer on disk' vs the health report's ghost-path detection and store/mirror drift checks. Query avoids 'health'; this read-only report is the single home of those checks.",
+    "class": "vocabulary-mismatch"
   },
-
   {
     "query": "one command that figures out the question type and runs the right lookup so an agent need not chain steps",
-    "expectedFiles": ["scripts/brain-ask.mjs"],
-    "note": "Hard: 'figures out question type and runs the right lookup in one shot' vs brain-ask's top-level router classifying architectural-vs-symbol-vs-freeform and picking search/pack. Query avoids 'ask/router'; this is the single one-shot entry point."
+    "expectedFiles": [
+      "scripts/brain-ask.mjs"
+    ],
+    "note": "Hard: 'figures out question type and runs the right lookup in one shot' vs brain-ask's top-level router classifying architectural-vs-symbol-vs-freeform and picking search/pack. Query avoids 'ask/router'; this is the single one-shot entry point.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "tapping me on the shoulder with what I should know before I touch a set of files",
-    "expectedFiles": ["scripts/brain-brief.mjs"],
-    "note": "Hard: 'taps you on the shoulder before you touch files' vs brain-brief's proactive read-only pre-touch advisories (leases/ADRs/edges/sessions). Query avoids 'brief'; this push-not-pull advisory is the only file that does it."
+    "expectedFiles": [
+      "scripts/brain-brief.mjs"
+    ],
+    "note": "Hard: 'taps you on the shoulder before you touch files' vs brain-brief's proactive read-only pre-touch advisories (leases/ADRs/edges/sessions). Query avoids 'brief'; this push-not-pull advisory is the only file that does it.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "scaffolding a numbered decision record from just a title with the frontmatter prefilled",
-    "expectedFiles": ["scripts/brain-adr.mjs"],
-    "note": "Hard: 'scaffolding a numbered decision record from a title' vs the ADR generator computing the next NNNN and filling module/feature/status frontmatter. Query avoids 'adr/decision file'; this is the only scaffolder."
+    "expectedFiles": [
+      "scripts/brain-adr.mjs"
+    ],
+    "note": "Hard: 'scaffolding a numbered decision record from a title' vs the ADR generator computing the next NNNN and filling module/feature/status frontmatter. Query avoids 'adr/decision file'; this is the only scaffolder.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "saving a bounded resume note for the current thread when context is about to be trimmed",
-    "expectedFiles": ["scripts/brain-compact.mjs"],
-    "note": "Hard: 'bounded resume note when context is about to be trimmed' vs auto-compact writing a tight resume slice tagged with task/actor for the next session. Query avoids 'compact'; this is the dedicated auto-compaction writer."
+    "expectedFiles": [
+      "scripts/brain-compact.mjs"
+    ],
+    "note": "Hard: 'bounded resume note when context is about to be trimmed' vs auto-compact writing a tight resume slice tagged with task/actor for the next session. Query avoids 'compact'; this is the dedicated auto-compaction writer.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "keeping a reusable cited answer so we stop re-deriving the same explanation every session",
-    "expectedFiles": ["scripts/brain-explain.mjs"],
-    "note": "Hard: 'reusable cited answer so we stop re-deriving it' vs brain-explain's durable reasoning cache with source hashes and staleness. Query avoids 'explain/explainer'; this is the only durable-answer cache."
+    "expectedFiles": [
+      "scripts/brain-explain.mjs"
+    ],
+    "note": "Hard: 'reusable cited answer so we stop re-deriving it' vs brain-explain's durable reasoning cache with source hashes and staleness. Query avoids 'explain/explainer'; this is the only durable-answer cache.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "kicking off one piece of work across several repos with a worktree and a tracked stream per repo",
-    "expectedFiles": ["scripts/brain-feature.mjs"],
-    "note": "Hard: 'one piece of work across several repos, a worktree and tracked stream per repo' vs brain-feature's cross-repo coordination (spec + per-project worktree + workstream). Query avoids 'feature'; this is the only multi-repo coordinator."
+    "expectedFiles": [
+      "scripts/brain-feature.mjs"
+    ],
+    "note": "Hard: 'one piece of work across several repos, a worktree and tracked stream per repo' vs brain-feature's cross-repo coordination (spec + per-project worktree + workstream). Query avoids 'feature'; this is the only multi-repo coordinator.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "a self-contained brief a colleague can read while I'm on leave even if they don't use the tool",
-    "expectedFiles": ["scripts/brain-handoff.mjs"],
-    "note": "Hard: 'self-contained brief for a colleague while I'm on leave' vs brain-handoff generating HANDOFF.md from state/git/decisions/PRs. Query avoids 'handoff'; this absence-brief generator uniquely owns it."
+    "expectedFiles": [
+      "scripts/brain-handoff.mjs"
+    ],
+    "note": "Hard: 'self-contained brief for a colleague while I'm on leave' vs brain-handoff generating HANDOFF.md from state/git/decisions/PRs. Query avoids 'handoff'; this absence-brief generator uniquely owns it.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "reserving a glob for one worker so others see it before editing the same path",
-    "expectedFiles": ["scripts/brain-lease.mjs"],
-    "note": "Hard: 'reserving a glob for one worker so others see it' vs the lease CLI managing the File Leases table via the state lock. Query avoids 'lease'; this CLI is the single owner of that reservation surface."
+    "expectedFiles": [
+      "scripts/brain-lease.mjs"
+    ],
+    "note": "Hard: 'reserving a glob for one worker so others see it' vs the lease CLI managing the File Leases table via the state lock. Query avoids 'lease'; this CLI is the single owner of that reservation surface.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "catching when a path mentioned inside the curated notes no longer exists in the tree",
-    "expectedFiles": ["scripts/brain-link-check.mjs"],
-    "note": "Hard: 'a path mentioned in the notes no longer exists' vs link-check verifying code-path references inside .project-brain/**.md against disk. Query avoids 'link-check'; distinct from symbol drift (brain-verify), this owns path rot."
+    "expectedFiles": [
+      "scripts/brain-link-check.mjs"
+    ],
+    "note": "Hard: 'a path mentioned in the notes no longer exists' vs link-check verifying code-path references inside .project-brain/**.md against disk. Query avoids 'link-check'; distinct from symbol drift (brain-verify), this owns path rot.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "blocking an edit that matches a forbidden regex pattern scoped to certain globs",
-    "expectedFiles": ["scripts/brain-lint-conventions.mjs"],
-    "note": "Hard: 'blocking an edit matching a forbidden regex scoped to globs' vs the convention enforcer reading rules from conventions.json as a PreToolUse hook. Query avoids 'convention/lint'; this is the only rule-pattern gate."
+    "expectedFiles": [
+      "scripts/brain-lint-conventions.mjs"
+    ],
+    "note": "Hard: 'blocking an edit matching a forbidden regex scoped to globs' vs the convention enforcer reading rules from conventions.json as a PreToolUse hook. Query avoids 'convention/lint'; this is the only rule-pattern gate.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the recommended single entry point that freshens the index then runs a health check",
-    "expectedFiles": ["scripts/brain-maintain.mjs"],
-    "note": "Hard: 'single entry point that freshens index then health-checks' vs brain-maintain wrapping sync + health + optional eval. Query avoids 'maintain'; this orchestration wrapper is the recommended automation entry point."
+    "expectedFiles": [
+      "scripts/brain-maintain.mjs"
+    ],
+    "note": "Hard: 'single entry point that freshens index then health-checks' vs brain-maintain wrapping sync + health + optional eval. Query avoids 'maintain'; this orchestration wrapper is the recommended automation entry point.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "assembling a structured change description from the branch's commits and its tracked stream",
-    "expectedFiles": ["scripts/brain-pr.mjs"],
-    "note": "Hard: 'structured change description from branch commits and tracked stream' vs brain-pr synthesizing a PR body from commits + active_state row + issue. Query avoids 'pr'; this assembler uniquely owns the body."
+    "expectedFiles": [
+      "scripts/brain-pr.mjs"
+    ],
+    "note": "Hard: 'structured change description from branch commits and tracked stream' vs brain-pr synthesizing a PR body from commits + active_state row + issue. Query avoids 'pr'; this assembler uniquely owns the body.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "listing the discovered sibling repos with how many runtime links point in and out of each",
-    "expectedFiles": ["scripts/brain-projects.mjs"],
-    "note": "Hard: 'listing sibling repos with link counts in and out' vs brain-projects printing discovered fleet projects with their kinds and in/out edge counts. Query avoids 'projects'; this read-only lister is the single home."
+    "expectedFiles": [
+      "scripts/brain-projects.mjs"
+    ],
+    "note": "Hard: 'listing sibling repos with link counts in and out' vs brain-projects printing discovered fleet projects with their kinds and in/out edge counts. Query avoids 'projects'; this read-only lister is the single home.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "wiping the local vector store and queuing a clean rebuild when the table schema gets wedged",
-    "expectedFiles": ["scripts/brain-repair.mjs"],
-    "note": "Hard: 'wiping the local vector store and queuing a clean rebuild when schema wedges' vs brain-repair nuking vector-db/mirror/manifest after Lance schema errors. Query avoids 'repair'; this is the only reset-and-rebuild tool."
+    "expectedFiles": [
+      "scripts/brain-repair.mjs"
+    ],
+    "note": "Hard: 'wiping the local vector store and queuing a clean rebuild when schema wedges' vs brain-repair nuking vector-db/mirror/manifest after Lance schema errors. Query avoids 'repair'; this is the only reset-and-rebuild tool.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "computing which files actually changed since last time so only those get re-embedded",
-    "expectedFiles": ["scripts/brain-sync.mjs"],
-    "note": "Hard: 'which files changed since last time so only those re-embed' vs brain-sync diffing content hashes against the manifest and passing changed/deleted to the indexer. Query avoids 'sync'; this incremental driver owns it."
+    "expectedFiles": [
+      "scripts/brain-sync.mjs"
+    ],
+    "note": "Hard: 'which files changed since last time so only those re-embed' vs brain-sync diffing content hashes against the manifest and passing changed/deleted to the indexer. Query avoids 'sync'; this incremental driver owns it.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "carving a big job into worker-sized chunks one agent can finish in a single sitting",
-    "expectedFiles": ["scripts/brain-ticket.mjs"],
-    "note": "Hard: 'carving a big job into worker-sized chunks for one sitting' vs brain-ticket splitting a task into N work packages sized by file count/domain breadth. Query avoids 'ticket'; this splitter uniquely owns work-package sizing."
+    "expectedFiles": [
+      "scripts/brain-ticket.mjs"
+    ],
+    "note": "Hard: 'carving a big job into worker-sized chunks for one sitting' vs brain-ticket splitting a task into N work packages sized by file count/domain breadth. Query avoids 'ticket'; this splitter uniquely owns work-package sizing.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "warning when a curated note names a function that the code no longer defines",
-    "expectedFiles": ["scripts/brain-verify.mjs"],
-    "note": "Hard: 'a note names a function the code no longer defines' vs brain-verify's symbol-drift signal over indexed records. Distinct from link-check (paths); this drift detector owns symbol staleness against code."
+    "expectedFiles": [
+      "scripts/brain-verify.mjs"
+    ],
+    "note": "Hard: 'a note names a function the code no longer defines' vs brain-verify's symbol-drift signal over indexed records. Distinct from link-check (paths); this drift detector owns symbol staleness against code.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "opening and closing an agent's work on a single issue while recording it for others to see",
-    "expectedFiles": ["scripts/brain-work.mjs"],
-    "note": "Hard: 'opening/closing an agent's work on one issue, recorded for others' vs brain-work's single-workstream start/end writing the active_state row. Query avoids 'work/workstream'; this lifecycle CLI is the single owner."
+    "expectedFiles": [
+      "scripts/brain-work.mjs"
+    ],
+    "note": "Hard: 'opening/closing an agent's work on one issue, recorded for others' vs brain-work's single-workstream start/end writing the active_state row. Query avoids 'work/workstream'; this lifecycle CLI is the single owner.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the shared helpers other scripts import for atomic writes hashing and locating the brain folder",
-    "expectedFiles": ["scripts/common.mjs"],
-    "note": "Hard: 'shared helpers for atomic writes, hashing, locating the brain folder' vs common.mjs exporting ROOT/BRAIN_DIR/atomicWrite/sha256/ensureDir. Query avoids 'common'; this utilities module is the single source of those primitives."
+    "expectedFiles": [
+      "scripts/common.mjs"
+    ],
+    "note": "Hard: 'shared helpers for atomic writes, hashing, locating the brain folder' vs common.mjs exporting ROOT/BRAIN_DIR/atomicWrite/sha256/ensureDir. Query avoids 'common'; this utilities module is the single source of those primitives.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the one parser that keeps the cross-repo spec format honest for both its writer and its readers",
-    "expectedFiles": ["scripts/feature-spec.mjs"],
-    "note": "Hard: 'one parser keeping the cross-repo spec format honest for writers and readers' vs feature-spec.mjs centralizing the feature frontmatter schema shared by brain:feature and brain:pr. Query avoids 'feature-spec'; this is the single schema owner."
+    "expectedFiles": [
+      "scripts/feature-spec.mjs"
+    ],
+    "note": "Hard: 'one parser keeping the cross-repo spec format honest for writers and readers' vs feature-spec.mjs centralizing the feature frontmatter schema shared by brain:feature and brain:pr. Query avoids 'feature-spec'; this is the single schema owner.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "merging our editor automation entries into whatever config the other tool already has",
-    "expectedFiles": ["scripts/install-cursor-hooks.mjs"],
-    "note": "Hard: 'merging our editor automation entries into the tool's existing config' vs install-cursor-hooks merging brain hooks into .cursor/hooks.json. Query avoids 'cursor/hooks'; this installer uniquely owns that merge."
+    "expectedFiles": [
+      "scripts/install-cursor-hooks.mjs"
+    ],
+    "note": "Hard: 'merging our editor automation entries into the tool's existing config' vs install-cursor-hooks merging brain hooks into .cursor/hooks.json. Query avoids 'cursor/hooks'; this installer uniquely owns that merge.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the helper that pulls task and actor flags off the args and names the dated note file",
-    "expectedFiles": ["scripts/session-util.mjs"],
-    "note": "Hard: 'pulls task/actor flags off args and names the dated note file' vs session-util's parseSessionFlags + timestamped session path helpers. Query avoids 'session-util'; this shared helper is the single home of that logic."
+    "expectedFiles": [
+      "scripts/session-util.mjs"
+    ],
+    "note": "Hard: 'pulls task/actor flags off args and names the dated note file' vs session-util's parseSessionFlags + timestamped session path helpers. Query avoids 'session-util'; this shared helper is the single home of that logic.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the bootstrap step that writes our run commands and ignore entries into the host project file",
-    "expectedFiles": ["scripts/setup-package.mjs"],
-    "note": "Hard: 'writes our run commands and ignore entries into the host project file' vs setup-package merging scripts/deps into package.json and appending .gitignore entries. Query avoids 'setup-package'; this bootstrap step uniquely owns it."
+    "expectedFiles": [
+      "scripts/setup-package.mjs"
+    ],
+    "note": "Hard: 'writes our run commands and ignore entries into the host project file' vs setup-package merging scripts/deps into package.json and appending .gitignore entries. Query avoids 'setup-package'; this bootstrap step uniquely owns it.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "loading the optional compiler so we can resolve real references when the package is present",
-    "expectedFiles": ["scripts/ts-graph.mjs"],
-    "note": "Hard: 'loading the optional compiler to resolve real references when present' vs ts-graph dynamically importing typescript for a compiler-backed graph, degrading when absent. Query avoids 'ts-graph/typescript'; this is the single compiler bridge."
+    "expectedFiles": [
+      "scripts/ts-graph.mjs"
+    ],
+    "note": "Hard: 'loading the optional compiler to resolve real references when present' vs ts-graph dynamically importing typescript for a compiler-backed graph, degrading when absent. Query avoids 'ts-graph/typescript'; this is the single compiler bridge.",
+    "class": "cross-file/structural"
   },
   {
     "query": "deciding a folder counts as its own service by spotting stack marker files one level down",
-    "expectedFiles": ["scripts/projects.mjs"],
-    "note": "Hard: 'a folder counts as its own service by stack marker files one level down' vs projects.mjs classifying subdirs by package.json/go.mod/Chart.yaml markers. Query avoids 'fleet/discover'; this discovery module owns the marker classification."
+    "expectedFiles": [
+      "scripts/projects.mjs"
+    ],
+    "note": "Hard: 'a folder counts as its own service by stack marker files one level down' vs projects.mjs classifying subdirs by package.json/go.mod/Chart.yaml markers. Query avoids 'fleet/discover'; this discovery module owns the marker classification.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "linking an operator that sets a pod variable to the separate image that reads it at runtime",
-    "expectedFiles": ["scripts/edges/k8s-env-injection.mjs"],
-    "note": "Hard: 'operator that sets a pod variable to the image that reads it' vs k8s-env-injection's directed injector→reader edges on a shared env key. Distinct from env-var (undirected); this detector owns the operator→pod direction."
+    "expectedFiles": [
+      "scripts/edges/k8s-env-injection.mjs"
+    ],
+    "note": "Hard: 'operator that sets a pod variable to the image that reads it' vs k8s-env-injection's directed injector→reader edges on a shared env key. Distinct from env-var (undirected); this detector owns the operator→pod direction.",
+    "class": "cross-file/structural"
   },
   {
     "query": "the diagram and prose explaining how one reusable package backs many separate memories",
-    "expectedFiles": ["docs/brain-architecture.md"],
-    "note": "Hard: 'how one reusable package backs many separate memories' vs the architecture doc's global-skill-vs-per-project-brain overview with its mermaid diagram. Query avoids 'architecture'; this doc uniquely owns the system picture."
+    "expectedFiles": [
+      "docs/brain-architecture.md"
+    ],
+    "note": "Hard: 'how one reusable package backs many separate memories' vs the architecture doc's global-skill-vs-per-project-brain overview with its mermaid diagram. Query avoids 'architecture'; this doc uniquely owns the system picture.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "why a full tree-sitter multi-language parsing pipeline is deliberately not on the near-term plan",
-    "expectedFiles": ["docs/roadmap-symbol-index.md"],
-    "note": "Hard: 'why full tree-sitter multi-language parsing is deliberately not planned' vs the roadmap doc explaining the deferred Phase-2 AST work. Query avoids 'roadmap/symbol-index'; this is the only place that rationale lives."
+    "expectedFiles": [
+      "docs/roadmap-symbol-index.md"
+    ],
+    "note": "Hard: 'why full tree-sitter multi-language parsing is deliberately not planned' vs the roadmap doc explaining the deferred Phase-2 AST work. Query avoids 'roadmap/symbol-index'; this is the only place that rationale lives.",
+    "class": "why-style"
   },
   {
     "query": "a walkthrough for one developer running this across many repos colleagues don't share discipline on",
-    "expectedFiles": ["docs/solo-multi-repo-setup.md"],
-    "note": "Hard: 'one developer running across many repos with undisciplined colleagues' vs the solo multi-repo guide for a single brain user over sibling repos. Query avoids 'solo/setup'; this practical guide uniquely owns that scenario."
+    "expectedFiles": [
+      "docs/solo-multi-repo-setup.md"
+    ],
+    "note": "Hard: 'one developer running across many repos with undisciplined colleagues' vs the solo multi-repo guide for a single brain user over sibling repos. Query avoids 'solo/setup'; this practical guide uniquely owns that scenario.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the phased plan to move retrieval off a flat JSON full-scan onto a faster store",
-    "expectedFiles": ["docs/vector-db-upgrade-plan.md"],
-    "note": "Hard: 'phased plan to move off a flat JSON full-scan onto a faster store' vs the upgrade-plan doc's storage-abstraction-and-incremental-indexing phases. Query avoids 'vector-db/upgrade'; this roadmap doc owns the migration plan."
+    "expectedFiles": [
+      "docs/vector-db-upgrade-plan.md"
+    ],
+    "note": "Hard: 'phased plan to move off a flat JSON full-scan onto a faster store' vs the upgrade-plan doc's storage-abstraction-and-incremental-indexing phases. Query avoids 'vector-db/upgrade'; this roadmap doc owns the migration plan.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the house rules for branch names commit prefixes and requiring a test per change for this package",
-    "expectedFiles": ["CONTRIBUTING.md"],
-    "note": "Hard: 'house rules for branch names, commit prefixes, a test per change' vs CONTRIBUTING's branch/PR conventions and add-a-script template. Query avoids 'contributing'; this is the single contributor-rules doc for the package."
+    "expectedFiles": [
+      "CONTRIBUTING.md"
+    ],
+    "note": "Hard: 'house rules for branch names, commit prefixes, a test per change' vs CONTRIBUTING's branch/PR conventions and add-a-script template. Query avoids 'contributing'; this is the single contributor-rules doc for the package.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the agent-agnostic recipe for trimming context that works in Codex Gemini or any terminal assistant",
-    "expectedFiles": ["templates/agents/COMPACT_INSTRUCTIONS.md"],
-    "note": "Hard: 'agent-agnostic recipe for trimming context across Codex/Gemini/any terminal' vs the compact-instructions template. Distinct from scripts/brain-compact.mjs (the code); this doc is the cross-tool usage recipe."
+    "expectedFiles": [
+      "templates/agents/COMPACT_INSTRUCTIONS.md"
+    ],
+    "note": "Hard: 'agent-agnostic recipe for trimming context across Codex/Gemini/any terminal' vs the compact-instructions template. Distinct from scripts/brain-compact.mjs (the code); this doc is the cross-tool usage recipe.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the continuous-integration job definition that runs strict guard checks on every pull request",
-    "expectedFiles": ["templates/github-workflows/project-brain.yml"],
-    "note": "Hard: 'CI job definition running strict guard checks on every PR' vs the GitHub Actions workflow template. Query avoids 'workflow/yml'; this is the only CI pipeline definition shipped."
+    "expectedFiles": [
+      "templates/github-workflows/project-brain.yml"
+    ],
+    "note": "Hard: 'CI job definition running strict guard checks on every PR' vs the GitHub Actions workflow template. Query avoids 'workflow/yml'; this is the only CI pipeline definition shipped.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the script that runs before a commit lands to bar bad branches and kick off a background refresh",
-    "expectedFiles": ["templates/hooks/pre-commit"],
-    "note": "Hard: 'runs before a commit lands to bar bad branches and kick a background refresh' vs the pre-commit hook calling brain:guard then a deferred sync. Query avoids 'pre-commit'; this hook uniquely owns the pre-commit moment."
+    "expectedFiles": [
+      "templates/hooks/pre-commit"
+    ],
+    "note": "Hard: 'runs before a commit lands to bar bad branches and kick a background refresh' vs the pre-commit hook calling brain:guard then a deferred sync. Query avoids 'pre-commit'; this hook uniquely owns the pre-commit moment.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the hook that refreshes the brain right after pulling other people's merged changes",
-    "expectedFiles": ["templates/hooks/post-merge"],
-    "note": "Hard: 'refreshes the brain right after pulling merged changes' vs the post-merge hook running update-skill + maintain. Query avoids 'post-merge'; this hook owns the just-pulled moment (distinct from the pre-commit hook)."
+    "expectedFiles": [
+      "templates/hooks/post-merge"
+    ],
+    "note": "Hard: 'refreshes the brain right after pulling merged changes' vs the post-merge hook running update-skill + maintain. Query avoids 'post-merge'; this hook owns the just-pulled moment (distinct from the pre-commit hook).",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the fill-in skeleton a contributor edits to describe what a change does and which issue it closes",
-    "expectedFiles": ["templates/PULL_REQUEST_TEMPLATE.md"],
-    "note": "Hard: 'fill-in skeleton describing a change and the issue it closes' vs the PR template with Summary/Linked Issue/Target Branch sections. Query avoids 'pull request template'; this boilerplate is the single owner."
+    "expectedFiles": [
+      "templates/PULL_REQUEST_TEMPLATE.md"
+    ],
+    "note": "Hard: 'fill-in skeleton describing a change and the issue it closes' vs the PR template with Summary/Linked Issue/Target Branch sections. Query avoids 'pull request template'; this boilerplate is the single owner.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "a hand-kept table of major surfaces and what each depends on so agents orient without crawling everything",
-    "expectedFiles": ["templates/brain/MODULE_MAP.md"],
-    "note": "Hard: 'hand-kept table of major surfaces and their deps so agents orient' vs the MODULE_MAP template (explicitly not generated). Query avoids 'module map'; this hand-maintained orientation table is the single owner."
+    "expectedFiles": [
+      "templates/brain/MODULE_MAP.md"
+    ],
+    "note": "Hard: 'hand-kept table of major surfaces and their deps so agents orient' vs the MODULE_MAP template (explicitly not generated). Query avoids 'module map'; this hand-maintained orientation table is the single owner.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "an editor rule telling the assistant to save a resume slice before losing thread history",
-    "expectedFiles": ["templates/cursor/rules/project-brain-compact.mdc"],
-    "note": "Hard: 'editor rule telling the assistant to save a resume slice before losing history' vs the cursor compact rule (.mdc). Distinct from the agent-agnostic doc and the code; this is the Cursor-specific rule file."
+    "expectedFiles": [
+      "templates/cursor/rules/project-brain-compact.mdc"
+    ],
+    "note": "Hard: 'editor rule telling the assistant to save a resume slice before losing history' vs the cursor compact rule (.mdc). Distinct from the agent-agnostic doc and the code; this is the Cursor-specific rule file.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the suggested config that prints active state at session start and wires the trim hook",
-    "expectedFiles": ["templates/claude-code/settings.recommended.json"],
-    "note": "Hard: 'suggested config printing active state at session start and wiring the trim hook' vs the recommended Claude Code settings JSON with SessionStart/PreCompact hooks. Query avoids 'settings'; this is the single recommended-config file."
+    "expectedFiles": [
+      "templates/claude-code/settings.recommended.json"
+    ],
+    "note": "Hard: 'suggested config printing active state at session start and wiring the trim hook' vs the recommended Claude Code settings JSON with SessionStart/PreCompact hooks. Query avoids 'settings'; this is the single recommended-config file.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the one-time bootstrap that wires the package installs deps and builds the first index",
-    "expectedFiles": ["bin/setup.sh"],
-    "note": "Hard: 'one-time bootstrap that wires the package, installs deps, builds the first index' vs setup.sh running setup-package + npm install + brain:init + index. Query avoids 'setup'; this is the single bootstrap entry script."
+    "expectedFiles": [
+      "bin/setup.sh"
+    ],
+    "note": "Hard: 'one-time bootstrap that wires the package, installs deps, builds the first index' vs setup.sh running setup-package + npm install + brain:init + index. Query avoids 'setup'; this is the single bootstrap entry script.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the script that copies the git hook templates into the repository's hooks directory",
-    "expectedFiles": ["bin/install-hooks.sh"],
-    "note": "Hard: 'copies the git hook templates into the hooks directory' vs install-hooks.sh iterating templates/hooks and installing them. Distinct from setup.sh (full bootstrap) and the hook files themselves; this installer owns the copy step."
+    "expectedFiles": [
+      "bin/install-hooks.sh"
+    ],
+    "note": "Hard: 'copies the git hook templates into the hooks directory' vs install-hooks.sh iterating templates/hooks and installing them. Distinct from setup.sh (full bootstrap) and the hook files themselves; this installer owns the copy step.",
+    "class": "vocabulary-mismatch"
   },
   {
     "query": "the script that refreshes the linked skill checkout to the newest shared package code",
-    "expectedFiles": ["bin/update.sh"],
-    "note": "Hard: 'refreshes the linked skill checkout to the newest shared package code' vs update.sh resolving the skill path and updating the checkout. Query avoids 'update'; this updater is the single owner of skill refresh."
+    "expectedFiles": [
+      "bin/update.sh"
+    ],
+    "note": "Hard: 'refreshes the linked skill checkout to the newest shared package code' vs update.sh resolving the skill path and updating the checkout. Query avoids 'update'; this updater is the single owner of skill refresh.",
+    "class": "vocabulary-mismatch"
+  },
+  {
+    "query": "why route keyword matches into the candidate pool when dense retrieval already picked the neighbours",
+    "expectedFiles": [
+      ".project-brain/decisions/0014-lexical-candidate-union.md"
+    ],
+    "note": "Hard: why-question; the union rationale (deep-half targets are invisible to dense at any pool width, so BM25 must route them in) lives only in this ADR.",
+    "class": "why-style"
+  },
+  {
+    "query": "why add a second judging pass over the top results when the blended score already ordered them",
+    "expectedFiles": [
+      ".project-brain/decisions/0015-cross-encoder-rerank.md"
+    ],
+    "note": "Hard: why-question; the reason the hybrid score CANNOT fix class-2 misorderings (pool-relative BM25 + clamped metadata + compressed dense range) is argued only in this ADR.",
+    "class": "why-style"
+  },
+  {
+    "query": "why cherry-pick ideas from the community skills instead of just installing all of them",
+    "expectedFiles": [
+      ".project-brain/decisions/0016-ecosystem-skill-axis-map.md"
+    ],
+    "note": "Hard: why-question; the adopt-vs-duplicate reasoning (installing all four would duplicate existing capability + add heavy deps) is unique to this ADR.",
+    "class": "why-style"
+  },
+  {
+    "query": "why write our own audit-and-plan command rather than adopting the shadcn improve workflow wholesale",
+    "expectedFiles": [
+      ".project-brain/decisions/0017-build-native-improve-act-axis.md"
+    ],
+    "note": "Hard: why-question; the \"we already own the execution back-end, only the 9-category taxonomy is non-duplicative\" argument lives only here.",
+    "class": "why-style"
+  },
+  {
+    "query": "why the self-driving improvement loop still needs the model in the loop and cannot be pure command-line",
+    "expectedFiles": [
+      ".project-brain/decisions/0018-autonomous-act-axis-loop.md"
+    ],
+    "note": "Hard: why-question; \"the LLM cannot leave the loop — judging what is worth fixing and approving a diff need judgment a CLI can't supply\" is reasoned only in this ADR.",
+    "class": "why-style"
+  },
+  {
+    "query": "why turn the improve-execute step into a real spawner instead of leaving it as printed guidance",
+    "expectedFiles": [
+      ".project-brain/decisions/0020-real-execute-review-loop-closure.md"
+    ],
+    "note": "Hard: why-question; the loop-closure rationale (reuse the existing coordinator/verifier, inherit the worktree+human-merge boundary) is argued only here.",
+    "class": "why-style"
+  },
+  {
+    "query": "why challenge an idea adversarially before any code gets written for it",
+    "expectedFiles": [
+      ".project-brain/decisions/0021-grill-adversarial-axis.md"
+    ],
+    "note": "Hard: why-question; the \"flush out issues while they are still cheap, before implementation\" rationale (Pocock grill-me) is unique to this ADR.",
+    "class": "why-style"
+  },
+  {
+    "query": "why let the tool pick its own next action instead of the agent reading a policy table",
+    "expectedFiles": [
+      ".project-brain/decisions/0022-route-autonomous-dispatch-axis.md"
+    ],
+    "note": "Hard: why-question; the \"harness > model — make the brain decide which command to run next rather than prose the agent must remember\" argument lives only here.",
+    "class": "why-style"
+  },
+  {
+    "query": "why hook self-routing into the editor rules rather than waiting to be invoked",
+    "expectedFiles": [
+      ".project-brain/decisions/0023-ambient-routing-activation.md"
+    ],
+    "note": "Hard: why-question; the pull-vs-ambient reasoning (\"it is a HARNESS problem, not another brain script\") is unique to this ADR.",
+    "class": "why-style"
+  },
+  {
+    "query": "why start measuring and capping the tokens the assistant injects into every session",
+    "expectedFiles": [
+      ".project-brain/decisions/0024-context-footprint-discipline.md"
+    ],
+    "note": "Hard: why-question; the \"unbounded injection is a silent regression that eats the context window\" rationale is argued only in this ADR.",
+    "class": "why-style"
+  },
+  {
+    "query": "rendering the indexed code graph as a shareable picture without re-parsing anything",
+    "expectedFiles": [
+      "scripts/brain-diagram.mjs"
+    ],
+    "note": "Hard: structural; the graph-projection exporter (Mermaid/drawio straight from the already-computed edges, zero re-parse) is this script. Query avoids \"diagram/graph/mermaid\".",
+    "class": "cross-file/structural"
+  },
+  {
+    "query": "sweeping a set of files to see what the brain already knows about each before editing them",
+    "expectedFiles": [
+      "scripts/brain-radar.mjs"
+    ],
+    "note": "Hard: file-centric pre-touch briefing over an explicit target set is brain:radar. Query avoids \"radar/brief\"; dense must earn it.",
+    "class": "vocabulary-mismatch"
+  },
+  {
+    "query": "turning the commit history into something that explains why the code looks the way it does",
+    "expectedFiles": [
+      "scripts/brain-why.mjs"
+    ],
+    "note": "Hard: git-archaeology that makes history queryable to answer \"why is this code like this\" is brain:why. Query avoids \"why/archaeology/git-log\" as tokens.",
+    "class": "vocabulary-mismatch"
+  },
+  {
+    "query": "storing a cross-source conclusion the brain formed rather than a raw indexed snippet",
+    "expectedFiles": [
+      "scripts/brain-insight.mjs"
+    ],
+    "note": "Hard: the durable synthesized-claim recorder spanning multiple sources is brain:insight. Query avoids \"insight/synthesis\"; file is the genuinely-best target.",
+    "class": "vocabulary-mismatch"
+  },
+  {
+    "query": "mechanically listing the blind spots and self-contradictions in the curated knowledge",
+    "expectedFiles": [
+      "scripts/brain-gaps.mjs"
+    ],
+    "note": "Hard: the deterministic coverage-hole / stale-decision / contradiction self-audit is brain:gaps. Query avoids \"gaps/audit\"; dense must earn it.",
+    "class": "vocabulary-mismatch"
+  },
+  {
+    "query": "estimating the token weight of what gets injected and warning when it exceeds a budget",
+    "expectedFiles": [
+      "scripts/footprint.mjs"
+    ],
+    "note": "Hard: the pure token-estimate + threshold logic for injected artifacts is footprint.mjs. Query avoids \"footprint/context\"; this module owns the estimator.",
+    "class": "vocabulary-mismatch"
+  },
+  {
+    "query": "judging which of the repos rough edges are actually worth fixing and writing an executable plan",
+    "expectedFiles": [
+      "scripts/brain-audit.mjs"
+    ],
+    "note": "Hard: the 9-category audit scaffold + finding writer (capable model judges what is worth doing) is brain:audit. Query avoids \"audit/finding\"; file is genuinely-best.",
+    "class": "vocabulary-mismatch"
+  },
+  {
+    "query": "re-judging the top candidates by reading the question and passage together instead of comparing vectors",
+    "expectedFiles": [
+      "scripts/rerank.mjs"
+    ],
+    "note": "Hard: the cross-encoder implementation that reads query+chunk together to fix rank 9-20 misorderings is rerank.mjs (distinct from the 0015 ADR rationale). Query avoids \"rerank/cross-encoder\".",
+    "class": "vocabulary-mismatch"
   }
 ]

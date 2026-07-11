@@ -10,6 +10,11 @@ if [ ! -d "skills/project-brain" ]; then
   exit 1
 fi
 
+# SKILL.md is lean; its detail lives in skills/project-brain/references/*.md (#26).
+# Those files ship inside the package checkout above — whatever brings SKILL.md
+# into skills/project-brain/ MUST bring references/ with it. brain:health (run at
+# the end of this script) verifies the reference bundle actually landed.
+
 node skills/project-brain/scripts/setup-package.mjs
 npm install
 npm run brain:init

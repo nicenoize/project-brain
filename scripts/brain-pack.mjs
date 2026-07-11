@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import { BRAIN_DIR, read, takeFlag, takeOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
-import { retrieve } from './retrieval.mjs';
+import { retrieve, staleResults, staleBanner } from './retrieval.mjs';
 import { openStore } from './store.mjs';
 
 const args = process.argv.slice(2);
@@ -104,7 +104,16 @@ export async function packPrompt(query, opts = {}) {
     used += tokens;
   }
   await store.close();
-  return { prompt: parts.join('\n\n'), sources, estimatedTokens: used };
+
+  // Query-time staleness (ADR 0025): flag packed source files that drifted from
+  // the index, over the ≤8 distinct top result files. Default-on; opt-out
+  // BRAIN_STALE_BANNER=0. Output-only, never affects what/how we packed. The
+  // banner rides at the very top of the prompt so a consuming agent (incl.
+  // brain:ask's spawned children) sees it before any packed context.
+  const stale = process.env.BRAIN_STALE_BANNER === '0' ? [] : staleResults(ranked);
+  const banner = staleBanner(ranked);
+  const prompt = banner ? `${banner}\n\n${parts.join('\n\n')}` : parts.join('\n\n');
+  return { prompt, sources, stale, estimatedTokens: used };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

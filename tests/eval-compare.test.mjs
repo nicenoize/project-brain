@@ -1,9 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pairCases, pairedBootstrap, mulberry32 } from '../scripts/eval-lib.mjs';
+import { pairCases, pairedBootstrap, mulberry32, caseClass, HARD_CLASSES, perClassDeltas } from '../scripts/eval-lib.mjs';
 
 function makeReport(cases) {
   return { results: cases.map(([query, hit, rr, hard]) => ({ query, hit, reciprocalRank: rr, hard: Boolean(hard) })) };
+}
+
+// [query, hit, rr, class] — hard is implied true for a classed report.
+function makeClassedReport(cases) {
+  return { results: cases.map(([query, hit, rr, cls]) => ({ query, hit, reciprocalRank: rr, hard: true, class: cls })) };
 }
 
 test('pairCases pairs by query and respects --hard-only', () => {
@@ -56,6 +61,61 @@ test('pairedBootstrap is deterministic for a given seed', () => {
 test('pairedBootstrap rejects mismatched or empty runs', () => {
   assert.throws(() => pairedBootstrap([], []), /equal-length non-empty/);
   assert.throws(() => pairedBootstrap([{ hit: 1, reciprocalRank: 1 }], []), /equal-length non-empty/);
+});
+
+test('caseClass returns the class only when it is a known HARD_CLASS', () => {
+  assert.equal(caseClass({ class: 'why-style' }), 'why-style');
+  assert.equal(caseClass({ class: 'vocabulary-mismatch' }), 'vocabulary-mismatch');
+  assert.equal(caseClass({ class: 'cross-file/structural' }), 'cross-file/structural');
+  assert.equal(caseClass({ class: 'bogus' }), 'unclassified');
+  assert.equal(caseClass({}), 'unclassified');
+  assert.equal(caseClass(null), 'unclassified');
+  assert.deepEqual(HARD_CLASSES, ['vocabulary-mismatch', 'why-style', 'cross-file/structural']);
+});
+
+test('perClassDeltas groups paired cases by class and computes per-class deltas', () => {
+  // baseline: vocab 1/2 hit, why 0/1 hit; variant: vocab 2/2, why 1/1.
+  const a = makeClassedReport([
+    ['v1', true, 1, 'vocabulary-mismatch'],
+    ['v2', false, 0, 'vocabulary-mismatch'],
+    ['w1', false, 0, 'why-style']
+  ]);
+  const b = makeClassedReport([
+    ['w1', true, 1, 'why-style'],
+    ['v1', true, 1, 'vocabulary-mismatch'],
+    ['v2', true, 0.5, 'vocabulary-mismatch']
+  ]);
+  const rows = perClassDeltas(a, b, { hardOnly: true });
+  // Deterministic order follows HARD_CLASSES: vocabulary-mismatch before why-style.
+  assert.deepEqual(rows.map(r => r.class), ['vocabulary-mismatch', 'why-style']);
+  const vocab = rows[0];
+  assert.equal(vocab.cases, 2);
+  assert.equal(vocab.baseline.hitAtK, 0.5);
+  assert.equal(vocab.variant.hitAtK, 1);
+  assert.equal(vocab.delta.hit, 0.5);
+  const why = rows[1];
+  assert.equal(why.cases, 1);
+  assert.equal(why.delta.hit, 1);
+  assert.equal(why.delta.mrr, 1);
+});
+
+test('perClassDeltas falls back to unclassified for reports without a class field', () => {
+  const a = makeReport([['q1', true, 1, true], ['q2', false, 0, true]]);
+  const b = makeReport([['q1', true, 1, true], ['q2', true, 1, true]]);
+  const rows = perClassDeltas(a, b, { hardOnly: true });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].class, 'unclassified');
+  assert.equal(rows[0].cases, 2);
+  assert.equal(rows[0].delta.hit, 0.5);
+});
+
+test('perClassDeltas only pairs cases present in both runs', () => {
+  const a = makeClassedReport([['v1', true, 1, 'vocabulary-mismatch'], ['v2', true, 1, 'vocabulary-mismatch']]);
+  const b = makeClassedReport([['v1', false, 0, 'vocabulary-mismatch']]);
+  const rows = perClassDeltas(a, b, { hardOnly: true });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].cases, 1); // v2 has no counterpart in B → dropped
+  assert.equal(rows[0].delta.hit, -1);
 });
 
 test('mulberry32 yields stable values in [0,1)', () => {
