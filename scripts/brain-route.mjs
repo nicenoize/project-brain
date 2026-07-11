@@ -513,9 +513,17 @@ function readHookState() {
   } catch { return null; }
 }
 
-/** Persist the last-emitted hook state (best-effort; errors are swallowed). */
+/**
+ * Persist the last-emitted prompt-hook state (best-effort; errors swallowed).
+ * MERGES into the existing file so it never clobbers the tool-hook's
+ * `toolNudges` namespace — the two ambient hooks share this one state file
+ * (decisions/0026, issue #17: one store, keyed by concern).
+ */
 function writeHookState(state) {
-  try { atomicWrite(HOOK_STATE_FILE, JSON.stringify(state)); } catch { /* soft — never block */ }
+  try {
+    const cur = (() => { try { return exists(HOOK_STATE_FILE) ? JSON.parse(read(HOOK_STATE_FILE)) : {}; } catch { return {}; } })();
+    atomicWrite(HOOK_STATE_FILE, JSON.stringify({ ...cur, ...state }));
+  } catch { /* soft — never block */ }
 }
 
 /**

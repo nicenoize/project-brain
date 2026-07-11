@@ -95,6 +95,46 @@ test('computeSettingsDrift: defensive against empty/undefined inputs', () => {
 // (exercises the real setup-claude-settings.mjs end-to-end in a temp cwd).
 // ---------------------------------------------------------------------------
 
+test('real template: tool-time nudge PreToolUse groups (Bash + Read|Glob) merge in with matchers', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-tool-wiring-'));
+  try {
+    // Copy the REAL recommended template to the path setup-claude-settings.mjs reads.
+    const realTpl = fileURLToPath(new URL('../templates/claude-code/settings.recommended.json', import.meta.url));
+    const tplDir = path.join(dir, 'skills', 'project-brain', 'templates', 'claude-code');
+    fs.mkdirSync(tplDir, { recursive: true });
+    fs.copyFileSync(realTpl, path.join(tplDir, 'settings.recommended.json'));
+
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }));
+
+    const r = spawnSync(process.execPath, [SETTINGS_SCRIPT], {
+      cwd: dir, encoding: 'utf8',
+      env: { ...process.env, PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA: '1', PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS: '1' }
+    });
+    assert.equal(r.status, 0, `settings sync failed: ${r.stderr}`);
+
+    const merged = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.json'), 'utf8'));
+    const pre = merged.hooks.PreToolUse;
+    const matchers = pre.map((g) => g.matcher);
+    assert.ok(matchers.includes('Bash'), 'Bash matcher missing');
+    assert.ok(matchers.includes('Read|Glob'), 'Read|Glob matcher missing');
+    const cmds = [...collectCommands(pre)];
+    assert.ok(cmds.some((c) => c.includes('brain-route-tool.mjs') && c.includes('--surface bash')), 'bash tool-hook not wired');
+    assert.ok(cmds.some((c) => c.includes('brain-route-tool.mjs') && c.includes('--surface read')), 'read tool-hook not wired');
+    assert.ok([...cmds].some((c) => c.includes('brain-lint-conventions.mjs')), 'existing convention-lint hook dropped');
+
+    // Idempotent: a second sync adds nothing more.
+    const before = fs.readFileSync(path.join(dir, '.claude', 'settings.json'), 'utf8');
+    spawnSync(process.execPath, [SETTINGS_SCRIPT], {
+      cwd: dir, encoding: 'utf8',
+      env: { ...process.env, PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA: '1', PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS: '1' }
+    });
+    assert.equal(fs.readFileSync(path.join(dir, '.claude', 'settings.json'), 'utf8'), before, 'second sync not idempotent');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('additive merge preserves user-added hooks/permissions while adding recommended', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-settings-'));
   try {
