@@ -45,10 +45,19 @@ function fakeBin(dir, name, payload, code = 0) {
 }
 
 function runGuard(cwd, env = {}) {
+  // These tests exercise the security scanners against their own throwaway repo,
+  // not GitFlow branch policy. Under GitHub Actions the PR context leaks in via
+  // GITHUB_BASE_REF (=main), which makes the guard emit an unrelated "feature/*
+  // targets main" error and fail the non-blocking scanner assertions. Strip that
+  // context so the harness is hermetic; a test wanting branch policy can still
+  // pass it explicitly through `env`.
+  const inherited = { ...process.env };
+  delete inherited.GITHUB_BASE_REF;
+  delete inherited.GITHUB_HEAD_REF;
   return spawnSync(process.execPath, [GUARD_SCRIPT], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, ...env }
+    env: { ...inherited, ...env }
   });
 }
 
