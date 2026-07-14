@@ -12,7 +12,7 @@
  */
 import fs from 'node:fs';
 import { peekOption } from './common.mjs';
-import { pairCases, pairedBootstrap, round, avg } from './eval-lib.mjs';
+import { pairCases, pairedBootstrap, perClassDeltas, round, avg } from './eval-lib.mjs';
 
 const args = process.argv.slice(2);
 const files = args.filter(arg => /\.json$/i.test(arg));
@@ -28,12 +28,17 @@ const [reportA, reportB] = files.map(loadReport);
 const { pairsA, pairsB, cases } = pairCases(reportA, reportB, { hardOnly });
 const stats = pairedBootstrap(pairsA, pairsB, { resamples, seed });
 
+// Per-class point-estimate deltas orient WHICH hard class moved (issue #33).
+// Only meaningful when the run carries the hard subset, so gate on --hard-only.
+const byClass = hardOnly ? perClassDeltas(reportA, reportB, { hardOnly }) : undefined;
+
 console.log(JSON.stringify({
   baseline: { file: files[0], hitAtK: round(avg(pairsA.map(p => p.hit))), mrr: round(avg(pairsA.map(p => p.reciprocalRank))) },
   variant: { file: files[1], hitAtK: round(avg(pairsB.map(p => p.hit))), mrr: round(avg(pairsB.map(p => p.reciprocalRank))) },
   hardOnly,
   cases,
   ...stats,
+  ...(byClass ? { byClass } : {}),
   verdict: stats.hit.significant || stats.mrr.significant
     ? 'SIGNIFICANT — 95% CI excludes 0'
     : 'not significant — difference is within noise at this sample size'

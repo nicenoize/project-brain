@@ -28,6 +28,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
+import './common.mjs' // usage ledger choke point (#32) — arms only when BRAIN_USAGE_LOG=1
 
 // Run from the host project root (npm scripts run in package.json's
 // directory). Avoids the "skills/project-brain/.." trap when the

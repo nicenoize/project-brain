@@ -9,7 +9,102 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ROOT, BRAIN_DIR, exists, read, JSON_INDEX, staleIndexFromRecords } from './common.mjs';
+import { fileURLToPath } from 'node:url';
+import { ROOT, BRAIN_DIR, exists, read, JSON_INDEX, USAGE_LOG, staleIndexFromRecords } from './common.mjs';
+import { parseUsageLog, summarizeUsage, commandUniverseFromPackageScripts } from './usage.mjs';
+import {
+  measureFile,
+  measureHook,
+  footprintWarnings,
+  FOOTPRINT_THRESHOLDS,
+  PACK_MAX_TOKENS_DEFAULT
+} from './footprint.mjs';
+import { computeSettingsDrift } from './setup-claude-settings.mjs';
+
+const HEALTH_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Context-footprint audit (decisions/0024): how many tokens the brain injects
+ * into every session. Measures the SKILL.md variant(s), active_state.md (cat'd
+ * raw on SessionStart), and the actual stdout of the route hooks (spawned).
+ */
+function contextFootprintReport() {
+  const skills = [
+    measureFile(path.join(ROOT, 'SKILL.md'), 'SKILL.md'),
+    measureFile(path.join(ROOT, 'skills/project-brain/SKILL.md'), 'skills/project-brain/SKILL.md')
+  ].filter((s) => s.exists);
+
+  const activeState = measureFile(path.join(BRAIN_DIR, 'active_state.md'), '.project-brain/active_state.md');
+
+  const routeScript = path.join(HEALTH_DIR, 'brain-route.mjs');
+  const hooks = fs.existsSync(routeScript)
+    ? ['sessionstart', 'userpromptsubmit'].map((ev) => measureHook(routeScript, ev, ROOT))
+    : [];
+
+  const packDefaults = {
+    BRAIN_PACK_MAX_TOKENS: Number(process.env.BRAIN_PACK_MAX_TOKENS) || PACK_MAX_TOKENS_DEFAULT
+  };
+
+  const fp = { skills, activeState, hooks, packDefaults, thresholds: FOOTPRINT_THRESHOLDS };
+  fp.warnings = footprintWarnings(fp, FOOTPRINT_THRESHOLDS);
+  return fp;
+}
+
+function readJsonSafe(abs) {
+  try {
+    return JSON.parse(fs.readFileSync(abs, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Settings-drift audit (issue #34): `bin/update.sh` refreshes the skill scripts
+ * but a consumer whose setup predates the ambient-routing wiring can end up with
+ * current scripts and a stale `.claude/settings.json` — ADR 0023's routing hooks
+ * installed as code but inert. Compare the host settings against the recommended
+ * template and report which recommended hooks / allow-list entries are missing.
+ * Non-fatal: a warning that nudges `npm run brain:update-skill` (additive merge,
+ * user hooks preserved), consistent with the context-footprint discipline
+ * (decisions/0024) this extends.
+ */
+function settingsDriftReport(root) {
+  const templateAbs = path.join(ROOT, root, 'templates', 'claude-code', 'settings.recommended.json');
+  const hostAbs = path.join(ROOT, '.claude', 'settings.json');
+  if (!fs.existsSync(templateAbs)) {
+    return { checked: false, hostExists: fs.existsSync(hostAbs), missingHooks: [], missingAllow: [], hookDrift: 0, allowDrift: 0, drift: false };
+  }
+  const recommended = readJsonSafe(templateAbs) ?? {};
+  const hostExists = fs.existsSync(hostAbs);
+  const installed = hostExists ? readJsonSafe(hostAbs) ?? {} : {};
+  const d = computeSettingsDrift(installed, recommended);
+  return { checked: true, hostExists, ...d };
+}
+
+/**
+ * Usage-ledger audit (issue #32): the QUANTITY/footprint instrument that sits
+ * next to the context-footprint (#21) and settings-drift (#34) sections above.
+ * When BRAIN_USAGE_LOG=1, every brain:* invocation appends one JSONL line to
+ * `.project-brain/.usage.jsonl` (the choke point in common.mjs). Here we read
+ * it back read-only — per-command counts over a trailing 30d window and the
+ * never-used list (commands in package.json that the ledger has never seen).
+ *
+ * Always safe to call: an absent/unreadable log yields zero counts with the
+ * full command set as "never used". Reporting is independent of the write flag
+ * so a ledger captured earlier still surfaces even if the flag is now off.
+ */
+function usageReport(windowDays = 30) {
+  const pkg = readJsonSafe(path.join(ROOT, 'package.json')) ?? {};
+  const universe = commandUniverseFromPackageScripts(pkg.scripts || {});
+  const logExists = fs.existsSync(USAGE_LOG);
+  const records = logExists ? parseUsageLog(read(USAGE_LOG)) : [];
+  const summary = summarizeUsage(records, { windowDays, commands: universe });
+  return {
+    enabledNow: process.env.BRAIN_USAGE_LOG === '1',
+    logExists,
+    ...summary
+  };
+}
 
 const KEY_BRAIN_FILES = ['context_index.md', 'repo_context.md', 'master_plan.md', 'active_state.md'];
 
@@ -145,6 +240,24 @@ const required = isCanonicalPackage
 const missing = required.filter((p) => !fs.existsSync(p));
 let layoutOk = missing.length === 0;
 
+// SKILL.md ships lean; its detail lives in a bundled references/*.md set (#26).
+// setup.sh (in-place checkout) and brain:update-skill (git ff-merge) carry these
+// alongside SKILL.md — verify they actually landed. NON-FATAL on purpose: a
+// consumer on an old checkout has SKILL.md but not yet the references, and should
+// be nudged to update rather than have health fail (which would abort setup.sh).
+const skillRoot = isCanonicalPackage ? '.' : 'skills/project-brain';
+const REFERENCE_FILES = ['commands.md', 'workflows.md', 'retrieval-internals.md', 'tuning.md', 'fleet.md'];
+const missingReferences = fs.existsSync(path.join(skillRoot, 'SKILL.md'))
+  ? REFERENCE_FILES.map((f) => path.join(skillRoot, 'references', f)).filter((p) => !fs.existsSync(p))
+  : [];
+if (missingReferences.length && !jsonOut) {
+  console.warn(
+    `Project Brain: SKILL.md present but ${missingReferences.length} reference file(s) missing (` +
+      missingReferences.map((p) => path.basename(p)).join(', ') +
+      '). Run: npm run brain:update-skill'
+  );
+}
+
 if (!fs.existsSync('.gitignore') || !fs.readFileSync('.gitignore', 'utf8').includes('.project-brain/vector-db/')) {
   if (!jsonOut) console.error('Missing .project-brain/vector-db/ in .gitignore');
   layoutOk = false;
@@ -156,6 +269,9 @@ let indexParseError = false;
 let brainRefIssues = { missing: [] };
 let activeStateMergeMarkers = false;
 const docFresh = fs.existsSync(BRAIN_DIR) ? brainDocFreshnessReport() : { entries: [], warnings: [], staleDaysConfigured: 0, repoContextOlderThanPackage: false };
+const footprint = contextFootprintReport();
+const settingsDrift = settingsDriftReport(skillRoot);
+const usage = usageReport();
 
 if (docFresh.warnings.length && !jsonOut) {
   for (const w of docFresh.warnings) console.warn(`Project Brain doc freshness: ${w}`);
@@ -165,6 +281,50 @@ if (docFresh.entries.some((e) => e.exists) && !jsonOut) {
     .filter((e) => e.exists)
     .map((e) => `${path.basename(e.file)} ~${formatAgeDays(e.ageDays)} (${e.source})`);
   if (parts.length) console.log(`Brain root doc ages (git last commit, else mtime): ${parts.join('; ')}`);
+}
+
+if (!jsonOut) {
+  const fpParts = [];
+  for (const s of footprint.skills) fpParts.push(`${path.basename(s.file)} ${s.bytes}B≈${s.tokens}tok`);
+  if (footprint.activeState.exists) fpParts.push(`active_state.md ${footprint.activeState.bytes}B≈${footprint.activeState.tokens}tok`);
+  for (const h of footprint.hooks) fpParts.push(`hook:${h.event} ${h.bytes}B≈${h.tokens}tok`);
+  fpParts.push(`pack≤${footprint.packDefaults.BRAIN_PACK_MAX_TOKENS}tok`);
+  console.log(`Context footprint (per-session injection, ~len/4 tokens): ${fpParts.join('; ')}`);
+  for (const w of footprint.warnings) console.warn(`Project Brain context footprint: ${w}`);
+}
+
+if (!jsonOut) {
+  if (usage.logExists) {
+    const top = usage.perCommand
+      .slice(0, 5)
+      .map((c) => `${c.cmd}×${c.count}`)
+      .join(', ');
+    console.log(
+      `Usage ledger (#32, last ${usage.windowDays}d): ${usage.totalInWindow} invocation(s) across ${usage.perCommand.length}/${usage.universeSize} command(s)` +
+        (top ? `; top: ${top}` : '') +
+        (usage.neverUsed.length ? `; never used (${usage.neverUsed.length}): ${usage.neverUsed.slice(0, 8).join(', ')}${usage.neverUsed.length > 8 ? ', …' : ''}` : '')
+    );
+  } else if (usage.enabledNow) {
+    console.log('Usage ledger (#32): BRAIN_USAGE_LOG=1 but no invocations recorded yet.');
+  }
+}
+
+// Only warn about drift when a host .claude/settings.json actually exists: an
+// absent file is "not wired yet" (e.g. the canonical dev repo, or a fresh
+// consumer before setup.sh), not silent drift of an installed-but-stale config
+// — the club-ops case #34 targets. The JSON payload still reports the full diff.
+if (settingsDrift.checked && settingsDrift.hostExists && settingsDrift.drift && !jsonOut) {
+  if (settingsDrift.missingHooks.length) {
+    const events = [...new Set(settingsDrift.missingHooks.map((h) => h.event))].join(', ');
+    console.warn(
+      `Project Brain settings drift: ${settingsDrift.missingHooks.length} recommended hook(s) not in .claude/settings.json (${events}) — ambient routing / session hooks are installed as code but INERT (issue #34). Run: npm run brain:update-skill (additive merge; your own hooks are preserved).`
+    );
+  }
+  if (settingsDrift.missingAllow.length) {
+    console.warn(
+      `Project Brain settings drift: ${settingsDrift.missingAllow.length} recommended permission(s) missing from .claude/settings.json (${settingsDrift.missingAllow.join(', ')}). Run: npm run brain:update-skill.`
+    );
+  }
 }
 
 if (fs.existsSync(path.join(BRAIN_DIR, 'active_state.md'))) {
@@ -229,6 +389,7 @@ if (jsonOut) {
       {
         ok: finalOk,
         missing,
+        missingReferences,
         stale,
         strictStale,
         expiredSessionCount,
@@ -237,7 +398,10 @@ if (jsonOut) {
         brainRefs: { checked: checkBrainRefs, missing: brainRefIssues.missing },
         brainDocFreshness: docFresh.entries,
         docFreshnessWarnings: docFresh.warnings,
-        repoContextOlderThanPackageJson: docFresh.repoContextOlderThanPackage
+        repoContextOlderThanPackageJson: docFresh.repoContextOlderThanPackage,
+        contextFootprint: footprint,
+        settingsDrift,
+        usage
       },
       null,
       2
