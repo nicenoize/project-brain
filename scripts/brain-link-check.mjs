@@ -26,6 +26,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import './common.mjs'; // usage ledger choke point (#32) — arms only when BRAIN_USAGE_LOG=1
 
 const ROOT = process.cwd();
 const BRAIN_DIR = path.join(ROOT, '.project-brain');
