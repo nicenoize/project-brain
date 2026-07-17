@@ -31,6 +31,9 @@ export function inferType(file) {
   if (file.includes('.project-brain/grills/')) return 'grill';
   // Temporal-axis record (decisions/0019): git history; regenerable, gitignored.
   if (file.includes('.project-brain/history/')) return 'history';
+  // Learning-loop digest (decisions/0027): regenerable lessons summary derived
+  // from the outcome sidecar. outcomes.jsonl is not .md so it never indexes.
+  if (file.includes('.project-brain/reflect/')) return 'lesson';
   if (file.includes('/features/')) return 'feature';
   if (file.includes('/modules/')) return 'module';
   if (file.includes('/decisions/')) return 'decision';

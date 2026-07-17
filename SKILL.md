@@ -63,6 +63,7 @@ Full policy, splitting heuristics, and step-by-step operating-mode runbooks: [`r
 - `brain:gaps` — deterministic self-audit: what the brain does NOT know / is stale on.
 - `brain:why` — git archaeology: `ingest` history, then query "why is this like this?".
 - `brain:learn` — grow the eval set from real usage (never changes ranking).
+- `brain:reflect` — outcome-tagged learning loop: `record <id> --outcome useful|dead_end|corrected` (append-only sidecar), then aggregate into deterministic lessons (decay + ≥2-corroboration gate + contested flag + prune). No LLM, no ranking change — details in `references/commands.md`.
 
 **Proactive / pre-touch**
 - `brain:route` — rank the next action(s); `--auto` runs the safe subset. `--hook` = ambient.
