@@ -23,9 +23,10 @@
  */
 import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const ROOT = process.cwd()
-const SESSIONS_DIR = join(ROOT, '.project-brain', 'sessions')
+export const SESSIONS_DIR = join(ROOT, '.project-brain', 'sessions')
 
 function emitContinue() {
   process.stdout.write(JSON.stringify({ continue: true }))
@@ -42,7 +43,7 @@ function readStdinSync() {
 
 const TAG_RE = /^##\s+(Decided|Memory|Followup):\s*(.+)$/gim
 
-function extractTags(transcriptPath) {
+export function extractTags(transcriptPath) {
   if (!transcriptPath) {
     process.stderr.write('[brain:digest] no transcript_path in hook payload\n')
     return []
@@ -116,4 +117,8 @@ function main() {
   emitContinue()
 }
 
-main()
+// Only parse stdin / run the hook when invoked directly. Importing for reuse
+// (brain:close reuses extractTags) must NOT block on readFileSync(0) or exit.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main()
+}

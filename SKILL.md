@@ -75,6 +75,7 @@ Full policy, splitting heuristics, and step-by-step operating-mode runbooks: [`r
 - `brain:worktree` — spawn/list/remove parallel git-worktree workers.
 - `brain:lease` / `brain:session` — file leases / branch-scoped short-lived work context.
 - `brain:compact` — bounded resume slice for handoff / token reload.
+- `brain:close` — end-of-session retrospective: collects digest, open leases, ADR/learn candidates + a commit SUGGESTION (never commits). Run it when wrapping up a session.
 
 **PR & quality gates**
 - `brain:pr` — prepare a PR body from diff + workstream state.
