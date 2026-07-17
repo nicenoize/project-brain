@@ -53,7 +53,7 @@ Full policy, splitting heuristics, and step-by-step operating-mode runbooks: [`r
 - `brain:search` — low-level semantic search (`--terse` one-line hits, `--summary-only`, `--modules-only`).
 - `brain:symbol` / `brain:impact` — exact symbol lookup / blast-radius for a symbol.
 - `brain:pack` — budgeted context pack (`--mode resume|minimal`, `--max-tokens`).
-- `brain:graph` / `brain:diagram` — dependency graph / Mermaid·drawio projection of the index (`--stats` for counts; always `--write <file>` in a session — the full JSON can be multi-MB).
+- `brain:graph` / `brain:diagram` — dependency graph / Mermaid·drawio projection of the index (`--stats` for counts; `--path <from> <to>` answers "how does X reach Y?"; always `--write <file>` in a session — the full JSON can be multi-MB).
 
 **Reason & act axes**
 - `brain:explain` — reasoning cache: `save`/`check` durable cited explainers.
