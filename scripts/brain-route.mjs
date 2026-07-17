@@ -29,6 +29,7 @@ import {
   ROOT, BRAIN_DIR, exists, read, atomicWrite, sha256, takeFlag, takeOption, gitBranchSafe,
   staleIndexFromRecords, isFastMode
 } from './common.mjs';
+import { noteFriction } from './friction.mjs';
 
 const CONTEXT_INDEX = path.join(BRAIN_DIR, 'context_index.md');
 const JSON_INDEX = path.join(BRAIN_DIR, 'search_index.json');
@@ -202,6 +203,13 @@ function finalize(recs, signals, opts = {}) {
     if (/\b(how|why|what|where|when|which|who|\?)\b/.test(intent)) {
       recs.push({ rank: 2, command: 'brain:ask', args: [`"${opts.intent}"`], boundary: 'auto',
         reason: 'question intent — delegate retrieval to brain:ask (it picks file/symbol/doc/vector/pack)', signals: ['intent'] });
+    }
+    // End-of-session intent → collect the close checklist (digest, leases,
+    // ADR/learn candidates, commit suggestion). Distinct from 'wrap'→compact:
+    // close is the retrospective, compact is the resume slice.
+    if (/\b(close|end session|end of session|sign off|sign-off|retro|retrospective|wrap up|wrap-up)\b/.test(intent)) {
+      recs.push({ rank: 3, command: 'brain:close', args: [], boundary: 'auto',
+        reason: 'end-of-session intent — collect the close checklist (digest, leases, ADR/learn candidates, commit suggestion)', signals: ['intent'] });
     }
     const boosts = [
       [/\b(pr|pull request|ship|merge|review)\b/, ['brain:pr', 'brain:guard']],
@@ -470,6 +478,13 @@ export function buildHookPayload(event, text, maxBytes = hookMaxBytes()) {
 function emitHook(event, text) {
   const payload = buildHookPayload(event, text);
   if (!payload) return 0;
+  // Friction sensor (#28): if the hook byte cap (#22) truncated the injected
+  // text, signal a truncation event. Gated inside noteFriction — a no-op with no
+  // extra work when BRAIN_FRICTION_LOG is off, so the hot hook path pays nothing.
+  const max = hookMaxBytes();
+  if (text && Buffer.byteLength(String(text), 'utf8') > max) {
+    noteFriction({ kind: 'truncation', cmd: 'route', detail: `hook ${String(event || '').toLowerCase()} output exceeded the ${max}-byte cap` });
+  }
   process.stdout.write(payload);
   return 0;
 }

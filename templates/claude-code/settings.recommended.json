@@ -90,6 +90,17 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-stage-dirty.mjs\" || true"
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {

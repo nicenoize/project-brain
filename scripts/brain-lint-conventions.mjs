@@ -37,6 +37,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import './common.mjs'; // usage ledger choke point (#32) — arms only when BRAIN_USAGE_LOG=1
 
 const ROOT = (() => {
@@ -46,7 +47,142 @@ const CONFIG = path.join(ROOT, '.project-brain', 'conventions.json');
 
 const args = process.argv.slice(2);
 const SCAN_MODE = args.includes('--scan');
+const SIDECAR_MODE = args.includes('--sidecars');
 const QUIET = args.includes('--quiet');
+
+/* -------- sidecar discipline scan (#20 item 2) -------- */
+
+// Only these recorders may write files under the record folders below. Every
+// other script must write a sibling sidecar and leave the record untouched.
+// See references/conventions.md#sidecar-discipline-records-vs-sidecars.
+export const RECORD_DIRS = ['decisions', 'findings'];
+export const SIDECAR_RECORDER_ALLOWLIST = [
+  'brain-adr.mjs',      // owns .project-brain/decisions/
+  'findings.mjs',       // owns .project-brain/findings/ (+ plans/)
+  'brain-audit.mjs',    // writes findings via findings.mjs
+  'brain-init.mjs',     // scaffolds the empty dirs (mkdir only)
+];
+
+const WRITE_API_RE = /\b(?:writeFileSync|appendFileSync|atomicWrite|copyFileSync|renameSync|writeSync|write)\s*\(/;
+const RECORD_LITERAL_RE = new RegExp(`['"\`](?:${RECORD_DIRS.join('|')})/|['"\`](?:${RECORD_DIRS.join('|')})['"\`]\\s*[,)]`);
+
+/**
+ * Detect scripts that mutate files under a record folder (decisions/, findings/)
+ * from outside their owning recorder. Pure + unit-tested.
+ *
+ * Heuristic (no AST, deliberately conservative to avoid false positives on the
+ * current tree): resolve variables that hold a record-folder path — directly
+ * (`path.join(BRAIN_DIR, 'decisions', …)`) or one alias hop (`x = path.join(dir, …)`)
+ * — then flag write-API calls whose same-line arguments reference such a variable
+ * or a record-folder path literal.
+ *
+ * @param {{path:string, content:string}[]} files
+ * @param {{allowlist?:string[]}} [opts]
+ * @returns {{path:string, line:number, snippet:string}[]}
+ */
+export function scanSidecarViolations(files, opts = {}) {
+  const allow = new Set(opts.allowlist || SIDECAR_RECORDER_ALLOWLIST);
+  const violations = [];
+  for (const { path: rel, content } of files) {
+    if (allow.has(path.basename(rel))) continue;
+    if (!WRITE_API_RE.test(content)) continue;          // no writes at all → skip
+    const recordVars = collectRecordPathVars(content);
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!WRITE_API_RE.test(line)) continue;
+      // Only the destination (first argument) matters — a record-derived value
+      // passed as *data* to a write elsewhere is not a record mutation.
+      const call = line.slice(line.search(WRITE_API_RE));
+      const dest = firstCallArg(call);
+      const refsVar = recordVars.size && [...recordVars].some(v => new RegExp(`(?<![.\\w])${v}\\b`).test(dest));
+      const refsLiteral = RECORD_LITERAL_RE.test(dest);
+      if (refsVar || refsLiteral) {
+        violations.push({ path: rel, line: i + 1, snippet: line.trim().slice(0, 160) });
+      }
+    }
+  }
+  return violations;
+}
+
+/** Text of a call's first argument (the write destination), depth-balanced. */
+function firstCallArg(call) {
+  const open = call.indexOf('(');
+  if (open === -1) return '';
+  let depth = 0;
+  for (let i = open; i < call.length; i++) {
+    const ch = call[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') {
+      depth--;
+      if (depth === 0) return call.slice(open + 1, i); // closed with no top-level comma
+    } else if (ch === ',' && depth === 1) {
+      return call.slice(open + 1, i);
+    }
+  }
+  return call.slice(open + 1);
+}
+
+/** Variable names bound to a decisions/ or findings/ path (incl. one alias hop). */
+function collectRecordPathVars(content) {
+  const vars = new Set();
+  const assignRe = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^\n;]+)/g;
+  let m;
+  // First pass: direct record-folder path bindings.
+  const rawAssigns = [];
+  while ((m = assignRe.exec(content)) !== null) {
+    const [, name, rhs] = m;
+    rawAssigns.push([name, rhs]);
+    const joinSeg = new RegExp(`path\\.join\\([^)]*['"\`](?:${RECORD_DIRS.join('|')})['"\`]`).test(rhs);
+    const literal = RECORD_LITERAL_RE.test(rhs);
+    if (joinSeg || literal) vars.add(name);
+  }
+  // Fixpoint over alias hops, but only where the new path stays INSIDE the
+  // record folder: `y = path.join(<recordVar>, …)` (recordVar as the base) or a
+  // trivial rename `y = <recordVar>`. A transform like `recordPath.replace(…)`
+  // or a template string yields a *sibling* (a sidecar) and must NOT inherit
+  // the taint — that's the whole point of the discipline.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [name, rhs] of rawAssigns) {
+      if (vars.has(name)) continue;
+      const trimmed = rhs.trim();
+      const stays = [...vars].some(v =>
+        trimmed === v ||
+        new RegExp(`path\\.join\\(\\s*(?<![.\\w])${v}\\b`).test(rhs)
+      );
+      if (stays) {
+        vars.add(name);
+        grew = true;
+      }
+    }
+  }
+  return vars;
+}
+
+function runSidecarMode() {
+  const explicit = args.filter((a) => !a.startsWith('--'));
+  const scriptPaths = listTrackedFiles(explicit.length ? explicit : ['scripts']).filter((p) => p.endsWith('.mjs'));
+  const files = [];
+  for (const rel of scriptPaths) {
+    try {
+      const content = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+      if (content.length > 1_000_000) continue;
+      files.push({ path: rel, content });
+    } catch { /* skip unreadable */ }
+  }
+  const violations = scanSidecarViolations(files);
+  if (!violations.length) {
+    if (!QUIET) process.stdout.write(`[brain-lint-conventions] sidecar-clean (${files.length} scripts)\n`);
+    return 0;
+  }
+  for (const v of violations) {
+    process.stdout.write(`  ${v.path}:${v.line} writes under a record folder from outside its recorder — use a sidecar (references/conventions.md#sidecar-discipline-records-vs-sidecars)\n      ${v.snippet}\n`);
+  }
+  process.stdout.write(`[brain-lint-conventions] ${violations.length} sidecar-discipline warning(s) — advisory\n`);
+  return 0; // advisory: never fail the tree until the reflect epic gates on it
+}
 
 function loadRules() {
   if (!fs.existsSync(CONFIG)) return [];
@@ -267,11 +403,16 @@ function runScanMode() {
   return blocking.length ? 1 : 0;
 }
 
-if (SCAN_MODE) {
-  process.exit(runScanMode());
-} else {
-  runHookMode().catch((err) => {
-    process.stderr.write(`[brain-lint-conventions] error: ${err.message}\n`);
-    process.stdout.write('');
-  });
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  if (SIDECAR_MODE) {
+    process.exit(runSidecarMode());
+  } else if (SCAN_MODE) {
+    process.exit(runScanMode());
+  } else {
+    runHookMode().catch((err) => {
+      process.stderr.write(`[brain-lint-conventions] error: ${err.message}\n`);
+      process.stdout.write('');
+    });
+  }
 }

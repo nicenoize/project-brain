@@ -225,6 +225,34 @@ npm run brain:learn -- suggest                                     # propose an 
 ```
 `capture` stages (gitignored); `promote` is the explicit, reviewable step that grows `eval.json` (file-level cases, not tagged `Hard:`). Nothing here changes ranking or runs automatically. See `decisions/0019`.
 
+### Outcome-tagged learning loop (`brain:reflect`)
+
+Closes the loop the brain never had: it records what helped vs. misled, then aggregates that deterministically — **no LLM, sidecar-only, no ranking change**. See `decisions/0027`.
+
+```bash
+npm run brain:reflect -- record <record-id> --outcome useful|dead_end|corrected [--note "..."] [--actor X] [--source path]
+npm run brain:reflect                 # aggregate the event log → lessons digest
+npm run brain:reflect -- --json       # machine-readable aggregation
+npm run brain:reflect -- --if-stale   # near-free no-op unless the log changed (hook-friendly)
+```
+
+`record` appends one event to `.project-brain/reflect/outcomes.jsonl` (append-only) — it **never** touches the original record (sidecar discipline, #20). The aggregator applies **time-decay** (30-day half-life), a **corroboration gate** (≥2 *independent*, distinct-actor `useful` events before a record is `preferred` — one, or two from the same actor, stays `noted`), **contested detection** (a record with both positive and negative outcomes is FLAGGED, recency decides the direction, never silently resolved), and **auto-prune** (a lesson whose cited sources have all vanished is dropped, reusing the `hashSource` existence check). Output is the regenerable `lessons.md` digest (record type `lesson`). Aggregation is reproducible: `now` is injected, so identical inputs → byte-identical output.
+
+Using outcome scores as a **retrieval boost is a ranking change** and is therefore out of scope here — dormant behind `BRAIN_REFLECT_BOOST` (default OFF) and gated on `brain:eval:compare --hard-only` (paired bootstrap, #8) as a separate later step.
+
+### End-of-session retrospective (`brain:close`)
+
+The "/close" pattern: run it **when wrapping up a session** so the next one doesn't rebuild context from scratch. It DETERMINISTICALLY collects and prints a structured checklist — the brain gathers, the agent synthesizes (no LLM in the brain):
+
+```bash
+npm run brain:close                      # print the checklist + append a session-log entry
+npm run brain:close -- --json            # machine-readable
+npm run brain:close -- --dry-run         # print only; writes nothing (not even the session-log)
+npm run brain:close -- --transcript <p>  # also scrape Decided/Memory/Followup tags from a transcript
+```
+
+Sections: **session digest** (tags the digest hook scraped into `sessions/`), **open leases** (from `active_state.md`), **ADR candidates** (open/planned findings worth a decision record), **brain:learn candidates** (staged eval cases), and a **commit-message SUGGESTION** derived from `git status --short` / `git diff --stat`. The commit line is a suggestion only — `brain:close` never stages or commits (the human-merge boundary stays). It writes **only** a session-log entry under `.project-brain/sessions/` (gitignored, derived); never a record under `decisions/` or `findings/`. On a clean/quiet repo it prints a minimal note. `brain:route` recommends it on end-of-session intent (close / end session / sign off / retro). See issue #27.
+
 The router decides between direct file read, symbol search, doc summary, module summary, vector search, or budgeted pack. Only fall back to the lower-level commands when the router result is insufficient:
 
 ```bash
@@ -253,6 +281,8 @@ npm run brain:pr -- prepare --write .project-brain/pr-body.md
 npm run brain:graph -- --stats                        # node/edge counts by type — inspect the index shape without dumping the whole graph
 npm run brain:graph -- --format json --write graph.json  # ALWAYS write to a file in a session: the full JSON can be multi-MB (a context bomb)
 npm run brain:graph -- --format json                  # to stdout; warns on stderr if >~200 KB is emitted to a terminal
+npm run brain:graph -- --path <from> <to> --format text  # "how does X reach Y?" — BFS call-paths; from/to are files or symbols (symbols resolve to their defining file). One line per hop. HONESTY: `calls:` edges are chunk-level references, NOT a precise call graph — a path means "reaches via reference", a lead not proof. Bounds: --max-depth (8) --max-paths (5). No path → empty, exit 0.
+npm run brain:impact -- <sym> --to <sym>              # same BFS surfaced as a "Paths" section under the impact report (reuses findPaths)
 npm run brain:route
 npm run brain:grill -- scaffold <finding-slug>
 npm run brain:eval

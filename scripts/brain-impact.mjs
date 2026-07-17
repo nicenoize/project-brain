@@ -7,17 +7,19 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ROOT, listIndexableFiles, takeFlag } from './common.mjs';
+import { ROOT, listIndexableFiles, takeFlag, takeOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
 import { findTsWorkspaceReferences } from './ts-graph.mjs';
+import { buildGraph, resolvePaths, renderPaths } from './brain-graph.mjs';
 
 const GLOBAL_REFS = new Set(['JSON', 'String', 'Number', 'Boolean', 'Array', 'Object', 'Map', 'Set', 'Math', 'Date', 'Error', 'Promise']);
 async function main() {
   const args = process.argv.slice(2);
   const json = takeFlag(args, '--json');
   const crossProject = takeFlag(args, '--cross-project');
+  const toSymbol = takeOption(args, '--to');
   const symbol = args[0];
   if (!symbol) {
     console.error('Usage: npm run brain:impact -- SymbolName [--cross-project] [--json]');
@@ -31,8 +33,15 @@ async function main() {
   const impact = await buildImpact(symbol, records, store, embedder, { root: ROOT, indexable, crossProject });
   await store.close();
 
-  if (json) console.log(JSON.stringify(impact, null, 2));
-  else printImpact(impact);
+  // `--to <sym>`: reuse brain:graph's BFS to answer "how does <symbol> reach
+  // <to>?" as a paths section. Read-only; same chunk-level-reference caveat.
+  const paths = toSymbol ? resolvePaths(buildGraph(records), records, symbol, toSymbol) : null;
+
+  if (json) console.log(JSON.stringify(paths ? { ...impact, paths } : impact, null, 2));
+  else {
+    printImpact(impact);
+    if (paths) console.log('\n' + renderPaths(paths));
+  }
 }
 
 // Only run the CLI when invoked directly; importing buildImpact (e.g. from

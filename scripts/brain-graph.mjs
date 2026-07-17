@@ -19,11 +19,30 @@ async function main() {
   const format = peekOption(argv, '--format') || 'json';
   const stats = argv.includes('--stats');
   const writePath = peekOption(argv, '--write');
+  const pathIdx = argv.indexOf('--path');
   const store = await openStore();
   const records = await store.getAll();
   await store.close();
 
   const graph = buildGraph(records);
+
+  // --path <from> <to>: BFS call-path query ("how does X reach Y?"). Endpoints
+  // are files or symbols (symbols resolve to their defining file first). One
+  // line per hop with the edge label — inherently terse, so no --write guard.
+  if (pathIdx !== -1) {
+    const fromTok = argv[pathIdx + 1];
+    const toTok = argv[pathIdx + 2];
+    if (!fromTok || !toTok || fromTok.startsWith('--') || toTok.startsWith('--')) {
+      process.stderr.write('Usage: npm run brain:graph -- --path <from> <to>   # from/to are files or symbols\n');
+      process.exit(1);
+    }
+    const maxDepth = Number(peekOption(argv, '--max-depth')) || 8;
+    const maxPaths = Number(peekOption(argv, '--max-paths')) || 5;
+    const report = resolvePaths(graph, records, fromTok, toTok, { maxDepth, maxPaths });
+    if (format === 'json') emit(JSON.stringify(report, null, 2), writePath);
+    else emit(renderPaths(report), writePath);
+    return;
+  }
 
   // --stats: compact node/edge histogram instead of the full graph — the cheap
   // way to inspect the index shape inside a session.
@@ -170,6 +189,130 @@ function addResolvedReferenceEdges(nodes, edges, records) {
       }
     }
   }
+}
+
+// --- Call-path queries (issue #24) ------------------------------------------
+// "How does X reach Y?" — BFS over the same reference edges brain:graph already
+// materializes. HONESTY CAVEAT: `calls:<sym>` edges are chunk-level references
+// (file A mentions a symbol defined in file B), NOT a precise call graph. A
+// path therefore means "reaches via reference", the same honesty bar CodeGraph
+// uses — treat it as a lead, not proof of a runtime call.
+
+// Only these edge kinds carry "reaches"-semantics for path-finding:
+//   calls:<symbol>  file → file  (A references a symbol B defines)
+//   exported_by     symbol → file
+//   defines         file → symbol
+function isPathEdge(type) {
+  const t = String(type || '');
+  return t.startsWith('calls:') || t === 'exported_by' || t === 'defines';
+}
+
+/**
+ * BFS over the graph's reference edges from node id `from` to node id `to`.
+ * Returns up to `maxPaths` paths (shortest first), each an array of hop edges
+ * `{ from, to, type }`, none longer than `maxDepth` hops. No path (or bad
+ * input) → `[]`. PURE — no I/O, no process exit.
+ */
+export function findPaths(graph, from, to, { maxDepth = 8, maxPaths = 5 } = {}) {
+  const results = [];
+  if (!graph || !Array.isArray(graph.edges) || !from || !to || from === to) return results;
+  const adj = new Map();
+  for (const e of graph.edges) {
+    if (!isPathEdge(e.type)) continue;
+    if (!adj.has(e.from)) adj.set(e.from, []);
+    adj.get(e.from).push(e);
+  }
+  // BFS: shortest paths surface first. `nodes` guards against cycles within a
+  // single path; distinct paths may still revisit a node.
+  const queue = [{ node: from, nodes: new Set([from]), edges: [] }];
+  while (queue.length && results.length < maxPaths) {
+    const cur = queue.shift();
+    if (cur.edges.length >= maxDepth) continue;
+    for (const e of adj.get(cur.node) || []) {
+      if (cur.nodes.has(e.to)) continue;
+      const edges = [...cur.edges, { from: e.from, to: e.to, type: e.type }];
+      if (e.to === to) {
+        results.push(edges);
+        if (results.length >= maxPaths) break;
+      } else {
+        const nodes = new Set(cur.nodes);
+        nodes.add(e.to);
+        queue.push({ node: e.to, nodes, edges });
+      }
+    }
+  }
+  return results;
+}
+
+/**
+ * Resolve a CLI endpoint token (a file path or a symbol name) to the graph
+ * `file:<file>` node id(s) it stands for. File matches (exact path, then
+ * path-suffix/basename) win over symbol matches; a symbol resolves to its
+ * defining file(s) via `symbols`/`exportedSymbols`. PURE.
+ */
+export function resolveEndpoint(token, records) {
+  if (!token) return { token, kind: 'none', files: [] };
+  const recs = records || [];
+  const exact = uniq(recs.filter(r => r.file === token).map(r => r.file));
+  if (exact.length) return { token, kind: 'file', files: exact };
+  const base = token.split('/').pop();
+  const suffix = uniq(recs.filter(r => r.file && (r.file.endsWith('/' + token) || r.file.split('/').pop() === base && (token.includes('.') || token.includes('/')))).map(r => r.file));
+  if (suffix.length) return { token, kind: 'file', files: suffix };
+  const sym = uniq(recs.filter(r => (r.symbols || []).includes(token) || (r.exportedSymbols || []).includes(token)).map(r => r.file));
+  if (sym.length) return { token, kind: 'symbol', files: sym };
+  return { token, kind: 'none', files: [] };
+}
+
+/**
+ * End-to-end call-path report: resolve both endpoints, then run findPaths over
+ * every resolved from×to file pair. Returns a serializable structure the CLI
+ * renders (and brain:impact can reuse). PURE.
+ */
+export function resolvePaths(graph, records, fromTok, toTok, opts = {}) {
+  const from = resolveEndpoint(fromTok, records);
+  const to = resolveEndpoint(toTok, records);
+  const paths = [];
+  const maxPaths = opts.maxPaths ?? 5;
+  for (const f of from.files) {
+    for (const t of to.files) {
+      if (f === t) continue;
+      for (const hops of findPaths(graph, `file:${f}`, `file:${t}`, opts)) {
+        paths.push(hops);
+        if (paths.length >= maxPaths) break;
+      }
+      if (paths.length >= maxPaths) break;
+    }
+    if (paths.length >= maxPaths) break;
+  }
+  return { from, to, paths: paths.slice(0, maxPaths) };
+}
+
+/** Human-readable render of a resolvePaths() report — one line per hop. PURE. */
+export function renderPaths(report) {
+  const lines = [];
+  const { from, to, paths } = report;
+  lines.push(`# Paths: ${from.token} → ${to.token}`);
+  const endpoint = (e, side) => {
+    if (e.kind === 'none') lines.push(`- ${side}: "${e.token}" matched no file or symbol`);
+    else if (e.kind === 'symbol') lines.push(`- ${side}: symbol "${e.token}" → ${e.files.join(', ')}`);
+    else lines.push(`- ${side}: file ${e.files.join(', ')}`);
+  };
+  endpoint(from, 'from');
+  endpoint(to, 'to');
+  lines.push('_edges are chunk-level references, not a precise call graph — "reaches via reference"._');
+  if (!paths.length) {
+    lines.push('\nNo path found.');
+    return lines.join('\n');
+  }
+  paths.forEach((hops, i) => {
+    lines.push(`\n## Path ${i + 1} (${hops.length} hop${hops.length === 1 ? '' : 's'})`);
+    for (const h of hops) lines.push(`  ${label(h.from)} --${h.type}--> ${label(h.to)}`);
+  });
+  return lines.join('\n');
+}
+
+function uniq(values) {
+  return [...new Set(values)];
 }
 
 function addNode(nodes, id, type, label) {

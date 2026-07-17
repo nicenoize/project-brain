@@ -17,6 +17,19 @@ Flags beyond `--file`/`--top-k`:
 - `--out <path>` — write the full JSON report to a file (stdout keeps the
   summary). Reports written this way feed the comparison tool below.
 
+The store/model preamble (`Project Brain store: …`, `Loading local embedding
+model: …`) and every progress line go to **stderr**, so **stdout is pure JSON**.
+That means a plain redirect works with zero stripping — both of these produce a
+compare-ready report file:
+
+```bash
+node scripts/brain-eval.mjs --hard-only > baseline.json   # redirect (stdout is clean JSON)
+node scripts/brain-eval.mjs --hard-only --out baseline.json  # explicit flag (stderr shows a summary)
+```
+
+`node scripts/brain-eval.mjs --hard-only | head -c1` prints `{`, confirming no
+preamble leaks onto stdout.
+
 ## The saturated-set problem
 
 The original 36 cases reached **recall@8 = 1.000, MRR ≈ 0.95** on the default
@@ -75,11 +88,21 @@ n=21, a +0.07 win at n=42, and dissolved into noise (hit@8 Δ +0.024, 95% CI
 permanent tool; use it for every retrieval change:
 
 ```bash
-BRAIN_QUIET=1 npm run brain:eval -- --hard-only --out /tmp/baseline.json
-# …apply the change / set the flag…
-BRAIN_QUIET=1 npm run brain:eval -- --hard-only --out /tmp/variant.json
+# 1. Capture the baseline (stdout is pure JSON — redirect or --out both work).
+node scripts/brain-eval.mjs --hard-only > /tmp/baseline.json
+# 2. …apply the change / set the flag…
+# 3. Capture the variant the same way.
+node scripts/brain-eval.mjs --hard-only > /tmp/variant.json
+# 4. Compare the two files (order is baseline first, variant second).
 npm run brain:eval:compare -- /tmp/baseline.json /tmp/variant.json --hard-only
 ```
+
+The two-file contract is `brain:eval:compare <baseline.json> <variant.json>
+[--hard-only]`: it takes exactly two `*.json` report paths (positional, baseline
+first), and `--hard-only` restricts the paired bootstrap to the hard subset.
+Each report file must carry the per-case `results` array, which both `> f.json`
+and `--out f.json` include (a hand-trimmed summary will be rejected). Run with no
+args and it prints the usage line instead of a comparison.
 
 `brain:eval:compare` pairs cases by query, runs a seeded paired bootstrap
 (10 000 resamples), and prints Δ + 95% CI + a significance verdict for hit@K
