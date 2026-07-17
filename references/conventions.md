@@ -9,6 +9,23 @@ Project Brain has two layers:
 
 Application repos should not fork global conventions unless they need a documented exception in `.project-brain/repo_context.md`.
 
+## Sidecar discipline (records vs sidecars)
+
+Durable records under `.project-brain/decisions/`, `.project-brain/findings/`, and the other structural-truth folders are **authored, human-meaningful facts**. Derived or experiential annotations that *comment on* a record — outcome reflections, learning scores, verdict overlays, staleness marks — are **not** structural truth and must never be written back into the record's own file.
+
+The rule:
+
+- **Record** = the durable fact. Written and edited only by the human author or the one recorder that owns that folder (e.g. `brain:adr` for `decisions/`, `brain:audit`/`findings.mjs` for `findings/`). A record's content is the source of truth; a rebuild of the index must be able to reproduce everything downstream from it.
+- **Sidecar** = a derived/experiential annotation stored in a **separate file beside the record** (e.g. `0007-foo.md` → `0007-foo.reflect.json`, or a folder-level `.brain_learning.json`), merged with the record only at read time. Sidecars are regenerable and never authoritative — losing one costs nothing structural.
+
+Why: this is the record-level form of the existing "generated indexes are never authoritative" layer rule. If a feedback/learning/reflect process mutated the record itself, a re-index or a diff would blur what a human decided against what a tool inferred, and two agents annotating in parallel would clobber each other's edits. Keeping annotations in sidecars keeps structural truth diff-clean and merge-safe.
+
+Practical guidance for new scripts:
+
+- Only a folder's **own recorder** may create or rewrite files under that folder. Every other script that wants to attach information writes a sibling sidecar file and leaves the record byte-for-byte untouched.
+- Read-time merge belongs in the consumer (search/pack/reflect readers), not at write time.
+- The optional `brain:lint-conventions --sidecars` scan flags scripts that write under `decisions/`/`findings/` from outside the allowlisted recorders — wire it into CI once the reflect epic lands.
+
 ## Git
 
 Branch pattern:

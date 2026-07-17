@@ -28,6 +28,51 @@ export function atomicWrite(p, data) {
 }
 export function sha256(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
 
+// Shrink-guard defaults (#20 item 1). Below MIN_FLOOR records we never guard
+// (cold/initial builds legitimately grow from ~0). Above it, a write that
+// keeps < RATIO of the prior record count is treated as a truncation/partial
+// run and blocked unless forced. Tunable via env for huge or unusual repos.
+export const SHRINK_GUARD_MIN_FLOOR = Number(process.env.BRAIN_SHRINK_GUARD_MIN_FLOOR || 50);
+export const SHRINK_GUARD_RATIO = Number(process.env.BRAIN_SHRINK_GUARD_RATIO || 0.5);
+
+/**
+ * Decide whether a destructive overwrite that shrinks a maintained artifact
+ * (the index/store JSON mirror) should be blocked. Pure + unit-tested; wired
+ * into the store's persist path so a truncation bug or partial run can't
+ * silently destroy a good index.
+ *
+ * Only SIGNIFICANT shrink is blocked — incremental deletes and modest trims
+ * (e.g. a handful of flag-gated records toggled off) still write freely. When
+ * a large shrink IS intentional (a flag-gated record type like BRAIN_RATIONALE
+ * turned off, or a deliberate rebuild), the caller passes `--force`, which the
+ * stderr message names explicitly.
+ *
+ * @returns {{blocked: boolean, reason?: string}}
+ */
+export function shrinkGuard({
+  oldCount = 0,
+  newCount = 0,
+  force = false,
+  minFloor = SHRINK_GUARD_MIN_FLOOR,
+  ratio = SHRINK_GUARD_RATIO,
+} = {}) {
+  if (force) return { blocked: false };
+  if (!(oldCount >= minFloor)) return { blocked: false }; // cold/tiny index: never guard
+  if (newCount >= oldCount) return { blocked: false };    // growth or steady-state
+  const keptRatio = newCount / oldCount;
+  if (keptRatio >= ratio) return { blocked: false };      // modest shrink: allow
+  return {
+    blocked: true,
+    reason:
+      `refusing to overwrite index: ${oldCount} → ${newCount} records ` +
+      `(would drop ${oldCount - newCount}, keeping ${Math.round(keptRatio * 100)}% — ` +
+      `below the ${Math.round(ratio * 100)}% floor). ` +
+      `This looks like a truncation or partial run; the existing index was left untouched. ` +
+      `If the shrink is intentional (deliberate rebuild, or a flag-gated record type such as ` +
+      `BRAIN_RATIONALE toggled off), re-run with --force.`,
+  };
+}
+
 /** One row per source file in the index; detects ghost paths and content drift vs on-disk files. */
 export function staleIndexFromRecords(records = []) {
   const deleted = new Set();
