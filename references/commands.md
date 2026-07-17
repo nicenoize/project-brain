@@ -225,6 +225,21 @@ npm run brain:learn -- suggest                                     # propose an 
 ```
 `capture` stages (gitignored); `promote` is the explicit, reviewable step that grows `eval.json` (file-level cases, not tagged `Hard:`). Nothing here changes ranking or runs automatically. See `decisions/0019`.
 
+### Outcome-tagged learning loop (`brain:reflect`)
+
+Closes the loop the brain never had: it records what helped vs. misled, then aggregates that deterministically — **no LLM, sidecar-only, no ranking change**. See `decisions/0027`.
+
+```bash
+npm run brain:reflect -- record <record-id> --outcome useful|dead_end|corrected [--note "..."] [--actor X] [--source path]
+npm run brain:reflect                 # aggregate the event log → lessons digest
+npm run brain:reflect -- --json       # machine-readable aggregation
+npm run brain:reflect -- --if-stale   # near-free no-op unless the log changed (hook-friendly)
+```
+
+`record` appends one event to `.project-brain/reflect/outcomes.jsonl` (append-only) — it **never** touches the original record (sidecar discipline, #20). The aggregator applies **time-decay** (30-day half-life), a **corroboration gate** (≥2 *independent*, distinct-actor `useful` events before a record is `preferred` — one, or two from the same actor, stays `noted`), **contested detection** (a record with both positive and negative outcomes is FLAGGED, recency decides the direction, never silently resolved), and **auto-prune** (a lesson whose cited sources have all vanished is dropped, reusing the `hashSource` existence check). Output is the regenerable `lessons.md` digest (record type `lesson`). Aggregation is reproducible: `now` is injected, so identical inputs → byte-identical output.
+
+Using outcome scores as a **retrieval boost is a ranking change** and is therefore out of scope here — dormant behind `BRAIN_REFLECT_BOOST` (default OFF) and gated on `brain:eval:compare --hard-only` (paired bootstrap, #8) as a separate later step.
+
 ### End-of-session retrospective (`brain:close`)
 
 The "/close" pattern: run it **when wrapping up a session** so the next one doesn't rebuild context from scratch. It DETERMINISTICALLY collects and prints a structured checklist — the brain gathers, the agent synthesizes (no LLM in the brain):

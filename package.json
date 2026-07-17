@@ -54,6 +54,7 @@
     "brain:grill": "node scripts/brain-grill.mjs",
     "brain:route": "node scripts/brain-route.mjs",
     "brain:close": "node scripts/brain-close.mjs",
+    "brain:reflect": "node scripts/brain-reflect.mjs",
     "test": "node --test tests/*.test.mjs tests/**/*.test.mjs"
   },
   "dependencies": {

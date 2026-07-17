@@ -12,5 +12,6 @@ node_modules/
 .claude/worktrees/
 .project-brain/history/
 .project-brain/.eval-candidates/
+.project-brain/reflect/lessons.md
 .worktrees/
 project-brain
