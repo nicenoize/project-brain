@@ -113,6 +113,7 @@ Detail is bundled beside this skill and loaded only when needed — keep the cor
 - [`references/tuning.md`](references/tuning.md) — index recovery/reset and performance / cap-tuning environment variables.
 - [`references/fleet.md`](references/fleet.md) — multi-repo fleet mode (cross-project edges) and spec-kit integration.
 - [`references/hooks.md`](references/hooks.md) — ambient hooks: prompt-time routing (ADR 0023) + the fail-open tool-time `PreToolUse` nudge toward `brain:search`/`brain:ask` (ADR 0026).
+- [`references/external-tools.md`](references/external-tools.md) — honest trade-offs for optional third-party tools: RTK output compression (lossy, opt-in, inert example, `brain:*` exclusion, hook coexistence) and the Caveman reality note (saves output tokens, not thinking).
 
 ## Response behavior
 
