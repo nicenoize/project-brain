@@ -253,6 +253,8 @@ npm run brain:pr -- prepare --write .project-brain/pr-body.md
 npm run brain:graph -- --stats                        # node/edge counts by type — inspect the index shape without dumping the whole graph
 npm run brain:graph -- --format json --write graph.json  # ALWAYS write to a file in a session: the full JSON can be multi-MB (a context bomb)
 npm run brain:graph -- --format json                  # to stdout; warns on stderr if >~200 KB is emitted to a terminal
+npm run brain:graph -- --path <from> <to> --format text  # "how does X reach Y?" — BFS call-paths; from/to are files or symbols (symbols resolve to their defining file). One line per hop. HONESTY: `calls:` edges are chunk-level references, NOT a precise call graph — a path means "reaches via reference", a lead not proof. Bounds: --max-depth (8) --max-paths (5). No path → empty, exit 0.
+npm run brain:impact -- <sym> --to <sym>              # same BFS surfaced as a "Paths" section under the impact report (reuses findPaths)
 npm run brain:route
 npm run brain:grill -- scaffold <finding-slug>
 npm run brain:eval
