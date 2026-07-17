@@ -105,6 +105,8 @@ Recommended policy: `$caveman ultra` for internal agent progress/handoffs/review
 
 `brain:update-skill` idempotently writes `ultra` to `~/.claude/.caveman-active`. Override with `PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA=1` or by manually picking a non-default mode.
 
+Reality check: Caveman (and the optional RTK output compressor) save **output tokens only** — a small fraction of session cost — not the thinking/reasoning tokens that dominate, and both are lossy. Use them for routine high-volume output; use normal wording for anything correctness- or detail-sensitive. RTK is opt-in and ships as an inert example (`templates/claude-code/settings.rtk-example.json`, never installed by setup); its config must exclude `npm run brain:*` so it can't corrupt packed context. Full trade-offs and the RTK supply-chain verdict: [`references/external-tools.md`](references/external-tools.md).
+
 ## API keys
 
 Default setup needs no API keys.
