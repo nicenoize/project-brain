@@ -22,7 +22,9 @@ import {
   classifyChanges,
   writeSyncState,
   gitBranchSafe,
-  listIndexableFiles
+  listIndexableFiles,
+  readDirtyFiles,
+  clearDirtyFiles
 } from './common.mjs';
 
 const SYNC_BG_LOCK = path.join(BRAIN_DIR, '.sync-bg.lock');
@@ -75,11 +77,21 @@ function wrapWithNice(execPath, args) {
 const args = process.argv.slice(2);
 const force = args.includes('--force');
 const dryRun = args.includes('--dry-run');
+// --if-stale (issue #35): near-free no-op unless files were staged dirty by the
+// PostToolUse hook since the last sync. Meant for the opt-in git post-commit
+// hook — clean tree ⇒ instant exit, no listIndexableFiles hash-scan. When the
+// dirty list is non-empty the normal hash-diff sync runs and drains it.
+const ifStale = args.includes('--if-stale');
 const allowBackground = process.env.BRAIN_BACKGROUND === '1';
 
 if (isFastMode() && !force) {
   console.log('Project Brain sync: fast mode skip (BRAIN_FAST=1).');
   writeSyncState({ action: 'skip', reason: 'fast mode', branch: gitBranchSafe() });
+  process.exit(0);
+}
+
+if (ifStale && !force && !readDirtyFiles().length) {
+  console.log('Project Brain sync: nothing staged (--if-stale no-op).');
   process.exit(0);
 }
 
@@ -104,6 +116,7 @@ for (const file of Object.keys(oldManifest.files || {})) {
 }
 
 if (!changed.length && !deleted.length && !force) {
+  clearDirtyFiles(); // staged files already match the manifest — drain the hint
   console.log('Project Brain index is up to date.');
   process.exit(0);
 }
@@ -115,6 +128,11 @@ if (dryRun) {
   console.log(JSON.stringify({ decision, changed: changed.length, deleted: deleted.length }, null, 2));
   process.exit(0);
 }
+
+// A real sync now owns the current changed set; drain the dirty-file hint. The
+// manifest stays the source of truth, so clearing here is safe even if the
+// re-index later fails — the next sync re-detects via hash-diff (issue #35).
+clearDirtyFiles();
 
 if (decision.action === 'skip') {
   writeSyncState({ action: 'skip', reason: decision.reason, branch: gitBranchSafe(), changed: changed.length, deleted: deleted.length });

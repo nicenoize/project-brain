@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Project Brain post-commit sync (OPT-IN, issue #35).
+#
+# Complements the PostToolUse dirty-file staging hook: once a commit lands,
+# re-index just the files staged dirty since the last sync. `--if-stale` makes
+# this near-free — a clean tree (nothing staged) exits instantly without the
+# listIndexableFiles hash-scan, so leaving it installed costs ~nothing.
+#
+# Default OFF to keep commit behavior identical unless you ask for it. Enable
+# with BRAIN_SYNC_ON_COMMIT=1 in your environment. Advisory only: it soft-exits
+# 0 on any failure and must NEVER break a commit.
+if [ "${BRAIN_SYNC_ON_COMMIT:-0}" = "1" ] && command -v npm >/dev/null 2>&1; then
+  BRAIN_BACKGROUND=1 npm run brain:sync -- --if-stale || true
+fi

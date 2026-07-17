@@ -39,15 +39,53 @@ indexed source file, and a fresh index exists, it injects a one-line
   `toolNudges` namespace — one store, no second state file. Opt out with
   `BRAIN_TOOL_NUDGE_DEDUPE=0`.
 
+## Post-edit dirty-file staging (issue #35)
+
+`brain-stage-dirty.mjs` runs on **PostToolUse** for `Edit|Write|MultiEdit`. It
+closes the staleness window *at the source*: the instant a file is edited, it
+appends the touched repo-relative path to `.project-brain/.dirty-files`. ADR 0013
+lazy-sync fixes the index at the *next query*; the #23 banner warns at
+consumption; this is the cheapest complement — a producer that marks files dirty
+the moment they change.
+
+- **Append-only, no re-index in the hook.** It ONLY appends a line — NO embedder
+  load, NO store open. The re-index happens later, in `brain:sync`.
+- **Fail-open, never blocks.** Malformed stdin, a missing brain dir (it will not
+  create one in a non-brain repo), or any internal error → silent **exit 0**
+  (unit-tested). It never emits a `permissionDecision`.
+- **Shared "which files changed" primitive.** The producer/consumer list lives
+  in `common.mjs`: `dirtyPathFor()` (PURE normalise + filter — rejects
+  vendored/build/generated/`.project-brain` paths and anything outside root),
+  `appendDirtyFile()` (atomic via `atomicWrite`, deduped, bounded),
+  `readDirtyFiles()`, `clearDirtyFiles()`. The decision core
+  `stagedPathsFromEnvelope()` in the hook is PURE and exported. This is the
+  write-time sibling of the #23 read-time drift detector
+  (`retrieval.staleResults`).
+
+### Consuming the list — `brain:sync --if-stale`
+
+`brain:sync --if-stale` is a **near-free no-op when clean**: an empty/absent
+dirty list exits instantly *without* the `listIndexableFiles` hash-scan. When
+files are staged it falls through to the normal hash-diff sync (targeted
+re-index of just the changed files) and **drains** the list on completion. The
+manifest stays the source of truth, so clearing the list is safe even if a sync
+fails — the next sync re-detects via hash-diff.
+
+The opt-in git **post-commit** hook (`templates/hooks/post-commit`, default OFF)
+runs `BRAIN_BACKGROUND=1 brain:sync --if-stale` when `BRAIN_SYNC_ON_COMMIT=1` —
+near-free unless the commit left files staged. Advisory only; soft-exits 0.
+
 ### Installation & opt-out
 
-Both layers are wired in `templates/claude-code/settings.recommended.json` and
-merged additively into `.claude/settings.json` by `setup-claude-settings.mjs` on
-`brain:update-skill` (install = opt-in, per ADR 0023). The PreToolUse groups sit
-alongside the existing `Edit|Write|MultiEdit` convention-lint hook. Cursor's
-pre-tool surface does not support this interception, so the tool-time nudge is
-Claude Code-only; Cursor keeps the prompt-time rule
+All three layers are wired in `templates/claude-code/settings.recommended.json`
+and merged additively into `.claude/settings.json` by `setup-claude-settings.mjs`
+on `brain:update-skill` (install = opt-in, per ADR 0023). The PreToolUse groups
+sit alongside the existing `Edit|Write|MultiEdit` convention-lint hook; the
+PostToolUse dirty-staging group is a new `Edit|Write|MultiEdit` matcher. Cursor's
+pre/post-tool surface does not support this interception, so both the tool-time
+nudge and dirty-staging are Claude Code-only; Cursor keeps the prompt-time rule
 (`templates/cursor/rules/project-brain-route.mdc`).
 
 Env toggles: `BRAIN_TOOL_NUDGE_DEDUPE=0` (re-emit every matching call),
-`BRAIN_HOOK_DEDUPE=0` (prompt hook), `BRAIN_HOOK_MAX_BYTES` (injected-text cap).
+`BRAIN_HOOK_DEDUPE=0` (prompt hook), `BRAIN_HOOK_MAX_BYTES` (injected-text cap),
+`BRAIN_SYNC_ON_COMMIT=1` (enable the post-commit `--if-stale` sync).
