@@ -52,7 +52,9 @@ if (oldManifest.model && oldManifest.model !== embedder.modelName) {
   forceRebuild = true;
 }
 
-const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
+// Pass `force` so the shrink-guard (#20) lets a deliberate `--force` rebuild
+// overwrite the index even when it produces a much smaller snapshot.
+const store = await openStore({ model: embedder.modelName, dims: embedder.dims, force: forceRebuild });
 
 // Fleet discovery: if ≥ 2 sibling projects (and BRAIN_FLEET_MODE doesn't
 // override), build the file list as the union of per-project listings and

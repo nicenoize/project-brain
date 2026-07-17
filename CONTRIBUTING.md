@@ -56,9 +56,20 @@ Rules:
 6. **Add the npm script.** Register the entry in `scripts/common.mjs:mergePackageScripts` so application repos get it on `brain:update-skill`.
 7. **Add a test.** At minimum a smoke test under `tests/<name>.test.mjs` that imports the module and exercises one happy path. If the script reads/writes state, use `fs.mkdtempSync` for isolation.
 
+## Sidecar discipline (records vs sidecars)
+
+Structural truth lives in **records** (`.project-brain/decisions/`, `findings/`, …); derived or experiential annotations (reflect outcomes, learning scores, verdict/staleness overlays) live in **sidecar files beside the record**, merged only at read time.
+
+- A folder's **own recorder** is the only writer of files in that folder (`brain:adr` → `decisions/`, `brain:audit`/`findings.mjs` → `findings/`). No other script may create or rewrite a record.
+- Anything else that wants to attach information writes a sibling sidecar (`0007-foo.md` → `0007-foo.reflect.json`, or a folder-level `.brain_learning.json`) and leaves the record byte-for-byte untouched. Sidecars are regenerable and never authoritative.
+- Never read-then-write a record to bolt on a derived field — do the merge in the consumer instead.
+
+This is the record-level form of "generated indexes are never authoritative": it keeps structural truth diff-clean and safe for parallel agents. `brain:lint-conventions --sidecars` scans for scripts that violate it. Full rationale: [`references/conventions.md`](references/conventions.md#sidecar-discipline-records-vs-sidecars).
+
 ## Conventions enforced by hooks
 
 - `brain:lint-conventions` reads `.project-brain/conventions.json` and blocks edits that match `forbid` regexes (per file glob).
+- `brain:lint-conventions --sidecars` scans tracked `scripts/*` for writes under `decisions/`/`findings/` from outside the allowlisted recorders (sidecar discipline, above). Advisory today; wire into CI with the reflect epic.
 - `brain:link-check` verifies `lib/db/events.ts`-style code-path references inside `.project-brain/**.md` resolve in the working tree.
 - `brain:guard` (pre-commit) enforces branch base, runs link-check on staged brain docs, and warns when `context_index.md` exceeds `BRAIN_CONTEXT_INDEX_WARN_TOKENS`.
 

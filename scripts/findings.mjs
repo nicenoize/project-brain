@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { BRAIN_DIR, exists, read } from './common.mjs';
+import { BRAIN_DIR, exists, read, write, ensureDir, slugify } from './common.mjs';
 
 export const FINDINGS_DIR = path.join(BRAIN_DIR, 'findings');
 export const PLANS_DIR = path.join(BRAIN_DIR, 'plans');
@@ -136,6 +136,57 @@ export function parseFinding(content) {
 
 export function loadFindings() {
   return loadDir(FINDINGS_DIR, 'findings', parseFinding);
+}
+
+// A machine-readable occurrence marker kept at the tail of a finding body. It
+// lets upsertFinding count how many times a de-duplicated event class recurred
+// without adding a frontmatter field (which the indexer would ignore anyway).
+const OCCURRENCE_RE = /<!--\s*occurrences:\s*(\d+)\s*-->/i;
+
+/**
+ * Upsert a finding by deterministic slug — the single WRITE choke point for
+ * PROGRAMMATIC finding producers (the friction sensor, #28), kept inside this
+ * owning recorder so record-folder discipline holds (producers never reference a
+ * findings/ path themselves; see references/conventions.md#sidecar-discipline).
+ *
+ * Dedupe: a re-occurrence of the same slug rewrites the SAME file — preserving
+ * the original `created`, refreshing `updated`, and bumping the occurrence
+ * marker — so one event class = one finding, never a spam of files. Pure disk
+ * shape reuses serializeFinding, so friction findings round-trip like any other.
+ *
+ * @param {object} rec  { slug?, title, category?, status?, impact?, module?, symbols?, sources?, actor?, body?, created? }
+ * @param {{dir?:string, now?:string}} [opts]  dir is injectable for tests
+ * @returns {{file:string, slug:string, created:string, updated:string, occurrences:number, existed:boolean}}
+ */
+export function upsertFinding(rec = {}, { dir = FINDINGS_DIR, now = new Date().toISOString() } = {}) {
+  const slug = (rec.slug && String(rec.slug).trim()) || slugify(rec.title || 'finding');
+  const dest = path.join(dir, `${slug}.md`);
+  let created = rec.created || now;
+  let occurrences = 1;
+  const existed = exists(dest);
+  if (existed) {
+    const prev = parseFinding(read(dest));
+    if (prev.created) created = prev.created; // idempotent: keep the first-seen timestamp
+    const m = String(prev.body || '').match(OCCURRENCE_RE);
+    occurrences = (m ? Number(m[1]) : 1) + 1;
+  }
+  let body = String(rec.body || '').replace(OCCURRENCE_RE, '').replace(/\s*$/, '');
+  body += `\n\n<!-- occurrences: ${occurrences} -->`;
+  ensureDir(dir);
+  write(dest, serializeFinding({
+    title: rec.title || slug,
+    category: rec.category || 'dx',
+    status: rec.status || 'open',
+    impact: rec.impact,
+    created,
+    updated: now,
+    actor: rec.actor || '',
+    module: rec.module || '',
+    symbols: rec.symbols || [],
+    sources: rec.sources || [],
+    body
+  }));
+  return { file: dest, slug, created, updated: now, occurrences, existed };
 }
 
 // ---------- improve-plan ----------

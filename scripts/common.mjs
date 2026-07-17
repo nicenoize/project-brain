@@ -3,6 +3,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execSync, spawnSync } from 'node:child_process';
 import { buildUsageRecord, usageCmdFromScript } from './usage.mjs';
+// Static import forms a benign ESM cycle (common↔friction): friction never
+// touches common's bindings at load time, and it defers findings.mjs to a lazy
+// require, so importing it here does NOT evaluate findings.mjs during common's
+// own init. See friction.mjs's header + the createRequire note there.
+import { instrumentFriction } from './friction.mjs';
 
 export const ROOT = process.cwd();
 export const BRAIN_DIR = path.join(ROOT, '.project-brain');
@@ -14,6 +19,7 @@ export const MANIFEST = path.join(BRAIN_DIR, 'index_manifest.json');
 export const SYNC_STATE = path.join(BRAIN_DIR, '.sync-state.json');
 export const SYNC_BG_LOG = path.join(BRAIN_DIR, '.sync-bg.log');
 export const USAGE_LOG = path.join(BRAIN_DIR, '.usage.jsonl');
+export const DIRTY_FILES = path.join(BRAIN_DIR, '.dirty-files');
 
 export function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); }
 export function exists(p) { return fs.existsSync(p); }
@@ -26,6 +32,51 @@ export function atomicWrite(p, data) {
   fs.renameSync(tmp, p);
 }
 export function sha256(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
+
+// Shrink-guard defaults (#20 item 1). Below MIN_FLOOR records we never guard
+// (cold/initial builds legitimately grow from ~0). Above it, a write that
+// keeps < RATIO of the prior record count is treated as a truncation/partial
+// run and blocked unless forced. Tunable via env for huge or unusual repos.
+export const SHRINK_GUARD_MIN_FLOOR = Number(process.env.BRAIN_SHRINK_GUARD_MIN_FLOOR || 50);
+export const SHRINK_GUARD_RATIO = Number(process.env.BRAIN_SHRINK_GUARD_RATIO || 0.5);
+
+/**
+ * Decide whether a destructive overwrite that shrinks a maintained artifact
+ * (the index/store JSON mirror) should be blocked. Pure + unit-tested; wired
+ * into the store's persist path so a truncation bug or partial run can't
+ * silently destroy a good index.
+ *
+ * Only SIGNIFICANT shrink is blocked — incremental deletes and modest trims
+ * (e.g. a handful of flag-gated records toggled off) still write freely. When
+ * a large shrink IS intentional (a flag-gated record type like BRAIN_RATIONALE
+ * turned off, or a deliberate rebuild), the caller passes `--force`, which the
+ * stderr message names explicitly.
+ *
+ * @returns {{blocked: boolean, reason?: string}}
+ */
+export function shrinkGuard({
+  oldCount = 0,
+  newCount = 0,
+  force = false,
+  minFloor = SHRINK_GUARD_MIN_FLOOR,
+  ratio = SHRINK_GUARD_RATIO,
+} = {}) {
+  if (force) return { blocked: false };
+  if (!(oldCount >= minFloor)) return { blocked: false }; // cold/tiny index: never guard
+  if (newCount >= oldCount) return { blocked: false };    // growth or steady-state
+  const keptRatio = newCount / oldCount;
+  if (keptRatio >= ratio) return { blocked: false };      // modest shrink: allow
+  return {
+    blocked: true,
+    reason:
+      `refusing to overwrite index: ${oldCount} → ${newCount} records ` +
+      `(would drop ${oldCount - newCount}, keeping ${Math.round(keptRatio * 100)}% — ` +
+      `below the ${Math.round(ratio * 100)}% floor). ` +
+      `This looks like a truncation or partial run; the existing index was left untouched. ` +
+      `If the shrink is intentional (deliberate rebuild, or a flag-gated record type such as ` +
+      `BRAIN_RATIONALE toggled off), re-run with --force.`,
+  };
+}
 
 /** One row per source file in the index; detects ghost paths and content drift vs on-disk files. */
 export function staleIndexFromRecords(records = []) {
@@ -66,6 +117,7 @@ export function classifyChange(file) {
   if (!file) return 'ignored';
   if (file.startsWith('.project-brain/sessions/')) return 'ignored';
   if (file.startsWith('.project-brain/.sync-')) return 'ignored';
+  if (file === '.project-brain/.dirty-files') return 'ignored';
   if (file === '.project-brain/.usage.jsonl') return 'ignored';
   if (file.startsWith('.project-brain/') && /\.md$/i.test(file)) return 'brain-relevant';
   return 'code-relevant';
@@ -90,6 +142,82 @@ export function readSyncState() {
 export function writeSyncState(state) {
   ensureDir(BRAIN_DIR);
   atomicWrite(SYNC_STATE, JSON.stringify({ ts: new Date().toISOString(), ...state }, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// "Which files changed" primitive (issue #35) — the post-edit dirty-file
+// staging list, shared between the PostToolUse hook (producer) and
+// `brain:sync --if-stale` (consumer). It closes the staleness window at the
+// source: the moment a file is edited, its path is staged here; the next sync
+// re-indexes exactly those files (bounded, no full-corpus cost). It is a cheap
+// signal + accelerator only — the index manifest stays the source of truth, so
+// losing/clearing this list never corrupts anything (sync's hash-diff recovers).
+// Coordinates with the #23 query-time staleness banner (retrieval.staleResults),
+// which is the read-time consumption side of the same "drifted files" idea.
+// ---------------------------------------------------------------------------
+
+// Trees the brain never indexes / would never re-sync — never stage them (and
+// crucially exclude `.project-brain` itself so the hook can't stage its own
+// bookkeeping and loop). Mirrors the exclusions in brain-route-tool's matcher.
+const DIRTY_EXCLUDE_RE = /(^|\/)(node_modules|\.git|dist|build|\.next|out|coverage|vendor|\.project-brain|\.cache|\.venv|__pycache__|\.worktrees)(\/|$)/;
+const DIRTY_GENERATED_RE = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|composer\.lock|Cargo\.lock)$/;
+
+/**
+ * PURE. Normalise a raw edited path into a repo-relative, forward-slashed path
+ * worth staging — or '' when it is not something the brain would re-index
+ * (outside root, generated lockfile, or in a vendored/build/brain-internal
+ * tree). Never touches disk. `opts.root` defaults to ROOT.
+ */
+export function dirtyPathFor(rawPath, opts = {}) {
+  const root = opts.root || ROOT;
+  let s = String(rawPath || '').trim();
+  if (!s) return '';
+  if (path.isAbsolute(s)) {
+    const rel = path.relative(root, s);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return ''; // outside root
+    s = rel;
+  }
+  s = s.split(path.sep).join('/').replace(/^\.\//, '');
+  if (!s || s.startsWith('../')) return '';
+  if (DIRTY_EXCLUDE_RE.test(s)) return '';
+  if (DIRTY_GENERATED_RE.test(s)) return '';
+  return s;
+}
+
+/** Read the staged dirty-file list (deduped, order-preserving). Missing/corrupt → []. */
+export function readDirtyFiles(dirtyPath = DIRTY_FILES) {
+  try {
+    const raw = read(dirtyPath, '');
+    if (!raw) return [];
+    const seen = new Set();
+    const out = [];
+    for (const line of raw.split('\n')) {
+      const t = line.trim();
+      if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+    }
+    return out;
+  } catch { return []; }
+}
+
+/**
+ * Append one already-normalised relative path to the dirty list, atomically and
+ * deduped. Returns true when newly added, false when empty/duplicate. Bounded:
+ * dedup keeps the file from growing without limit. Atomic via atomicWrite
+ * (read → dedup → rename) so a concurrent reader never sees a torn line.
+ */
+export function appendDirtyFile(relPath, dirtyPath = DIRTY_FILES) {
+  const rel = String(relPath || '').trim();
+  if (!rel) return false;
+  const cur = readDirtyFiles(dirtyPath);
+  if (cur.includes(rel)) return false;
+  cur.push(rel);
+  atomicWrite(dirtyPath, cur.join('\n') + '\n');
+  return true;
+}
+
+/** Clear the staged dirty-file list (best-effort; absent → no-op). */
+export function clearDirtyFiles(dirtyPath = DIRTY_FILES) {
+  try { if (exists(dirtyPath)) fs.unlinkSync(dirtyPath); } catch { /* soft — never throw */ }
 }
 
 export function gitBranchSafe() {
@@ -160,7 +288,9 @@ export function mergePackageScripts(pkg) {
     'brain:insight': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-insight.mjs',
     'brain:learn': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-learn.mjs',
     'brain:grill': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-grill.mjs',
-    'brain:route': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-route.mjs'
+    'brain:route': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-route.mjs',
+    'brain:close': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-close.mjs',
+    'brain:reflect': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-reflect.mjs'
   };
   for (const [k, v] of Object.entries(scripts)) {
     if (!pkg.scripts[k] || pkg.scripts[k].includes('skills/project-brain/')) pkg.scripts[k] = v;
@@ -418,3 +548,10 @@ export function instrumentUsage(argv = process.argv) {
 
 // Arm the ledger at import time (the choke point). No-op unless BRAIN_USAGE_LOG=1.
 instrumentUsage();
+
+// Arm the friction sensors at import time (issue #28) — the QUALITY-event
+// sibling of the usage ledger above. instrumentFriction() is a no-op (single env
+// check, no listeners, no writes) unless BRAIN_FRICTION_LOG=1, and registers its
+// exit handler SYNCHRONOUSLY so a process.exit(1) failure is still captured. The
+// try/catch keeps self-observation from ever breaking a command.
+try { instrumentFriction(); } catch { /* friction is best-effort */ }

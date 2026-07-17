@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "_example": "INERT EXAMPLE — NOT installed by setup. `setup-claude-settings.mjs` reads ONLY settings.recommended.json, so this file is never merged into any consumer repo. Copy the PreToolUse group below into your OWN .claude/settings.json by hand if you want RTK output compression. RTK is lossy (see references/external-tools.md) — opt in deliberately, per repo.",
+  "_critical": "The exclude glob MUST keep `npm run brain:*` OUT of rewriting. brain:pack / brain:search / brain:ask emit the packed context the brain exists to provide; lossy-compressing it corrupts the very payload downstream agents read. Never drop the brain:* exclusion.",
+  "_coexistence": "This Bash PreToolUse group runs ALONGSIDE the brain's own Bash PreToolUse nudge (brain-route-tool.mjs --surface bash, from #17) — Claude Code runs every matching hook. Keep RTK from rewriting the brain's own `brain:*` invocations so the nudge matchers still see the real command.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rtk hook --exclude 'npm run brain:*' --exclude 'brain:*' || true"
+          }
+        ]
+      }
+    ]
+  }
+}

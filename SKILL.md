@@ -53,7 +53,7 @@ Full policy, splitting heuristics, and step-by-step operating-mode runbooks: [`r
 - `brain:search` — low-level semantic search (`--terse` one-line hits, `--summary-only`, `--modules-only`).
 - `brain:symbol` / `brain:impact` — exact symbol lookup / blast-radius for a symbol.
 - `brain:pack` — budgeted context pack (`--mode resume|minimal`, `--max-tokens`).
-- `brain:graph` / `brain:diagram` — dependency graph / Mermaid·drawio projection of the index (`--stats` for counts; always `--write <file>` in a session — the full JSON can be multi-MB).
+- `brain:graph` / `brain:diagram` — dependency graph / Mermaid·drawio projection of the index (`--stats` for counts; `--path <from> <to>` answers "how does X reach Y?"; always `--write <file>` in a session — the full JSON can be multi-MB).
 
 **Reason & act axes**
 - `brain:explain` — reasoning cache: `save`/`check` durable cited explainers.
@@ -63,6 +63,7 @@ Full policy, splitting heuristics, and step-by-step operating-mode runbooks: [`r
 - `brain:gaps` — deterministic self-audit: what the brain does NOT know / is stale on.
 - `brain:why` — git archaeology: `ingest` history, then query "why is this like this?".
 - `brain:learn` — grow the eval set from real usage (never changes ranking).
+- `brain:reflect` — outcome-tagged learning loop: `record <id> --outcome useful|dead_end|corrected` (append-only sidecar), then aggregate into deterministic lessons (decay + ≥2-corroboration gate + contested flag + prune). No LLM, no ranking change — details in `references/commands.md`.
 
 **Proactive / pre-touch**
 - `brain:route` — rank the next action(s); `--auto` runs the safe subset. `--hook` = ambient.
@@ -75,6 +76,7 @@ Full policy, splitting heuristics, and step-by-step operating-mode runbooks: [`r
 - `brain:worktree` — spawn/list/remove parallel git-worktree workers.
 - `brain:lease` / `brain:session` — file leases / branch-scoped short-lived work context.
 - `brain:compact` — bounded resume slice for handoff / token reload.
+- `brain:close` — end-of-session retrospective: collects digest, open leases, ADR/learn candidates + a commit SUGGESTION (never commits). Run it when wrapping up a session.
 
 **PR & quality gates**
 - `brain:pr` — prepare a PR body from diff + workstream state.
@@ -111,7 +113,8 @@ Detail is bundled beside this skill and loaded only when needed — keep the cor
 - [`references/retrieval-internals.md`](references/retrieval-internals.md) — generated files, what the local index is, freshness/drift, ranking limits, graph-expanded retrieval, eval methodology, swappable embedding models, contextual retrieval.
 - [`references/tuning.md`](references/tuning.md) — index recovery/reset and performance / cap-tuning environment variables.
 - [`references/fleet.md`](references/fleet.md) — multi-repo fleet mode (cross-project edges) and spec-kit integration.
-- [`references/hooks.md`](references/hooks.md) — ambient hooks: prompt-time routing (ADR 0023) + the fail-open tool-time `PreToolUse` nudge toward `brain:search`/`brain:ask` (ADR 0026).
+- [`references/hooks.md`](references/hooks.md) — ambient hooks: prompt-time routing (ADR 0023), the fail-open tool-time `PreToolUse` nudge toward `brain:search`/`brain:ask` (ADR 0026), and the `PostToolUse` post-edit dirty-file staging + opt-in post-commit `brain:sync --if-stale` that close the staleness window at the source (issue #35).
+- [`references/external-tools.md`](references/external-tools.md) — honest trade-offs for optional third-party tools: RTK output compression (lossy, opt-in, inert example, `brain:*` exclusion, hook coexistence) and the Caveman reality note (saves output tokens, not thinking).
 
 ## Response behavior
 

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { JSON_INDEX, LANCE_DIR, ensureDir, read } from './common.mjs';
+import { JSON_INDEX, LANCE_DIR, ensureDir, read, shrinkGuard } from './common.mjs';
 
 export const TABLE_NAME = 'brain_records';
 
@@ -31,7 +31,15 @@ export class JsonStore extends BrainStore {
     this.path = options.path || JSON_INDEX;
     this.model = options.model || null;
     this.disabled = false;
+    // Shrink-guard (#20 item 1): a run started with --force (or
+    // BRAIN_FORCE_SHRINK=1) may deliberately shrink the index; otherwise a
+    // significant record-count drop is blocked as a suspected truncation.
+    this.force = Boolean(options.force) || process.env.BRAIN_FORCE_SHRINK === '1';
     this.records = this.readRecords();
+    // Baseline for the guard: what's currently on disk. Updated after each
+    // successful persist so incremental deletes compare against the last
+    // written snapshot, not the original cold-start count.
+    this._persistedCount = this.records.length;
   }
 
   readRecords() {
@@ -62,11 +70,23 @@ export class JsonStore extends BrainStore {
     }
   }
 
-  persist() {
+  persist(opts = {}) {
     // If the mirror was already disabled at read time (too big / unreadable),
     // skip writes too — keeping the on-disk file frozen is preferable to
     // either crashing or doubling down on a corrupted snapshot.
     if (this.disabled) return;
+    // Shrink-guard: refuse to overwrite a healthy index with a significantly
+    // smaller one unless this run is forced (or the caller opts out, e.g.
+    // auto-recovery reseeding the mirror from the current batch).
+    const guard = shrinkGuard({
+      oldCount: this._persistedCount,
+      newCount: this.records.length,
+      force: opts.force || this.force,
+    });
+    if (guard.blocked) {
+      console.warn(`Project Brain shrink-guard: ${guard.reason}`);
+      return;
+    }
     if (this.records.length > JSON_MIRROR_MAX_RECORDS) {
       console.warn(`Project Brain: JSON mirror would hold ${this.records.length} records ` +
         `(cap ${JSON_MIRROR_MAX_RECORDS}). Disabling mirror writes for this run. ` +
@@ -105,6 +125,8 @@ export class JsonStore extends BrainStore {
         }
         throw renameErr;
       }
+      // Snapshot on disk now matches this.records — advance the guard baseline.
+      this._persistedCount = this.records.length;
     } catch (error) {
       if (fd !== undefined) {
         try { fs.closeSync(fd); } catch {}
@@ -236,7 +258,10 @@ export class LanceStore extends BrainStore {
     try {
       this.mirror.records = (seedRecords || []).map(normalizeRecord);
       if (this.model) this.mirror.model = this.model;
-      this.mirror.persist();
+      // Auto-recovery deliberately reseeds the mirror from the current batch,
+      // which is expected to be far smaller than the corrupt snapshot — force
+      // past the shrink-guard rather than block a recovery.
+      this.mirror.persist({ force: true });
     } catch (error) {
       if (this.mirrorStrict) throw error;
       console.warn(`Project Brain mirror reset failed: ${error.message || error}`);
@@ -458,20 +483,20 @@ export class QdrantStore extends BrainStore {
 export async function openStore(options = {}) {
   const requested = options.backend || process.env.BRAIN_STORE || 'auto';
   if (requested === 'qdrant') {
-    if (!process.env.BRAIN_QUIET) console.log('Project Brain store: qdrant');
+    if (!process.env.BRAIN_QUIET) console.error('Project Brain store: qdrant');
     return new QdrantStore(options);
   }
   if (requested !== 'json') {
     try {
       const lancedb = await import('@lancedb/lancedb');
-      if (!process.env.BRAIN_QUIET) console.log('Project Brain store: lance');
+      if (!process.env.BRAIN_QUIET) console.error('Project Brain store: lance');
       return new LanceStore(lancedb, options).open();
     } catch (error) {
       if (requested === 'lance') throw error;
       console.warn('Project Brain store: json fallback (@lancedb/lancedb unavailable)');
     }
   } else {
-    if (!process.env.BRAIN_QUIET) console.log('Project Brain store: json');
+    if (!process.env.BRAIN_QUIET) console.error('Project Brain store: json');
   }
   return new JsonStore(options);
 }
