@@ -14,8 +14,13 @@
  *                    the whole corpus — distinguishes candidate-generation
  *                    misses from ranking misses (see docs/eval-failure-analysis.md)
  *   --out <path>     write the full JSON report to a file; stdout then gets
- *                    the summary only (use BRAIN_QUIET=1 to silence the store
- *                    banner when redirecting stdout instead)
+ *                    the summary only
+ *
+ * The store/model preamble ("Project Brain store: ...", "Loading local
+ * embedding model: ...") goes to STDERR, so stdout is pure JSON and
+ * `node scripts/brain-eval.mjs --hard-only > r.json` is directly valid and
+ * pipeable into brain:eval:compare. (BRAIN_QUIET=1 still silences the banner
+ * entirely.)
  */
 import fs from 'node:fs';
 import { BRAIN_DIR, read, write, peekOption } from './common.mjs';
