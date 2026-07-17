@@ -14,6 +14,7 @@ export const MANIFEST = path.join(BRAIN_DIR, 'index_manifest.json');
 export const SYNC_STATE = path.join(BRAIN_DIR, '.sync-state.json');
 export const SYNC_BG_LOG = path.join(BRAIN_DIR, '.sync-bg.log');
 export const USAGE_LOG = path.join(BRAIN_DIR, '.usage.jsonl');
+export const DIRTY_FILES = path.join(BRAIN_DIR, '.dirty-files');
 
 export function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); }
 export function exists(p) { return fs.existsSync(p); }
@@ -66,6 +67,7 @@ export function classifyChange(file) {
   if (!file) return 'ignored';
   if (file.startsWith('.project-brain/sessions/')) return 'ignored';
   if (file.startsWith('.project-brain/.sync-')) return 'ignored';
+  if (file === '.project-brain/.dirty-files') return 'ignored';
   if (file === '.project-brain/.usage.jsonl') return 'ignored';
   if (file.startsWith('.project-brain/') && /\.md$/i.test(file)) return 'brain-relevant';
   return 'code-relevant';
@@ -90,6 +92,82 @@ export function readSyncState() {
 export function writeSyncState(state) {
   ensureDir(BRAIN_DIR);
   atomicWrite(SYNC_STATE, JSON.stringify({ ts: new Date().toISOString(), ...state }, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// "Which files changed" primitive (issue #35) — the post-edit dirty-file
+// staging list, shared between the PostToolUse hook (producer) and
+// `brain:sync --if-stale` (consumer). It closes the staleness window at the
+// source: the moment a file is edited, its path is staged here; the next sync
+// re-indexes exactly those files (bounded, no full-corpus cost). It is a cheap
+// signal + accelerator only — the index manifest stays the source of truth, so
+// losing/clearing this list never corrupts anything (sync's hash-diff recovers).
+// Coordinates with the #23 query-time staleness banner (retrieval.staleResults),
+// which is the read-time consumption side of the same "drifted files" idea.
+// ---------------------------------------------------------------------------
+
+// Trees the brain never indexes / would never re-sync — never stage them (and
+// crucially exclude `.project-brain` itself so the hook can't stage its own
+// bookkeeping and loop). Mirrors the exclusions in brain-route-tool's matcher.
+const DIRTY_EXCLUDE_RE = /(^|\/)(node_modules|\.git|dist|build|\.next|out|coverage|vendor|\.project-brain|\.cache|\.venv|__pycache__|\.worktrees)(\/|$)/;
+const DIRTY_GENERATED_RE = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|composer\.lock|Cargo\.lock)$/;
+
+/**
+ * PURE. Normalise a raw edited path into a repo-relative, forward-slashed path
+ * worth staging — or '' when it is not something the brain would re-index
+ * (outside root, generated lockfile, or in a vendored/build/brain-internal
+ * tree). Never touches disk. `opts.root` defaults to ROOT.
+ */
+export function dirtyPathFor(rawPath, opts = {}) {
+  const root = opts.root || ROOT;
+  let s = String(rawPath || '').trim();
+  if (!s) return '';
+  if (path.isAbsolute(s)) {
+    const rel = path.relative(root, s);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return ''; // outside root
+    s = rel;
+  }
+  s = s.split(path.sep).join('/').replace(/^\.\//, '');
+  if (!s || s.startsWith('../')) return '';
+  if (DIRTY_EXCLUDE_RE.test(s)) return '';
+  if (DIRTY_GENERATED_RE.test(s)) return '';
+  return s;
+}
+
+/** Read the staged dirty-file list (deduped, order-preserving). Missing/corrupt → []. */
+export function readDirtyFiles(dirtyPath = DIRTY_FILES) {
+  try {
+    const raw = read(dirtyPath, '');
+    if (!raw) return [];
+    const seen = new Set();
+    const out = [];
+    for (const line of raw.split('\n')) {
+      const t = line.trim();
+      if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+    }
+    return out;
+  } catch { return []; }
+}
+
+/**
+ * Append one already-normalised relative path to the dirty list, atomically and
+ * deduped. Returns true when newly added, false when empty/duplicate. Bounded:
+ * dedup keeps the file from growing without limit. Atomic via atomicWrite
+ * (read → dedup → rename) so a concurrent reader never sees a torn line.
+ */
+export function appendDirtyFile(relPath, dirtyPath = DIRTY_FILES) {
+  const rel = String(relPath || '').trim();
+  if (!rel) return false;
+  const cur = readDirtyFiles(dirtyPath);
+  if (cur.includes(rel)) return false;
+  cur.push(rel);
+  atomicWrite(dirtyPath, cur.join('\n') + '\n');
+  return true;
+}
+
+/** Clear the staged dirty-file list (best-effort; absent → no-op). */
+export function clearDirtyFiles(dirtyPath = DIRTY_FILES) {
+  try { if (exists(dirtyPath)) fs.unlinkSync(dirtyPath); } catch { /* soft — never throw */ }
 }
 
 export function gitBranchSafe() {
