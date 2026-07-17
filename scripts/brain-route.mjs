@@ -29,6 +29,7 @@ import {
   ROOT, BRAIN_DIR, exists, read, atomicWrite, sha256, takeFlag, takeOption, gitBranchSafe,
   staleIndexFromRecords, isFastMode
 } from './common.mjs';
+import { noteFriction } from './friction.mjs';
 
 const CONTEXT_INDEX = path.join(BRAIN_DIR, 'context_index.md');
 const JSON_INDEX = path.join(BRAIN_DIR, 'search_index.json');
@@ -477,6 +478,13 @@ export function buildHookPayload(event, text, maxBytes = hookMaxBytes()) {
 function emitHook(event, text) {
   const payload = buildHookPayload(event, text);
   if (!payload) return 0;
+  // Friction sensor (#28): if the hook byte cap (#22) truncated the injected
+  // text, signal a truncation event. Gated inside noteFriction — a no-op with no
+  // extra work when BRAIN_FRICTION_LOG is off, so the hot hook path pays nothing.
+  const max = hookMaxBytes();
+  if (text && Buffer.byteLength(String(text), 'utf8') > max) {
+    noteFriction({ kind: 'truncation', cmd: 'route', detail: `hook ${String(event || '').toLowerCase()} output exceeded the ${max}-byte cap` });
+  }
   process.stdout.write(payload);
   return 0;
 }
