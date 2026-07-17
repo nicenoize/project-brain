@@ -3,6 +3,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execSync, spawnSync } from 'node:child_process';
 import { buildUsageRecord, usageCmdFromScript } from './usage.mjs';
+// Static import forms a benign ESM cycle (common↔friction): friction never
+// touches common's bindings at load time, and it defers findings.mjs to a lazy
+// require, so importing it here does NOT evaluate findings.mjs during common's
+// own init. See friction.mjs's header + the createRequire note there.
+import { instrumentFriction } from './friction.mjs';
 
 export const ROOT = process.cwd();
 export const BRAIN_DIR = path.join(ROOT, '.project-brain');
@@ -542,3 +547,10 @@ export function instrumentUsage(argv = process.argv) {
 
 // Arm the ledger at import time (the choke point). No-op unless BRAIN_USAGE_LOG=1.
 instrumentUsage();
+
+// Arm the friction sensors at import time (issue #28) — the QUALITY-event
+// sibling of the usage ledger above. instrumentFriction() is a no-op (single env
+// check, no listeners, no writes) unless BRAIN_FRICTION_LOG=1, and registers its
+// exit handler SYNCHRONOUSLY so a process.exit(1) failure is still captured. The
+// try/catch keeps self-observation from ever breaking a command.
+try { instrumentFriction(); } catch { /* friction is best-effort */ }
