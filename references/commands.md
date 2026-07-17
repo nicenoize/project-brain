@@ -225,6 +225,19 @@ npm run brain:learn -- suggest                                     # propose an 
 ```
 `capture` stages (gitignored); `promote` is the explicit, reviewable step that grows `eval.json` (file-level cases, not tagged `Hard:`). Nothing here changes ranking or runs automatically. See `decisions/0019`.
 
+### End-of-session retrospective (`brain:close`)
+
+The "/close" pattern: run it **when wrapping up a session** so the next one doesn't rebuild context from scratch. It DETERMINISTICALLY collects and prints a structured checklist — the brain gathers, the agent synthesizes (no LLM in the brain):
+
+```bash
+npm run brain:close                      # print the checklist + append a session-log entry
+npm run brain:close -- --json            # machine-readable
+npm run brain:close -- --dry-run         # print only; writes nothing (not even the session-log)
+npm run brain:close -- --transcript <p>  # also scrape Decided/Memory/Followup tags from a transcript
+```
+
+Sections: **session digest** (tags the digest hook scraped into `sessions/`), **open leases** (from `active_state.md`), **ADR candidates** (open/planned findings worth a decision record), **brain:learn candidates** (staged eval cases), and a **commit-message SUGGESTION** derived from `git status --short` / `git diff --stat`. The commit line is a suggestion only — `brain:close` never stages or commits (the human-merge boundary stays). It writes **only** a session-log entry under `.project-brain/sessions/` (gitignored, derived); never a record under `decisions/` or `findings/`. On a clean/quiet repo it prints a minimal note. `brain:route` recommends it on end-of-session intent (close / end session / sign off / retro). See issue #27.
+
 The router decides between direct file read, symbol search, doc summary, module summary, vector search, or budgeted pack. Only fall back to the lower-level commands when the router result is insufficient:
 
 ```bash

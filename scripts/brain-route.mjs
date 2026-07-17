@@ -203,6 +203,13 @@ function finalize(recs, signals, opts = {}) {
       recs.push({ rank: 2, command: 'brain:ask', args: [`"${opts.intent}"`], boundary: 'auto',
         reason: 'question intent — delegate retrieval to brain:ask (it picks file/symbol/doc/vector/pack)', signals: ['intent'] });
     }
+    // End-of-session intent → collect the close checklist (digest, leases,
+    // ADR/learn candidates, commit suggestion). Distinct from 'wrap'→compact:
+    // close is the retrospective, compact is the resume slice.
+    if (/\b(close|end session|end of session|sign off|sign-off|retro|retrospective|wrap up|wrap-up)\b/.test(intent)) {
+      recs.push({ rank: 3, command: 'brain:close', args: [], boundary: 'auto',
+        reason: 'end-of-session intent — collect the close checklist (digest, leases, ADR/learn candidates, commit suggestion)', signals: ['intent'] });
+    }
     const boosts = [
       [/\b(pr|pull request|ship|merge|review)\b/, ['brain:pr', 'brain:guard']],
       [/\b(refactor|rewrite|change|auth|billing|schema)\b/, ['brain:ticket']],
