@@ -9,8 +9,16 @@
  * decision / sourceKind during the per-file indexing loop.
  */
 import path from 'node:path';
+import { rationaleEnabled } from './rationale.mjs';
 
 export function inferType(file) {
+  // Rationale records (decisions/0029, issue #29) — WHY:/NOTE:/HACK: comments
+  // and ADR/RFC citations lifted out of code. Env-gated (BRAIN_RATIONALE=1) so
+  // the default taxonomy is byte-identical when the flag is unset. Collision-
+  // checked: 'rationale' is not returned by any other branch. The records are
+  // synthesized in-memory by brain-index.mjs (type set explicitly there); this
+  // branch only fires if a rationale record were ever materialized to a file.
+  if (rationaleEnabled() && file.includes('.project-brain/rationale/')) return 'rationale';
   // Spec-kit artifacts (see decisions/0012-spec-kit-integration.md). Matched
   // strictly so an app's existing `specs/` test directory doesn't get mistaken
   // for a spec-kit feature folder — only specs/<id>/{spec,plan,tasks}.md hit.

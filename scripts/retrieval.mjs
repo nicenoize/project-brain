@@ -572,7 +572,11 @@ function trimStr(v) {
 function recordMatches(record, filter) {
   if (filter.summaryOnly && !record.isSummary) return false;
   if (filter.modulesOnly && !record.isModuleSummary) return false;
-  if (filter.type && record.type !== filter.type) return false;
+  if (filter.type) {
+    // String filter is unchanged; array widens to a set (brain:why + rationale).
+    const types = Array.isArray(filter.type) ? filter.type : [filter.type];
+    if (!types.includes(record.type)) return false;
+  }
   if (filter.file && record.file !== filter.file) return false;
   if (filter.project) {
     const allowed = Array.isArray(filter.project) ? filter.project : String(filter.project).split(',').map(s => s.trim()).filter(Boolean);

@@ -8,6 +8,7 @@ import { loadTsSemanticContext } from './ts-graph.mjs';
 import { discoverProjects, isFleetMode } from './projects.mjs';
 import { inferType, inferModule, inferFeature, inferDecision, inferSourceKind } from './infer.mjs';
 import { contextualChunksEnabled, situateEmbeddingText, repoLabel } from './contextual.mjs';
+import { rationaleEnabled, extractRationale, buildRationaleRecord } from './rationale.mjs';
 import { runDetectors } from './edges/index.mjs';
 import { candidateToRecord } from './edges/materialize.mjs';
 import {
@@ -235,6 +236,35 @@ for (const file of changedFiles) {
       vector: vectors[i],
       ...sessionCoord
     });
+  }
+
+  // Rationale extraction (issue #29) — DORMANT unless BRAIN_RATIONALE=1. Lifts
+  // WHY:/NOTE:/HACK: comments + ADR/RFC citations out of CODE files into
+  // dedicated `type: rationale` records with file/line provenance. Fully gated:
+  // with the flag unset this block is skipped and the index is byte-identical.
+  if (rationaleEnabled() && inferSourceKind(file) === 'code') {
+    const findings = extractRationale(doc.body);
+    if (findings.length) {
+      const rationaleRecords = findings.map(finding => buildRationaleRecord(file, finding, hash, {
+        module: fileModule,
+        feature: fileFeature,
+        decision: inferDecision(file, doc.data),
+        project: fileProject,
+        sourceKind: 'code',
+        mtime: stat.mtime.toISOString()
+      }));
+      const rationaleVectors = await embedder.embedBatch(rationaleRecords.map(record => record.embeddingText));
+      for (let i = 0; i < rationaleRecords.length; i++) rationaleRecords[i].vector = rationaleVectors[i];
+      records.push(...rationaleRecords);
+      // Audit: extraction must be PRINTED so it's never hidden/invented (house rule).
+      const counts = findings.reduce((acc, finding) => {
+        const key = finding.marker || 'ADR/RFC';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+      const summary = Object.entries(counts).map(([kind, n]) => `${kind}:${n}`).join(' ');
+      process.stderr.write(`[brain:rationale] ${file} — ${findings.length} record(s) [${summary}]\n`);
+    }
   }
 }
 
