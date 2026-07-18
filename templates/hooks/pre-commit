@@ -11,4 +11,14 @@ npm run brain:guard
 # Sync defers to the smart router. BRAIN_BACKGROUND=1 lets the script
 # self-decide foreground vs detached background. BRAIN_FAST=1 skips
 # entirely (use for fast iteration loops).
-BRAIN_BACKGROUND=1 npm run brain:sync || true
+#
+# Dedupe guard: only spawn a new background indexer if one isn't
+# already running. Without this, a batch of commits piles up N
+# indexer processes that each consume ~60% CPU + thrash the on-disk
+# Lance table; the dev server starves. Single in-flight indexer is
+# enough — it picks up every change in the next sweep.
+if pgrep -f "skills/project-brain/scripts/brain-index\.mjs" >/dev/null 2>&1; then
+  echo "Brain sync already in flight; skipping spawn (will be picked up on next sweep)."
+else
+  BRAIN_BACKGROUND=1 npm run brain:sync || true
+fi
