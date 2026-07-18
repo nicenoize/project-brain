@@ -552,7 +552,12 @@ export function normalizeRecord(record) {
 export function matchesFilter(record, filter = {}) {
   if (filter.summaryOnly && !record.isSummary) return false;
   if (filter.modulesOnly && !record.isModuleSummary) return false;
-  if (filter.type && record.type !== filter.type) return false;
+  if (filter.type) {
+    // String filter behaves exactly as before; array widens to a set (used by
+    // brain:why when BRAIN_RATIONALE=1 to also surface `rationale` records).
+    const types = Array.isArray(filter.type) ? filter.type : [filter.type];
+    if (!types.includes(record.type)) return false;
+  }
   if (filter.file && record.file !== filter.file) return false;
   if (filter.project) {
     const allowed = Array.isArray(filter.project) ? filter.project : String(filter.project).split(',').map(s => s.trim()).filter(Boolean);

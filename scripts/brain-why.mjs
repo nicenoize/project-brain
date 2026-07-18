@@ -44,6 +44,7 @@ import {
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
 import { retrieve } from './retrieval.mjs';
+import { rationaleEnabled } from './rationale.mjs';
 
 export const HISTORY_DIR = path.join(BRAIN_DIR, 'history');
 
@@ -368,7 +369,10 @@ async function cmdQuery(args, query) {
   try {
     results = await retrieve(query, store, embedder, {
       topK,
-      filter: { type: 'history' }
+      // Default: only git-history records. With BRAIN_RATIONALE=1 (default-off,
+      // issue #29) also surface `rationale` records lifted from code comments.
+      // Flag-off is byte-identical: the filter stays the plain string 'history'.
+      filter: { type: rationaleEnabled() ? ['history', 'rationale'] : 'history' }
     });
   } finally {
     await store.close();
