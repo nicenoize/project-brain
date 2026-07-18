@@ -44,6 +44,9 @@ if (manifest.model && manifest.model !== embedder.modelName) {
 const store = await openStore({ model: manifest.model || embedder.modelName, dims: manifest.dims || embedder.dims });
 const taskId = String(taskOpt || process.env.BRAIN_TASK || '').trim();
 const actor = String(actorOpt || process.env.BRAIN_ACTOR || '').trim();
+// Capture the query-expansion audit only when BRAIN_QUERY_EXPAND=1 (issue #19).
+// With the flag off, no trace is passed and the output is byte-identical.
+const expandTrace = process.env.BRAIN_QUERY_EXPAND === '1' ? {} : null;
 const results = await retrieve(query, store, embedder, {
   topK: Number(process.env.BRAIN_TOP_K || 8),
   symbol,
@@ -53,7 +56,8 @@ const results = await retrieve(query, store, embedder, {
     ...(edgeKindOpt ? { edgeKind: edgeKindOpt } : {})
   },
   taskId,
-  actor
+  actor,
+  ...(expandTrace ? { trace: expandTrace } : {})
 });
 await store.close();
 
@@ -64,6 +68,7 @@ const banner = staleBanner(results);
 if (json) {
   console.log(JSON.stringify({
     query,
+    ...(expandTrace ? { expansion: expandTrace.queryExpansion || null } : {}),
     stale: process.env.BRAIN_STALE_BANNER === '0' ? [] : staleResults(results),
     results: results.map(toJsonResult)
   }, null, 2));

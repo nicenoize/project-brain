@@ -104,6 +104,29 @@ export async function retrieve(query, store, embedder, opts = {}) {
 
   const denseScores = new Map(dense.map(record => [record.id, record.score]));
 
+  // BRAIN_QUERY_EXPAND=1 (default OFF): constrained query vocabulary expansion
+  // (issue #19). Add ONLY tokens that exist in the corpus vocabulary — derived
+  // from the query by judgment-free lexical rules (camelCase/snake_case split,
+  // stemming-adjacent normalization, in-vocab compound split) — to the string
+  // the BM25/lexical-union path scores. The dense query (queryVector above) is
+  // deliberately left unchanged: these are query-side lexical additions only.
+  // Dynamic import so the flag-off path never loads the module, and lexicalQuery
+  // === query byte-for-byte when the flag is off (retrieval stays byte-identical).
+  let lexicalQuery = query;
+  if (opts.queryExpand ?? (process.env.BRAIN_QUERY_EXPAND === '1')) {
+    const { getVocabulary, expandQuery } = await import('./query-expand.mjs');
+    const vocab = opts.queryExpandVocab || await getVocabulary(store, opts.queryExpandOpts || {});
+    const expansion = expandQuery(query, vocab, opts.queryExpandOpts || {});
+    if (expansion.added.length) lexicalQuery = `${query} ${expansion.added.join(' ')}`;
+    // ALWAYS printed for auditability — the added tokens are never hidden and,
+    // by construction (intersection with `vocab`), never invented.
+    console.error(
+      `brain:query-expand +${expansion.added.length} in-vocab token(s)` +
+      `${expansion.added.length ? `: ${expansion.added.join(', ')}` : ''} — from "${query}"`
+    );
+    if (opts.trace && typeof opts.trace === 'object') opts.trace.queryExpansion = expansion;
+  }
+
   // BRAIN_LEXICAL_UNION=1 (default OFF): merge the BM25 top-N over the full
   // corpus into the candidate pool, so records that are lexically on-topic but
   // outside the dense top-`candidates` neighborhood can still be scored.
@@ -114,7 +137,7 @@ export async function retrieve(query, store, embedder, opts = {}) {
   if (lexicalUnion && !broad) {
     const unionTop = Number(opts.lexicalUnionTop || process.env.BRAIN_LEXICAL_UNION_TOP || 24);
     const allRecords = (await store.getAll()).filter(record => recordMatches(record, filter));
-    const lexical = tfidfScore(query, allRecords);
+    const lexical = tfidfScore(lexicalQuery, allRecords);
     const inPool = new Set(pool.map(record => record.id));
     const unionRecords = allRecords
       .filter(record => (lexical.get(record.id) || 0) > 0 && !inPool.has(record.id))
@@ -128,7 +151,7 @@ export async function retrieve(query, store, embedder, opts = {}) {
     }
   }
 
-  const keyword = tfidfScore(query, pool);
+  const keyword = tfidfScore(lexicalQuery, pool);
   const symbol = symbolScore(query, pool, opts);
   const maxKeyword = Math.max(1, ...keyword.values());
   const context = retrievalContext({ ...opts, query });
@@ -588,7 +611,7 @@ function recordMatches(record, filter) {
   return true;
 }
 
-function recordText(record) {
+export function recordText(record) {
   return [
     record.file,
     record.heading,
