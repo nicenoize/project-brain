@@ -116,7 +116,8 @@
     "performance-testing-review@claude-code-workflows": true,
     "full-stack-orchestration@claude-code-workflows": true,
     "javascript-typescript@claude-code-workflows": true,
-    "caveman@caveman": true
+    "caveman@caveman": true,
+    "ponytail@ponytail": true
   },
   "extraKnownMarketplaces": {
     "claude-code-workflows": {
@@ -129,6 +130,12 @@
       "source": {
         "source": "github",
         "repo": "JuliusBrussee/caveman"
+      }
+    },
+    "ponytail": {
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail"
       }
     }
   }
