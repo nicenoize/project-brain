@@ -62,6 +62,18 @@ Build order by leverage: **act first** (this change), then diagram, trust, conve
 
 All four axes shipped on `feature/eval-failure-diagnosis`: **act** ([[0017-build-native-improve-act-axis]], `brain:audit`/`brain:improve`), **recall** (`brain:diagram`), **trust** (`brain:skill-audit`), **structure** (ponytail/caveman conventions in `references/conventions.md` + `conventions.json`). Plus an autonomous loop ([[0018-autonomous-act-axis-loop]]). All additive, default-off where they change behavior, zero new npm deps.
 
+## Update (2026-08-11)
+
+Narrowed "adopt as a convention, not a dependency": ponytail is now declared in
+`templates/claude-code/settings.recommended.json` (`enabledPlugins` +
+`extraKnownMarketplaces`), mirroring how caveman was already synced there. `brain:update-skill`
+/ a fresh `setup.sh` now surfaces ponytail to Claude Code the same way it already did for
+caveman — still a Claude Code plugin the host installs, still zero new npm deps, still no
+Python/vendored code. This is strictly a settings-sync convenience, not a change to the
+recall/structure/trust/act framing above: ponytail's ladder still only becomes mechanically
+enforced where it overlaps `.project-brain/conventions.json` (`brain:guard`); the rest remains
+agent policy the plugin itself carries.
+
 ## Alternatives Considered
 - Adopt all four skills directly: rejected — duplicates the graph, the coordinator,
   and adds a Python toolchain against the Node-only / 2-dependency ethos.

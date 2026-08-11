@@ -107,6 +107,8 @@ Recommended policy: `$caveman ultra` for internal agent progress/handoffs/review
 
 Reality check: Caveman (and the optional RTK output compressor) save **output tokens only** — a small fraction of session cost — not the thinking/reasoning tokens that dominate, and both are lossy. Use them for routine high-volume output; use normal wording for anything correctness- or detail-sensitive. RTK is opt-in and ships as an inert example (`templates/claude-code/settings.rtk-example.json`, never installed by setup); its config must exclude `npm run brain:*` so it can't corrupt packed context. Full trade-offs and the RTK supply-chain verdict: [`references/external-tools.md`](references/external-tools.md).
 
+Orthogonal lever, same auto-sync path: **[ponytail](https://github.com/DietrichGebert/ponytail)** cuts generated *code* volume (YAGNI-first ladder before writing anything new) rather than prose. It's declared in `templates/claude-code/settings.recommended.json` (`enabledPlugins`/`extraKnownMarketplaces`) right next to caveman, so `brain:update-skill` / a fresh `bin/setup.sh` surfaces it to Claude Code the same way. See [`references/conventions.md`](references/conventions.md) and [`decisions/0016`](.project-brain/decisions/0016-ecosystem-skill-axis-map.md) for why it's a convention, not an npm dependency.
+
 ## API keys
 
 Default setup needs no API keys.
