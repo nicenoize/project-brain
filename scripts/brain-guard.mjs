@@ -83,7 +83,14 @@ for (const file of codeFiles) {
   if (/:\s*any\b|as\s+any\b/.test(text)) warnings.push(`${file}: contains TypeScript any usage.`);
   {
     const matches = text.match(/NEXT_PUBLIC_[A-Z0-9_]*(SECRET|TOKEN|KEY|PASSWORD)/g) || [];
-    const knownPublic = new Set(['NEXT_PUBLIC_SUPABASE_ANON_KEY', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY']);
+    const knownPublic = new Set([
+      'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+      'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+      // VAPID public key per W3C Web Push spec is intentionally public —
+      // browsers need it to subscribe. Paired NEXT_PUBLIC_VAPID_PRIVATE_KEY
+      // must NEVER appear in client bundle (server-only). 2026-05-27 WP-B7.
+      'NEXT_PUBLIC_VAPID_PUBLIC_KEY',
+    ]);
     const isConfigFile = /(env|config|settings)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(file);
     const offending = matches.filter(m => !knownPublic.has(m));
     if (offending.length && !isConfigFile) errors.push(`${file}: suspicious public env var name exposing secret-like value (${offending[0]}).`);
