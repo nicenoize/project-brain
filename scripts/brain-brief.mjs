@@ -23,6 +23,8 @@ import { execSync } from 'node:child_process';
 import { ROOT, BRAIN_DIR, read, exists, takeFlag, takeOption } from './common.mjs';
 import { activeStateJson } from './active-state.mjs';
 import { inferModule } from './infer.mjs';
+import { targetMatchesFile, UnsupportedPatternError } from './lease-overlap.mjs';
+import { fileURLToPath } from 'node:url';
 
 const DECISIONS_DIR = path.join(BRAIN_DIR, 'decisions');
 const SESSIONS_DIR = path.join(BRAIN_DIR, 'sessions');
@@ -158,22 +160,34 @@ function filesMatchingTarget(files, modules, target) {
   return unique(hits);
 }
 
-/** Simple glob/path match: exact, prefix-dir, or `*` glob → regex. */
+/**
+ * Exact / dir-prefix / glob match, delegated to the canonical
+ * lease-overlap.mjs semantics (strategy M3: one implementation, one truth —
+ * identical to git-intel's risk scoring and the future server-side check).
+ * Kept total for the advisory path: unsupported/legacy lease targets never
+ * throw here, they simply don't match.
+ */
+const warnedLegacyTargets = new Set();
+
 function targetMatchesPath(target, candidate) {
-  const t = normFile(target);
-  const c = normFile(candidate);
-  if (!t || !c) return false;
-  if (t === c) return true;
-  // directory prefix: "scripts/" or "scripts" matches "scripts/x.mjs"
-  const dirT = t.replace(/\/$/, '');
-  if (c === dirT || c.startsWith(`${dirT}/`)) return true;
-  if (t.includes('*')) {
-    const re = new RegExp('^' + t.split('*').map(escapeRe).join('.*') + '$');
-    if (re.test(c)) return true;
-    // also match the file's own segments against a bare glob like "*.mjs"
-    if (re.test(path.basename(c))) return true;
+  try {
+    return targetMatchesFile(target, candidate);
+  } catch (error) {
+    if (error instanceof UnsupportedPatternError) {
+      // Legacy rows written under the pre-M3 matcher (backslashes, `?`,
+      // braces) are invisible to every conflict check now — surface that
+      // loudly once per target instead of failing silent (review finding).
+      if (!warnedLegacyTargets.has(target)) {
+        warnedLegacyTargets.add(target);
+        console.error(
+          `[brief] WARN: lease target '${target}' uses unsupported syntax and is IGNORED by ` +
+          `conflict checks — re-create it (npm run brain:lease -- release/add) with the supported grammar.`
+        );
+      }
+      return false;
+    }
+    throw error;
   }
-  return false;
 }
 
 /** Which target files/modules does this decision reference (by body/module mention)? */
@@ -216,7 +230,6 @@ function isSpecificModule(module) { return String(module || '').includes('/'); }
 
 function normFile(f) { return String(f || '').trim().replace(/^\.\//, '').replace(/\\/g, '/'); }
 function unique(a) { return [...new Set(a)]; }
-function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function countBy(arr, fn) {
   const out = {};
   for (const x of arr) { const k = fn(x); out[k] = (out[k] || 0) + 1; }
@@ -415,7 +428,7 @@ async function main() {
 }
 
 // Only run the CLI when invoked directly (not when imported by tests).
-const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
+const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 if (invokedDirectly) {
   main().then(code => process.exit(code)).catch(err => {
     process.stderr.write(`[brain:brief] ${err.message || err}\n`);

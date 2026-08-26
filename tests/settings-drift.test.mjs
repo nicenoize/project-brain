@@ -196,3 +196,86 @@ test('additive merge preserves user-added hooks/permissions while adding recomme
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Community plugins are opt-in (decisions/0028): a plain sync must never
+// enable third-party plugins/marketplaces; the opt-in flag merges them.
+// ---------------------------------------------------------------------------
+
+test('plain sync adds no third-party plugins; opt-in flag merges them', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-community-'));
+  try {
+    const tplDir = path.join(dir, 'skills', 'project-brain', 'templates', 'claude-code');
+    fs.mkdirSync(tplDir, { recursive: true });
+    const realTpl = fileURLToPath(new URL('../templates/claude-code/settings.recommended.json', import.meta.url));
+    fs.copyFileSync(realTpl, path.join(tplDir, 'settings.recommended.json'));
+    const realCommunity = fileURLToPath(new URL('../templates/claude-code/settings.community-plugins.json', import.meta.url));
+    fs.copyFileSync(realCommunity, path.join(tplDir, 'settings.community-plugins.json'));
+
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }));
+
+    const baseEnv = { ...process.env, PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA: '1', PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS: '1' };
+    delete baseEnv.PROJECT_BRAIN_COMMUNITY_PLUGINS;
+
+    // Plain sync: no third-party keys appear.
+    let r = spawnSync(process.execPath, [SETTINGS_SCRIPT], { cwd: dir, encoding: 'utf8', env: baseEnv });
+    assert.equal(r.status, 0, `plain sync failed: ${r.stderr}`);
+    let merged = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.json'), 'utf8'));
+    assert.equal(merged.enabledPlugins, undefined, 'plain sync must not enable plugins');
+    assert.equal(merged.extraKnownMarketplaces, undefined, 'plain sync must not register marketplaces');
+
+    // Recommended template itself must carry no third-party wiring.
+    const rec = JSON.parse(fs.readFileSync(realTpl, 'utf8'));
+    assert.equal(rec.enabledPlugins, undefined, 'settings.recommended.json must not ship enabledPlugins');
+    assert.equal(rec.extraKnownMarketplaces, undefined, 'settings.recommended.json must not ship extraKnownMarketplaces');
+
+    // Opt-in: community set merges.
+    r = spawnSync(process.execPath, [SETTINGS_SCRIPT], {
+      cwd: dir, encoding: 'utf8', env: { ...baseEnv, PROJECT_BRAIN_COMMUNITY_PLUGINS: '1' }
+    });
+    assert.equal(r.status, 0, `opt-in sync failed: ${r.stderr}`);
+    merged = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.json'), 'utf8'));
+    assert.ok(merged.enabledPlugins && Object.keys(merged.enabledPlugins).length > 0, 'opt-in did not merge plugins');
+    assert.ok(merged.extraKnownMarketplaces && Object.keys(merged.extraKnownMarketplaces).length > 0, 'opt-in did not merge marketplaces');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Legacy-hook upgrade: the pre-M2 SessionStart full-cat command must be
+// rewritten to the budget-capped state digest on sync — never left to inject
+// alongside the new form (double injection).
+// ---------------------------------------------------------------------------
+
+test('sync upgrades legacy active_state cat hook to the state digest', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-legacy-hook-'));
+  try {
+    const tplDir = path.join(dir, 'skills', 'project-brain', 'templates', 'claude-code');
+    fs.mkdirSync(tplDir, { recursive: true });
+    const realTpl = fileURLToPath(new URL('../templates/claude-code/settings.recommended.json', import.meta.url));
+    fs.copyFileSync(realTpl, path.join(tplDir, 'settings.recommended.json'));
+
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    const legacy = "echo '=== Project Brain: Active State ===' && cat .project-brain/active_state.md";
+    fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: legacy }] }] }
+    }));
+
+    const r = spawnSync(process.execPath, [SETTINGS_SCRIPT], {
+      cwd: dir, encoding: 'utf8',
+      env: { ...process.env, PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA: '1', PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS: '1' }
+    });
+    assert.equal(r.status, 0, `sync failed: ${r.stderr}`);
+    assert.match(r.stdout, /legacy-hooks-upgraded:1/);
+
+    const merged = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.json'), 'utf8'));
+    const cmds = [...collectCommands(merged.hooks.SessionStart)];
+    assert.ok(!cmds.some((c) => c.includes('cat .project-brain/active_state.md')), 'legacy cat hook survived');
+    const digestCmds = cmds.filter((c) => c.includes('brain-state-digest.mjs'));
+    assert.equal(digestCmds.length, 1, `expected exactly one digest hook, got ${digestCmds.length}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

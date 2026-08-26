@@ -74,3 +74,87 @@ jobs:
           test -f .project-brain/search_index.json
           test -f .project-brain/index_manifest.json
           test -f .project-brain/context_index.md
+
+  smoke-pack:
+    name: npm pack + npx smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: project-brain
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: project-brain/package-lock.json
+      - name: Pack the package into a tarball
+        working-directory: project-brain
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+      - name: Stage a fresh host repo and install the tarball
+        run: |
+          set -euxo pipefail
+          mkdir -p host
+          cd host
+          git init -q
+          git config user.email ci@example.com
+          git config user.name ci
+          printf '{\n  "private": true,\n  "type": "module"\n}\n' > package.json
+          echo "# Demo" > README.md
+          git add . && git commit -q -m "seed"
+          # --omit=optional keeps the leg fast (no lancedb/typescript); the CLI
+          # dispatcher and guard need neither.
+          npm i -D --no-audit --no-fund --omit=optional "$RUNNER_TEMP"/project-brain-*.tgz
+      - name: CLI resolves and dispatches from the installed tarball
+        working-directory: host
+        env:
+          BRAIN_QUIET: '1'
+          BRAIN_EMBED_PROVIDER: local
+        run: |
+          set -euxo pipefail
+          npx --no-install project-brain --version
+          # guard may legitimately exit nonzero on a bare repo (branch policy,
+          # missing brain files) — assert it RAN by grepping its stable output
+          # ("Project Brain guard passed." / "Project Brain errors:").
+          out="$(npx --no-install project-brain x guard 2>&1)" || true
+          echo "$out"
+          echo "$out" | grep -q "Project Brain"
+
+  smoke-migrate:
+    name: migrate smoke (skill -> CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: project-brain
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: project-brain/package-lock.json
+      - name: Pre-seed a symlink-mode host (installer only, no indexing)
+        run: |
+          set -euxo pipefail
+          mkdir -p host/skills
+          ln -s "$PWD/project-brain" host/skills/project-brain
+          cd host
+          git init -q
+          git config user.email ci@example.com
+          git config user.name ci
+          echo "# Demo" > README.md
+          git add . && git commit -q -m "seed"
+          # setup-package writes the legacy brain:* scripts + .claude/settings.json
+          # wiring without the (slow) index build the symlink leg already covers.
+          node skills/project-brain/scripts/setup-package.mjs --yes
+          grep -q -- "--preserve-symlinks" package.json
+      - name: Run brain-migrate --yes and assert the CLI forms
+        working-directory: host
+        run: |
+          set -euxo pipefail
+          node skills/project-brain/scripts/brain-migrate.mjs --yes
+          # brain:* scripts now use the CLI (direct verbs or the x hatch) …
+          grep -q '"brain:guard": "project-brain guard"' package.json
+          grep -q '"project-brain x ' package.json
+          # … and no legacy symlink forms remain anywhere in the rewired files.
+          ! grep -q -- "--preserve-symlinks skills/" package.json
+          ! grep -q "skills/project-brain/scripts" .claude/settings.json
+          grep -q "project-brain x route" .claude/settings.json

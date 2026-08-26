@@ -27,6 +27,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { ROOT, takeFlag, takeOption } from './common.mjs';
+import { targetMatchesFile } from './lease-overlap.mjs';
 
 const SEV = { conflict: '🚨', mine: '⚠', adr: '📐', edge: '↯', finding: '🔎', impact: '💥' };
 
@@ -233,19 +234,19 @@ function leaseTargetMatches(target, file, module) {
 }
 
 /** Exact, directory-prefix, or `*`-glob match. */
+// Delegates to the canonical lease-overlap engine (M3, "one engine, one
+// truth") so radar's lease overlay can never disagree with brief/lease/intel.
+// Unsupported legacy syntax is treated as no-match, same as the other
+// advisory consumers.
 function matchesPath(target, candidate) {
   const t = normFile(target);
   const c = normFile(candidate);
   if (!t || !c) return false;
-  if (t === c) return true;
-  const dirT = t.replace(/\/$/, '');
-  if (c === dirT || c.startsWith(`${dirT}/`)) return true;
-  if (t.includes('*')) {
-    const re = new RegExp('^' + t.split('*').map(escapeRe).join('.*') + '$');
-    if (re.test(c)) return true;
-    if (re.test(path.basename(c))) return true;
+  try {
+    return targetMatchesFile(t, c);
+  } catch {
+    return false;
   }
-  return false;
 }
 
 /** Last `/`-segment of a module id (e.g. "scripts/retrieval" → "retrieval"). */
@@ -255,7 +256,6 @@ function fileStem(file) { return path.basename(String(file || ''), path.extname(
 
 function normFile(f) { return String(f || '').trim().replace(/^\.\//, '').replace(/\\/g, '/'); }
 function unique(a) { return [...new Set(a)]; }
-function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 // ---------------------------------------------------------------------------
 // I/O loaders (CLI only; fail soft → empty).

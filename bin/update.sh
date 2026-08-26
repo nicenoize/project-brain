@@ -81,7 +81,7 @@ fi
 # but user-added hooks/permissions are preserved.
 settings_synced=0
 if command -v node >/dev/null 2>&1 && [ -f "$SKILL_PATH/scripts/setup-package.mjs" ]; then
-  node "$SKILL_PATH/scripts/setup-package.mjs"
+  node "$SKILL_PATH/scripts/setup-package.mjs" --yes
   settings_synced=1
 fi
 

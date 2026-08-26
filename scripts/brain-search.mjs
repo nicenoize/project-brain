@@ -5,12 +5,15 @@
  * then re-scores candidates with BM25 + symbol matching + metadata boosts
  * (see retrieval.mjs). Filters: --summary-only, --modules-only,
  * --type code|doc|module-summary|…, --file path, --symbol name.
+ *
+ * The embedding stack is optional (M2): when @xenova/transformers is not
+ * installed (and no OPENAI_API_KEY), index-provider.mjs degrades this command
+ * to a BM25 lexical pass over the JSON mirror, with a warning on stderr.
  */
 import fs from 'node:fs';
 import { JSON_INDEX, MANIFEST, read, takeFlag, takeOption } from './common.mjs';
-import { openEmbedder } from './embed.mjs';
-import { retrieve, staleResults, staleBanner } from './retrieval.mjs';
-import { openStore } from './store.mjs';
+import { getIndexProvider } from './index-provider.mjs';
+import { staleResults, staleBanner } from './retrieval.mjs';
 import { terseHitLine, verboseHitHeader } from './search-format.mjs';
 
 const args = process.argv.slice(2);
@@ -36,17 +39,18 @@ if (!fs.existsSync(JSON_INDEX) && !fs.existsSync(MANIFEST)) {
 }
 
 const manifest = fs.existsSync(MANIFEST) ? JSON.parse(read(MANIFEST)) : {};
-const embedder = openEmbedder();
-if (manifest.model && manifest.model !== embedder.modelName) {
-  console.warn(`Index model is ${manifest.model}, but current embedder is ${embedder.modelName}. Run: npm run brain:index -- --force`);
+const provider = await getIndexProvider();
+if (provider.name === 'builtin' && manifest.model && manifest.model !== provider.modelName) {
+  console.warn(`Index model is ${manifest.model}, but current embedder is ${provider.modelName}. Run: npm run brain:index -- --force`);
 }
 
-const store = await openStore({ model: manifest.model || embedder.modelName, dims: manifest.dims || embedder.dims });
 const taskId = String(taskOpt || process.env.BRAIN_TASK || '').trim();
 const actor = String(actorOpt || process.env.BRAIN_ACTOR || '').trim();
-const results = await retrieve(query, store, embedder, {
+const { results, warning } = await provider.search(query, {
   topK: Number(process.env.BRAIN_TOP_K || 8),
   symbol,
+  model: manifest.model,
+  dims: manifest.dims,
   filter: {
     summaryOnly, modulesOnly, type,
     ...(projectOpt ? { project: projectOpt } : {}),
@@ -55,7 +59,7 @@ const results = await retrieve(query, store, embedder, {
   taskId,
   actor
 });
-await store.close();
+if (warning) console.error(warning);
 
 // Query-time staleness banner (ADR 0025): warn when a result file drifted from
 // the index. Default-on; opt-out BRAIN_STALE_BANNER=0. Output-only, no ranking.
@@ -64,6 +68,7 @@ const banner = staleBanner(results);
 if (json) {
   console.log(JSON.stringify({
     query,
+    ...(warning ? { warning, provider: provider.name } : {}),
     stale: process.env.BRAIN_STALE_BANNER === '0' ? [] : staleResults(results),
     results: results.map(toJsonResult)
   }, null, 2));
