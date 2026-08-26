@@ -1,45 +1,190 @@
+/**
+ * setup-package — consent-prompting shell over the pure install planner.
+ *
+ * Wires a host repo up to Project Brain: brain:* npm scripts + deps in
+ * package.json, .gitignore entries, PR template, CI workflow, the additive
+ * .claude/settings.json merge (setup-claude-settings.mjs) and cursor hooks.
+ *
+ * The WHAT is computed by scripts/init-plan.mjs (pure, unit-tested); this
+ * shell only prints the plan, collects consent, and applies it
+ * (docs/strategy-agent-ops.md, ADR 0028).
+ *
+ * Flags:
+ *   --dry-run   print the full plan and exit 0 — writes NOTHING, spawns nothing
+ *   --yes       apply every group without prompting (bin/setup.sh passes this)
+ *
+ * Prompting happens ONLY when stdin AND stdout are TTYs and neither flag is
+ * given. In non-TTY contexts (git post-checkout/post-merge hooks, CI,
+ * brain:update-skill from a hook) it applies everything exactly like the old
+ * installer — it must never hang on a prompt.
+ *
+ * Env bypasses are unchanged and live where they always did:
+ * PROJECT_BRAIN_SKIP_CLAUDE_SETTINGS / _CLAUDE_COMMANDS / _CAVEMAN_ULTRA are
+ * honored inside setup-claude-settings.mjs (the plan surfaces the first one).
+ */
 import fs from 'node:fs';
-import { read, write, mergePackageScripts, mergePackageDeps } from './common.mjs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { read, write } from './common.mjs';
 import { syncClaudeSettings } from './setup-claude-settings.mjs';
+import { computeInitPlan, DEFAULT_PACKAGE } from './init-plan.mjs';
+
+const args = process.argv.slice(2);
+const dryRun = args.includes('--dry-run');
+const yes = args.includes('--yes');
+const interactive = !dryRun && !yes && Boolean(process.stdin.isTTY && process.stdout.isTTY);
 
 const packagePath = 'package.json';
-let pkg = {};
-if (fs.existsSync(packagePath)) {
-  pkg = JSON.parse(read(packagePath));
-} else {
-  pkg = { private: true, type: 'module', scripts: {} };
-}
-pkg = mergePackageScripts(mergePackageDeps(pkg));
-write(packagePath, JSON.stringify(pkg, null, 2) + '\n');
 
-let ignore = read('.gitignore', '');
-const entries = ['.project-brain/vector-db/', '.project-brain/index_manifest.json', '.project-brain/search_index.json', '.project-brain/runner-logs/', '.worktrees/'];
-for (const entry of entries) {
-  if (!ignore.includes(entry)) ignore += `${ignore.endsWith('\n') || ignore === '' ? '' : '\n'}${entry}\n`;
-}
-write('.gitignore', ignore);
-
-if (!fs.existsSync('.github/PULL_REQUEST_TEMPLATE.md')) {
-  fs.mkdirSync('.github', { recursive: true });
-  fs.copyFileSync('skills/project-brain/templates/PULL_REQUEST_TEMPLATE.md', '.github/PULL_REQUEST_TEMPLATE.md');
-}
-
-if (!fs.existsSync('.github/workflows/project-brain.yml')) {
-  fs.mkdirSync('.github/workflows', { recursive: true });
-  fs.copyFileSync('skills/project-brain/templates/github-workflows/project-brain.yml', '.github/workflows/project-brain.yml');
+/** Does this group still have work to do? (drives prompts and dry-run detail) */
+function groupPending(g) {
+  switch (g.id) {
+    case 'package-scripts':
+    case 'package-deps':
+      return g.changes.length > 0;
+    case 'gitignore':
+      return g.changes.some((c) => c.action === 'append');
+    case 'templates':
+      return g.changes.some((c) => c.action === 'copy');
+    case 'claude-settings':
+      return !g.skip;
+    case 'cursor-hooks':
+      return Boolean(g.installer);
+    default:
+      return true;
+  }
 }
 
-console.log('Updated package.json, .gitignore, PR template, and GitHub workflow.');
+function describeGroup(g) {
+  switch (g.id) {
+    case 'package-scripts': {
+      const fresh = g.changes.filter((c) => c.from === null).length;
+      return `${g.changes.length} script(s) to add/refresh (${fresh} new, ${g.changes.length - fresh} refreshed)`;
+    }
+    case 'package-deps':
+      return `${g.changes.length} dependency entr${g.changes.length === 1 ? 'y' : 'ies'} to add`;
+    case 'gitignore':
+      return `${g.changes.filter((c) => c.action === 'append').length} entr${g.changes.filter((c) => c.action === 'append').length === 1 ? 'y' : 'ies'} to append`;
+    case 'templates':
+      return g.changes.map((c) => `${c.file}: ${c.action}`).join(', ');
+    case 'claude-settings':
+    case 'cursor-hooks':
+      return g.summary;
+    default:
+      return '';
+  }
+}
 
-syncClaudeSettings();
+function printPlan(plan, { detail = false } = {}) {
+  console.log('Project Brain install plan:');
+  for (const g of plan) {
+    const pending = groupPending(g);
+    console.log(`- ${g.group}: ${pending ? describeGroup(g) : 'nothing to do'}`);
+    if (!detail || !pending || !Array.isArray(g.changes)) continue;
+    for (const c of g.changes) {
+      if (g.id === 'package-scripts' || g.id === 'package-deps') {
+        console.log(`    ${c.key}: ${c.from === null ? 'add' : `refresh (was: ${c.from})`}`);
+      } else if (g.id === 'gitignore') {
+        if (c.action === 'append') console.log(`    append ${c.entry}`);
+      } else if (g.id === 'templates') {
+        console.log(`    ${c.action === 'copy' ? `copy ${c.src} -> ${c.file}` : `${c.file} exists; left untouched`}`);
+      }
+    }
+  }
+}
 
-const { spawnSync } = await import('node:child_process');
-const hookInstaller = fs.existsSync('skills/project-brain/scripts/install-cursor-hooks.mjs')
-  ? 'skills/project-brain/scripts/install-cursor-hooks.mjs'
-  : fs.existsSync('scripts/install-cursor-hooks.mjs')
-    ? 'scripts/install-cursor-hooks.mjs'
-    : '';
-if (hookInstaller) {
-  const r = spawnSync(process.execPath, [hookInstaller], { stdio: 'inherit', cwd: process.cwd() });
+/**
+ * Apply the accepted package.json groups. Same result as the old
+ * mergePackageScripts(mergePackageDeps(pkg)) + write when both groups are
+ * accepted (the merge = ensure containers + set the diffed keys).
+ */
+function applyPackageJson(plan, accepted) {
+  const wantScripts = accepted.has('package-scripts');
+  const wantDeps = accepted.has('package-deps');
+  if (!wantScripts && !wantDeps) return;
+  const pkg = fs.existsSync(packagePath)
+    ? JSON.parse(read(packagePath))
+    : structuredClone(DEFAULT_PACKAGE);
+  if (wantScripts) {
+    pkg.scripts ||= {};
+    for (const c of plan.find((g) => g.id === 'package-scripts').changes) pkg.scripts[c.key] = c.to;
+  }
+  if (wantDeps) {
+    pkg.dependencies ||= {};
+    pkg.optionalDependencies ||= {};
+    for (const c of plan.find((g) => g.id === 'package-deps').changes) {
+      pkg[c.field] ||= {};
+      pkg[c.field][c.key] = c.to;
+    }
+  }
+  write(packagePath, JSON.stringify(pkg, null, 2) + '\n');
+}
+
+function applyTemplates(group) {
+  for (const c of group.changes) {
+    if (c.action !== 'copy') continue;
+    fs.mkdirSync(path.dirname(c.file), { recursive: true });
+    fs.copyFileSync(c.src, c.file);
+  }
+}
+
+function applyCursorHooks(group) {
+  if (!group.installer) return;
+  const r = spawnSync(process.execPath, [group.installer], { stdio: 'inherit', cwd: process.cwd() });
   if (r.status) console.warn('install-cursor-hooks exited', r.status);
+}
+
+/** Ask y/n per group; empty answer = yes. Interactive TTY contexts only. */
+async function collectConsent(plan) {
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const accepted = new Set();
+  try {
+    for (const g of plan) {
+      if (!groupPending(g)) continue; // nothing to consent to
+      const answer = (await rl.question(`Apply ${g.group}? [Y/n] `)).trim().toLowerCase();
+      if (answer === '' || answer === 'y' || answer === 'yes') accepted.add(g.id);
+      else console.log(`  skipped ${g.group}`);
+    }
+  } finally {
+    rl.close();
+  }
+  return accepted;
+}
+
+try {
+  const plan = computeInitPlan({ cwd: process.cwd(), env: process.env });
+
+  if (dryRun) {
+    printPlan(plan, { detail: true });
+    console.log('Dry run: nothing was written.');
+    process.exit(0);
+  }
+
+  let accepted;
+  if (interactive) {
+    printPlan(plan, { detail: true });
+    accepted = await collectConsent(plan);
+  } else {
+    // Non-TTY / --yes: apply everything, exactly like the pre-consent installer.
+    printPlan(plan);
+    accepted = new Set(plan.map((g) => g.id));
+  }
+
+  applyPackageJson(plan, accepted);
+
+  if (accepted.has('gitignore')) write('.gitignore', plan.find((g) => g.id === 'gitignore').next);
+
+  if (accepted.has('templates')) applyTemplates(plan.find((g) => g.id === 'templates'));
+
+  const applied = plan.filter((g) => accepted.has(g.id)).map((g) => g.group);
+  if (applied.length) console.log(`Updated: ${applied.join(', ')}.`);
+
+  // Honors PROJECT_BRAIN_SKIP_CLAUDE_SETTINGS / _CLAUDE_COMMANDS / _CAVEMAN_ULTRA internally.
+  if (accepted.has('claude-settings')) syncClaudeSettings();
+
+  if (accepted.has('cursor-hooks')) applyCursorHooks(plan.find((g) => g.id === 'cursor-hooks'));
+} catch (error) {
+  process.stderr.write(`[setup-package] ${error.message || error}\n`);
+  process.exit(1);
 }
