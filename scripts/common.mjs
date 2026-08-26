@@ -301,6 +301,7 @@ export function mergePackageScripts(pkg) {
     'brain:compact': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-compact.mjs',
     'brain:prune': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-prune.mjs',
     'brain:digest': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-session-digest.mjs',
+    'brain:state-digest': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-state-digest.mjs',
     'brain:adr': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-adr.mjs',
     'brain:lint-conventions': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-lint-conventions.mjs',
     'brain:link-check': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-link-check.mjs',

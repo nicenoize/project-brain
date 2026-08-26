@@ -27,6 +27,28 @@ export const FOOTPRINT_THRESHOLDS = {
 // Pack budget default (mirrors brain-pack.mjs). Env override wins.
 export const PACK_MAX_TOKENS_DEFAULT = 2600;
 
+// Hard byte BUDGETS (docs/strategy-agent-ops.md §2b „Budgets als CI-Test“) —
+// distinct from the advisory warn thresholds above. Budgets are CI-ENFORCED:
+// tests/footprint-budget.test.mjs turns a breach into a red build, and
+// brain:health's footprint audit warns over the same constants (single source
+// of numbers — docs cite these too). Measured in BYTES because bytes are what
+// ship over the wire; tokens follow via the same len/4 heuristic
+// (12000 B ≈ 3k tok, 8000 B ≈ 2k tok).
+export const BUDGETS = {
+  // SKILL.md core — injected on every skill activation; detail belongs in references/*.md.
+  skillBytes: 12000,
+  // SessionStart state digest (brain-state-digest.mjs stdout) — replaces the
+  // historical raw `cat active_state.md` (≈30 kB ≈ 7.5k tok in the field, see
+  // header note + decisions/0024).
+  stateDigestBytes: 8000
+};
+
+/** Resolve the state-digest byte budget — BRAIN_STATE_DIGEST_BUDGET_BYTES env override wins. PURE given env. */
+export function stateDigestBudgetBytes(env = process.env) {
+  const n = Number(env && env.BRAIN_STATE_DIGEST_BUDGET_BYTES);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : BUDGETS.stateDigestBytes;
+}
+
 /** Rough token estimate: 1 token ≈ 4 bytes (len/4). PURE. */
 export function estimateTokens(bytes) {
   const n = Number(bytes);
@@ -88,6 +110,19 @@ export function footprintWarnings(fp = {}, thresholds = FOOTPRINT_THRESHOLDS) {
     warnings.push(
       `${as.file} ≈ ${as.tokens} tok (> ${thresholds.activeStateTokens} warn) — cat'd RAW into context on every SessionStart; prune it or emit a bounded digest (decisions/0024)`
     );
+  }
+  // Hard-budget breaches — evaluated only when the caller passes fp.budgets
+  // (brain-health passes BUDGETS). Still advisory here (health never fails on
+  // footprint); the red-build enforcement of the SAME numbers lives in
+  // tests/footprint-budget.test.mjs.
+  if (fp.budgets) {
+    for (const s of fp.skills || []) {
+      if (s && s.exists && s.bytes > fp.budgets.skillBytes) {
+        warnings.push(
+          `${s.file} = ${s.bytes} B (> ${fp.budgets.skillBytes} B HARD budget) — tests/footprint-budget.test.mjs fails CI on this; slim the core, move detail into references/*.md`
+        );
+      }
+    }
   }
   for (const h of fp.hooks || []) {
     if (h && h.tokens > thresholds.hookTokens) {
