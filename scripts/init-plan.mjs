@@ -35,6 +35,7 @@ export const GITIGNORE_ENTRIES = [
   '.project-brain/index_manifest.json',
   '.project-brain/search_index.json',
   '.project-brain/runner-logs/',
+  '.project-brain/runners/',
   '.worktrees/'
 ];
 
