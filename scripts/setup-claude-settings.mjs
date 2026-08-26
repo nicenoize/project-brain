@@ -116,6 +116,32 @@ export function computeSettingsDrift(installed = {}, recommended = {}) {
   };
 }
 
+/**
+ * Upgrade legacy hook commands in place before the additive merge, so an
+ * update never leaves both the old and new form injecting side by side.
+ * Currently: the pre-M2 SessionStart full `cat active_state.md` becomes the
+ * budget-capped state digest (see brain-state-digest.mjs / ADR 0024).
+ * Returns the number of rewritten commands.
+ */
+function upgradeLegacyHooks(existing = {}) {
+  const LEGACY_STATE_CAT =
+    /^echo '=== Project Brain: Active State ==='\s*&&\s*cat \.project-brain\/active_state\.md$/;
+  const DIGEST_CMD =
+    'node "$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-state-digest.mjs" || true';
+  let rewritten = 0;
+  for (const groups of Object.values(existing)) {
+    for (const group of groups ?? []) {
+      for (const hook of group.hooks ?? []) {
+        if (typeof hook?.command === 'string' && LEGACY_STATE_CAT.test(hook.command.trim())) {
+          hook.command = DIGEST_CMD;
+          rewritten += 1;
+        }
+      }
+    }
+  }
+  return rewritten;
+}
+
 function mergeHooks(existing = {}, extra = {}) {
   let added = 0;
   for (const [event, groups] of Object.entries(extra)) {
@@ -164,8 +190,9 @@ export function syncClaudeSettings() {
   );
   existing.permissions.allow = allowResult.merged;
 
-  // hooks — append non-duplicate groups per event
+  // hooks — upgrade legacy forms first, then append non-duplicate groups
   existing.hooks = existing.hooks ?? {};
+  const upgraded = upgradeLegacyHooks(existing.hooks);
   const hooksResult = mergeHooks(existing.hooks, recommended.hooks ?? {});
 
   // enabledPlugins / extraKnownMarketplaces — third-party code, opt-in only
@@ -191,6 +218,7 @@ export function syncClaudeSettings() {
     `hooks:+${hooksResult.added}`,
     `plugins:+${pluginsResult.added}`,
     `marketplaces:+${marketsResult.added}`,
+    ...(upgraded > 0 ? [`legacy-hooks-upgraded:${upgraded}`] : []),
   ].join(' ');
   console.log(`Synced .claude/settings.json (${summary}).`);
 

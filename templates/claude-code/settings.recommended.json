@@ -11,7 +11,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '=== Project Brain: Active State ===' && cat .project-brain/active_state.md"
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-state-digest.mjs\" || true"
           }
         ]
       },

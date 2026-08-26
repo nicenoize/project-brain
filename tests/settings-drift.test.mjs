@@ -242,3 +242,40 @@ test('plain sync adds no third-party plugins; opt-in flag merges them', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Legacy-hook upgrade: the pre-M2 SessionStart full-cat command must be
+// rewritten to the budget-capped state digest on sync — never left to inject
+// alongside the new form (double injection).
+// ---------------------------------------------------------------------------
+
+test('sync upgrades legacy active_state cat hook to the state digest', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-legacy-hook-'));
+  try {
+    const tplDir = path.join(dir, 'skills', 'project-brain', 'templates', 'claude-code');
+    fs.mkdirSync(tplDir, { recursive: true });
+    const realTpl = fileURLToPath(new URL('../templates/claude-code/settings.recommended.json', import.meta.url));
+    fs.copyFileSync(realTpl, path.join(tplDir, 'settings.recommended.json'));
+
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    const legacy = "echo '=== Project Brain: Active State ===' && cat .project-brain/active_state.md";
+    fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { SessionStart: [{ hooks: [{ type: 'command', command: legacy }] }] }
+    }));
+
+    const r = spawnSync(process.execPath, [SETTINGS_SCRIPT], {
+      cwd: dir, encoding: 'utf8',
+      env: { ...process.env, PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA: '1', PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS: '1' }
+    });
+    assert.equal(r.status, 0, `sync failed: ${r.stderr}`);
+    assert.match(r.stdout, /legacy-hooks-upgraded:1/);
+
+    const merged = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.json'), 'utf8'));
+    const cmds = [...collectCommands(merged.hooks.SessionStart)];
+    assert.ok(!cmds.some((c) => c.includes('cat .project-brain/active_state.md')), 'legacy cat hook survived');
+    const digestCmds = cmds.filter((c) => c.includes('brain-state-digest.mjs'));
+    assert.equal(digestCmds.length, 1, `expected exactly one digest hook, got ${digestCmds.length}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

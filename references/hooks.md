@@ -1,7 +1,7 @@
 # Ambient hooks — how the brain wires itself into the harness
 
 The brain uses the agent's own hook surface so it is *consulted automatically*,
-without the user asking. Two ambient layers, both fail-open and model-free:
+without the user asking. Three ambient layers, all fail-open and model-free:
 
 ## Prompt-time routing (ADR 0023)
 
@@ -10,6 +10,17 @@ without the user asking. Two ambient layers, both fail-open and model-free:
 injects the ranked next `brain:*` actions as `additionalContext`. Forces
 `--no-index` (model-free), surfaces only interrupt-worthy items, and always
 exits 0. Per-session dedup lives in `.project-brain/.route-hook-state.json`.
+
+## SessionStart state digest (decisions/0024 follow-up)
+
+`brain-state-digest.mjs` runs on **SessionStart** and prints a deterministic,
+byte-capped digest of `.project-brain/active_state.md` (active workstreams, open
+leases with owner/TTL, blockers, the 3 newest session pointers) instead of the
+historical raw `cat` — which cost ≈7.5k tokens per session in a real consumer.
+Hard cap: 8,000 B ≈ 2k tok (`BRAIN_STATE_DIGEST_BUDGET_BYTES`), CI-enforced by
+`tests/footprint-budget.test.mjs`; finished/expired rows drop first, then lines
+truncate with an explicit marker. Read-only, always exits 0. Distinct from
+`brain-session-digest.mjs`, the PreCompact/Stop transcript digest.
 
 ## Tool-time nudge (ADR 0026, issue #17)
 

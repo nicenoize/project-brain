@@ -17,7 +17,8 @@ import {
   measureHook,
   footprintWarnings,
   FOOTPRINT_THRESHOLDS,
-  PACK_MAX_TOKENS_DEFAULT
+  PACK_MAX_TOKENS_DEFAULT,
+  BUDGETS
 } from './footprint.mjs';
 import { computeSettingsDrift } from './setup-claude-settings.mjs';
 
@@ -45,7 +46,9 @@ function contextFootprintReport() {
     BRAIN_PACK_MAX_TOKENS: Number(process.env.BRAIN_PACK_MAX_TOKENS) || PACK_MAX_TOKENS_DEFAULT
   };
 
-  const fp = { skills, activeState, hooks, packDefaults, thresholds: FOOTPRINT_THRESHOLDS };
+  // budgets: the HARD CI numbers (tests/footprint-budget.test.mjs) — passing
+  // them makes footprintWarnings also flag hard-budget breaches here.
+  const fp = { skills, activeState, hooks, packDefaults, thresholds: FOOTPRINT_THRESHOLDS, budgets: BUDGETS };
   fp.warnings = footprintWarnings(fp, FOOTPRINT_THRESHOLDS);
   return fp;
 }

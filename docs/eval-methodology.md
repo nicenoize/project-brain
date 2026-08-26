@@ -161,6 +161,34 @@ Record before/after against this table for each planned improvement:
 The durable deliverable is the measurement discipline itself (the #8 lesson): a
 committed baseline plus a running ledger, not a point-in-time claim.
 
+### After — M2 token-budget cut (2026-08-27): digest + CI-enforced budgets
+
+The two big rows in the baseline table are now bounded by construction instead of
+by vigilance (the table above stays as the "before"):
+
+- **SessionStart digest replaces the raw cat.** `settings.recommended.json` no
+  longer cats `active_state.md` into every session start; it runs
+  `scripts/brain-state-digest.mjs` — a deterministic, read-only digest (active
+  workstreams, open leases with owner/TTL, blockers, the 3 most recent session
+  pointers; finished workstreams and expired leases are dropped first, then whole
+  lines are truncated with an explicit `[digest truncated — run: project-brain x
+  health]` marker). Hard byte cap: **8,000 B ≈ 2,000 tok**
+  (`BRAIN_STATE_DIGEST_BUDGET_BYTES` overrides). Against the club-ops baseline
+  that turns ≈7,555 tok into ≤2,000 tok worst-case (a 30-workstream/20-lease
+  fixture digests to 7,722 B ≈ 1,930 tok); the quiet dev repo emits ~430 B.
+  Not to be confused with `brain-session-digest.mjs`, the PreCompact/Stop
+  transcript digest.
+- **SKILL.md core pinned.** The #26 lean core (9,609 B ≈ 2,402 tok at budget
+  time; the ≈16k-tok pre-split file is the "before" above) now sits under a hard
+  budget of **12,000 B ≈ 3,000 tok**.
+- **Budgets are a CI test, not a vow** (strategy §2b). Both numbers live in one
+  place — `BUDGETS` in `scripts/footprint.mjs` — and
+  `tests/footprint-budget.test.mjs` turns a breach into a red build: SKILL.md
+  size, digest output on the worst-case fixture (pure core **and** end-to-end
+  through the real script), and the template's SessionStart hook actually
+  invoking the digest instead of a raw cat. `brain:health`'s footprint audit
+  warns over the same constants (advisory, as decisions/0024 mandates).
+
 ## Hard-case classes — per-class breakdown + provenance (#33)
 
 The old hard subset (n≤84) was too small to trust point estimates: the #8
