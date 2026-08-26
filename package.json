@@ -4,6 +4,9 @@
   "private": true,
   "description": "Local semantic project brain scripts for agent skill usage.",
   "type": "module",
+  "bin": {
+    "project-brain": "bin/cli.mjs"
+  },
   "scripts": {
     "brain:init": "node scripts/brain-init.mjs",
     "brain:index": "node scripts/brain-index.mjs",
