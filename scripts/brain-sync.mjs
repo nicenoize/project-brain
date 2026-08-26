@@ -90,6 +90,20 @@ if (isFastMode() && !force) {
   process.exit(0);
 }
 
+// M2: embedding stack is optional. Without a usable index provider a sync has
+// nothing to re-embed — skip with a warning and exit 0 (hook-safe), before any
+// hash-scan work. Cheap: the availability probe resolves the module without
+// loading it.
+{
+  const { getIndexProvider } = await import('./index-provider.mjs');
+  const indexProvider = await getIndexProvider();
+  if (indexProvider.name === 'none') {
+    console.warn(`Project Brain sync: skipped — ${indexProvider.reason}. ${indexProvider.warning}`);
+    writeSyncState({ action: 'skip', reason: `index provider unavailable (${indexProvider.reason})`, branch: gitBranchSafe() });
+    process.exit(0);
+  }
+}
+
 if (ifStale && !force && !readDirtyFiles().length) {
   console.log('Project Brain sync: nothing staged (--if-stale no-op).');
   process.exit(0);

@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ROOT, BRAIN_DIR, read, isFastMode } from './common.mjs';
+import { getIndexProvider } from './index-provider.mjs';
 import { looksArchitecturalQuery } from './retrieval.mjs';
 
 const argv = process.argv.slice(2);
@@ -52,12 +53,17 @@ if (!query) {
 
 const decision = classify(query, { forceVector: flags.has('--force-vector') });
 
+// M2: the embedding stack is optional. Routing itself is vector-free, and the
+// spawned brain-search/brain-pack children degrade (and warn) on their own —
+// we only annotate the route line so the fallback is visible up front.
+const indexProvider = await getIndexProvider();
+
 if (flags.has('--explain')) {
-  console.log(JSON.stringify({ query, decision, fastMode: isFastMode() }, null, 2));
+  console.log(JSON.stringify({ query, decision, fastMode: isFastMode(), indexProvider: indexProvider.name }, null, 2));
   process.exit(0);
 }
 
-console.log(`brain:ask route=${decision.route}${decision.detail ? ' (' + decision.detail + ')' : ''}${isFastMode() ? ' [fast]' : ''}`);
+console.log(`brain:ask route=${decision.route}${decision.detail ? ' (' + decision.detail + ')' : ''}${isFastMode() ? ' [fast]' : ''}${indexProvider.name === 'none' ? ' [lexical fallback]' : ''}`);
 
 const childEnv = withBrainCoord(isFastMode() ? { ...process.env, BRAIN_STORE: 'json' } : process.env);
 const searchScript = new URL('./brain-search.mjs', import.meta.url).pathname;
