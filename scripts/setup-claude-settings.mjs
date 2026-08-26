@@ -8,8 +8,10 @@
  *     `permissions.allow`), only add missing keys/entries
  *
  * Called from setup-package.mjs at the end of `brain:update-skill`, so
- * consumers automatically get the brain's hook wiring and the
- * recommended plugin/marketplace set when they update the skill.
+ * consumers automatically get the brain's hook wiring when they update
+ * the skill. Third-party plugins/marketplaces are NEVER merged silently:
+ * they live in settings.community-plugins.json and require
+ * PROJECT_BRAIN_COMMUNITY_PLUGINS=1 or --community-plugins (decisions/0028).
  *
  * Bypass with PROJECT_BRAIN_SKIP_CLAUDE_SETTINGS=1 (e.g. CI, projects
  * that manage their own .claude/settings.json by hand).
@@ -26,6 +28,17 @@ const TEMPLATE = path.join(
   'claude-code',
   'settings.recommended.json',
 );
+// Third-party plugins/marketplaces live in a separate template and are only
+// merged on explicit opt-in — a commercial-grade installer must never enable
+// external code silently (decisions/0028). Audit marketplaces with
+// brain:skill-audit before opting in.
+const COMMUNITY_TEMPLATE = path.join(
+  path.dirname(TEMPLATE),
+  'settings.community-plugins.json',
+);
+const COMMUNITY_OPT_IN =
+  process.env.PROJECT_BRAIN_COMMUNITY_PLUGINS === '1' ||
+  process.argv.includes('--community-plugins');
 
 function readJson(file, fallback) {
   try {
@@ -155,16 +168,22 @@ export function syncClaudeSettings() {
   existing.hooks = existing.hooks ?? {};
   const hooksResult = mergeHooks(existing.hooks, recommended.hooks ?? {});
 
-  // enabledPlugins — union (project may override individually to false later)
+  // enabledPlugins / extraKnownMarketplaces — third-party code, opt-in only
+  // (decisions/0028). Without the opt-in nothing is merged; existing user
+  // entries are never touched either way.
+  const community = COMMUNITY_OPT_IN ? readJson(COMMUNITY_TEMPLATE, {}) : {};
   existing.enabledPlugins = existing.enabledPlugins ?? {};
-  const pluginsResult = mergeObjectMap(existing.enabledPlugins, recommended.enabledPlugins ?? {});
+  const pluginsResult = mergeObjectMap(existing.enabledPlugins, community.enabledPlugins ?? {});
+  if (Object.keys(existing.enabledPlugins).length === 0) delete existing.enabledPlugins;
 
-  // extraKnownMarketplaces — union
   existing.extraKnownMarketplaces = existing.extraKnownMarketplaces ?? {};
   const marketsResult = mergeObjectMap(
     existing.extraKnownMarketplaces,
-    recommended.extraKnownMarketplaces ?? {},
+    community.extraKnownMarketplaces ?? {},
   );
+  if (Object.keys(existing.extraKnownMarketplaces).length === 0) {
+    delete existing.extraKnownMarketplaces;
+  }
 
   fs.writeFileSync(HOST_SETTINGS, JSON.stringify(existing, null, 2) + '\n');
   const summary = [
