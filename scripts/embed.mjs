@@ -1,6 +1,32 @@
+/**
+ * Embedding providers for the semantic index.
+ *
+ * LocalProvider wraps @xenova/transformers (an OPTIONAL dependency since M2 —
+ * a plain `npx` install ships without the ~300 MB model stack). The module is
+ * imported lazily inside load(); when it is absent or broken the provider
+ * surfaces a typed EmbedderUnavailableError instead of crashing, and
+ * `available()` lets callers (index-provider.mjs) probe cheaply — via module
+ * resolution, without loading the heavy runtime — before deciding to degrade
+ * to lexical-only search. OpenAIProvider needs only fetch + OPENAI_API_KEY.
+ */
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+
+/** Thrown when the local embedding stack cannot be loaded (optional dependency absent/broken). */
+export class EmbedderUnavailableError extends Error {
+  constructor(message, options = {}) {
+    super(message, options);
+    this.name = 'EmbedderUnavailableError';
+    this.code = 'EMBEDDER_UNAVAILABLE';
+  }
+}
+
 export class EmbedProvider {
   get modelName() { throw new Error('EmbedProvider.modelName is not implemented'); }
   get dims() { throw new Error('EmbedProvider.dims is not implemented'); }
+  /** Whether this provider can actually produce embeddings in this install. */
+  async available() { return true; }
   async embed() { throw new Error('EmbedProvider.embed is not implemented'); }
   async embedBatch(texts) {
     const vectors = [];
@@ -30,10 +56,29 @@ export class LocalProvider extends EmbedProvider {
   get modelName() { return this.model; }
   get dims() { return this._dims; }
 
+  /**
+   * Cheap availability probe: resolves the optional module without importing
+   * (importing @xenova/transformers pulls in the whole ONNX runtime). Mirrors
+   * the graceful-degradation pattern used for @lancedb/lancedb in store.mjs.
+   */
+  async available() {
+    try { require.resolve('@xenova/transformers'); return true; }
+    catch { return false; }
+  }
+
   async load() {
     if (!this.extractor) {
       if (!process.env.BRAIN_QUIET) console.error(`Loading local embedding model: ${this.modelName}`);
-      const { pipeline } = await import('@xenova/transformers');
+      let pipeline;
+      try {
+        ({ pipeline } = await import('@xenova/transformers'));
+      } catch (error) {
+        throw new EmbedderUnavailableError(
+          'Local embedder unavailable: optional dependency @xenova/transformers could not be loaded. ' +
+          'Install it (npm i @xenova/transformers) or set OPENAI_API_KEY with BRAIN_EMBED_PROVIDER=openai.',
+          { cause: error }
+        );
+      }
       this.extractor = await pipeline('feature-extraction', this.modelName);
     }
     return this.extractor;
