@@ -30,7 +30,8 @@ const VERBS = {
   guard: { script: 'brain-guard.mjs', desc: 'Pre-commit/CI guard: branch policy, link-check, security gates' },
   doctor: { script: 'brain-repair.mjs', desc: 'Diagnose and repair a broken brain (index/store recovery)' },
   search: { script: 'brain-search.mjs', desc: 'Semantic + keyword search over the indexed repo' },
-  ask: { script: 'brain-ask.mjs', desc: 'Ask a question, get retrieved context' }
+  ask: { script: 'brain-ask.mjs', desc: 'Ask a question, get retrieved context' },
+  serve: { script: 'brain-serve.mjs', desc: 'Local Control Room: state, leases, intel — 127.0.0.1 only' }
 };
 const ADVANCED_VERBS = {
   orchestrate: { script: 'brain-orchestrate.mjs', desc: 'Multi-agent orchestration (advanced)' },
