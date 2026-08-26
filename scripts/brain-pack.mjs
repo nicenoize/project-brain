@@ -8,9 +8,8 @@
  */
 import fs from 'node:fs';
 import { BRAIN_DIR, read, takeFlag, takeOption } from './common.mjs';
-import { openEmbedder } from './embed.mjs';
-import { retrieve, staleResults, staleBanner } from './retrieval.mjs';
-import { openStore } from './store.mjs';
+import { getIndexProvider } from './index-provider.mjs';
+import { staleResults, staleBanner } from './retrieval.mjs';
 
 const args = process.argv.slice(2);
 const tightBudget = takeFlag(args, '--tight-budget');
@@ -50,18 +49,21 @@ export async function packPrompt(query, opts = {}) {
   const budget = Number(opts.maxTokens || maxTokens);
   const packMode = opts.mode || mode;
   const includeCompact = Boolean(opts.includeAutoCompact ?? includeAutoCompact);
-  const embedder = openEmbedder(opts);
-  const store = await openStore({ model: embedder.modelName, dims: embedder.dims });
+  // M2: retrieval goes through the index-provider seam — with the embedding
+  // stack absent this degrades to BM25 over the JSON mirror (warning surfaced
+  // in the returned object) instead of crashing.
+  const provider = await getIndexProvider(opts);
   const taskId = trimStr(opts.taskId || taskOpt || process.env.BRAIN_TASK);
   const actor = trimStr(opts.actor || actorOpt || process.env.BRAIN_ACTOR);
   const project = trimStr(opts.project || projectOpt || process.env.BRAIN_PROJECT);
-  let ranked = await retrieve(query, store, embedder, {
+  const { results, warning } = await provider.search(query, {
     topK: Number(process.env.BRAIN_PACK_CANDIDATES || 32),
     candidates: Number(process.env.BRAIN_PACK_CANDIDATES || 64),
     taskId,
     actor,
     ...(project ? { filter: { project } } : {})
   });
+  let ranked = results;
   ranked = ranked.filter(record => includeCompact || !isAutoCompactRecord(record));
   if (packMode === 'minimal') ranked = ranked.filter(record => record.isSummary || record.type === 'decision' || record.type === 'module-summary');
   if (packMode === 'resume') ranked = prioritizeResumeRecords(ranked);
@@ -103,7 +105,6 @@ export async function packPrompt(query, opts = {}) {
     sources.push({ file: record.file, chunk: record.chunk, score: record.score, tokens });
     used += tokens;
   }
-  await store.close();
 
   // Query-time staleness (ADR 0025): flag packed source files that drifted from
   // the index, over the ≤8 distinct top result files. Default-on; opt-out
@@ -113,11 +114,12 @@ export async function packPrompt(query, opts = {}) {
   const stale = process.env.BRAIN_STALE_BANNER === '0' ? [] : staleResults(ranked);
   const banner = staleBanner(ranked);
   const prompt = banner ? `${banner}\n\n${parts.join('\n\n')}` : parts.join('\n\n');
-  return { prompt, sources, stale, estimatedTokens: used };
+  return { prompt, sources, stale, estimatedTokens: used, warning: warning || '' };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const packed = await packPrompt(query, { maxTokens, mode, forAgent: agentName });
+  if (packed.warning) console.error(packed.warning);
   if (printBudget) {
     console.error(`[brain:pack] estimated tokens: ${packed.estimatedTokens} / budget ${maxTokens}`);
   }

@@ -26,6 +26,16 @@ const force = process.argv.includes('--force');
 const changedEnv = splitEnv('BRAIN_CHANGED_FILES');
 const deletedEnv = splitEnv('BRAIN_DELETED_FILES');
 
+// M2: the embedding stack is an optional dependency. Without a usable
+// embedder (or with BRAIN_INDEX_PROVIDER=none) there is nothing to index —
+// skip cleanly (exit 0) so hooks and npx installs never crash here.
+const { getIndexProvider } = await import('./index-provider.mjs');
+const indexProvider = await getIndexProvider();
+if (indexProvider.name === 'none') {
+  console.warn(`Project Brain index: skipped — ${indexProvider.reason}. ${indexProvider.warning}`);
+  process.exit(0);
+}
+
 ensureDir(BRAIN_DIR);
 ensureDir(path.join(BRAIN_DIR, 'vector-db'));
 

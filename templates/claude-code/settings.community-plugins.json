@@ -1,0 +1,39 @@
+{
+  "//": "Community plugins/marketplaces (third-party code). NOT auto-installed: opt in via PROJECT_BRAIN_COMMUNITY_PLUGINS=1 (or brain:update-skill --community-plugins). Run brain:skill-audit on each marketplace before enabling. See decisions/0028.",
+  "enabledPlugins": {
+    "agent-teams@claude-code-workflows": true,
+    "agent-orchestration@claude-code-workflows": true,
+    "comprehensive-review@claude-code-workflows": true,
+    "security-scanning@claude-code-workflows": true,
+    "backend-api-security@claude-code-workflows": true,
+    "frontend-mobile-security@claude-code-workflows": true,
+    "unit-testing@claude-code-workflows": true,
+    "tdd-workflows@claude-code-workflows": true,
+    "api-testing-observability@claude-code-workflows": true,
+    "performance-testing-review@claude-code-workflows": true,
+    "full-stack-orchestration@claude-code-workflows": true,
+    "javascript-typescript@claude-code-workflows": true,
+    "caveman@caveman": true,
+    "ponytail@ponytail": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-code-workflows": {
+      "source": {
+        "source": "github",
+        "repo": "wshobson/agents"
+      }
+    },
+    "caveman": {
+      "source": {
+        "source": "github",
+        "repo": "JuliusBrussee/caveman"
+      }
+    },
+    "ponytail": {
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail"
+      }
+    }
+  }
+}

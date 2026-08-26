@@ -15,7 +15,10 @@ fi
 # into skills/project-brain/ MUST bring references/ with it. brain:health (run at
 # the end of this script) verifies the reference bundle actually landed.
 
-node skills/project-brain/scripts/setup-package.mjs
+# --yes: setup.sh is the explicit "install everything" entry point — apply the
+# whole plan without per-group prompts (run setup-package.mjs --dry-run first
+# if you want to review the plan).
+node skills/project-brain/scripts/setup-package.mjs --yes
 npm install
 npm run brain:init
 npm run brain:install-hooks

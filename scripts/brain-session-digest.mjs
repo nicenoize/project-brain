@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
  * Layer 2 of the auto-compaction system: session digest extractor.
+ * (TRANSCRIPT digest — not scripts/brain-state-digest.mjs, which is the byte-capped SessionStart ACTIVE-STATE digest.)
  *
  * Invoked by Claude Code PreCompact and Stop hooks. Reads the transcript
  * JSON (path supplied on stdin via the hook payload), pulls out tagged

@@ -8,14 +8,17 @@
  *     `permissions.allow`), only add missing keys/entries
  *
  * Called from setup-package.mjs at the end of `brain:update-skill`, so
- * consumers automatically get the brain's hook wiring and the
- * recommended plugin/marketplace set when they update the skill.
+ * consumers automatically get the brain's hook wiring when they update
+ * the skill. Third-party plugins/marketplaces are NEVER merged silently:
+ * they live in settings.community-plugins.json and require
+ * PROJECT_BRAIN_COMMUNITY_PLUGINS=1 or --community-plugins (decisions/0028).
  *
  * Bypass with PROJECT_BRAIN_SKIP_CLAUDE_SETTINGS=1 (e.g. CI, projects
  * that manage their own .claude/settings.json by hand).
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const HOST_SETTINGS = path.join(process.cwd(), '.claude', 'settings.json');
 const TEMPLATE = path.join(
@@ -26,6 +29,17 @@ const TEMPLATE = path.join(
   'claude-code',
   'settings.recommended.json',
 );
+// Third-party plugins/marketplaces live in a separate template and are only
+// merged on explicit opt-in — a commercial-grade installer must never enable
+// external code silently (decisions/0028). Audit marketplaces with
+// brain:skill-audit before opting in.
+const COMMUNITY_TEMPLATE = path.join(
+  path.dirname(TEMPLATE),
+  'settings.community-plugins.json',
+);
+const COMMUNITY_OPT_IN =
+  process.env.PROJECT_BRAIN_COMMUNITY_PLUGINS === '1' ||
+  process.argv.includes('--community-plugins');
 
 function readJson(file, fallback) {
   try {
@@ -103,6 +117,32 @@ export function computeSettingsDrift(installed = {}, recommended = {}) {
   };
 }
 
+/**
+ * Upgrade legacy hook commands in place before the additive merge, so an
+ * update never leaves both the old and new form injecting side by side.
+ * Currently: the pre-M2 SessionStart full `cat active_state.md` becomes the
+ * budget-capped state digest (see brain-state-digest.mjs / ADR 0024).
+ * Returns the number of rewritten commands.
+ */
+function upgradeLegacyHooks(existing = {}) {
+  const LEGACY_STATE_CAT =
+    /^echo '=== Project Brain: Active State ==='\s*&&\s*cat \.project-brain\/active_state\.md$/;
+  const DIGEST_CMD =
+    'node "$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-state-digest.mjs" || true';
+  let rewritten = 0;
+  for (const groups of Object.values(existing)) {
+    for (const group of groups ?? []) {
+      for (const hook of group.hooks ?? []) {
+        if (typeof hook?.command === 'string' && LEGACY_STATE_CAT.test(hook.command.trim())) {
+          hook.command = DIGEST_CMD;
+          rewritten += 1;
+        }
+      }
+    }
+  }
+  return rewritten;
+}
+
 function mergeHooks(existing = {}, extra = {}) {
   let added = 0;
   for (const [event, groups] of Object.entries(extra)) {
@@ -151,20 +191,27 @@ export function syncClaudeSettings() {
   );
   existing.permissions.allow = allowResult.merged;
 
-  // hooks — append non-duplicate groups per event
+  // hooks — upgrade legacy forms first, then append non-duplicate groups
   existing.hooks = existing.hooks ?? {};
+  const upgraded = upgradeLegacyHooks(existing.hooks);
   const hooksResult = mergeHooks(existing.hooks, recommended.hooks ?? {});
 
-  // enabledPlugins — union (project may override individually to false later)
+  // enabledPlugins / extraKnownMarketplaces — third-party code, opt-in only
+  // (decisions/0028). Without the opt-in nothing is merged; existing user
+  // entries are never touched either way.
+  const community = COMMUNITY_OPT_IN ? readJson(COMMUNITY_TEMPLATE, {}) : {};
   existing.enabledPlugins = existing.enabledPlugins ?? {};
-  const pluginsResult = mergeObjectMap(existing.enabledPlugins, recommended.enabledPlugins ?? {});
+  const pluginsResult = mergeObjectMap(existing.enabledPlugins, community.enabledPlugins ?? {});
+  if (Object.keys(existing.enabledPlugins).length === 0) delete existing.enabledPlugins;
 
-  // extraKnownMarketplaces — union
   existing.extraKnownMarketplaces = existing.extraKnownMarketplaces ?? {};
   const marketsResult = mergeObjectMap(
     existing.extraKnownMarketplaces,
-    recommended.extraKnownMarketplaces ?? {},
+    community.extraKnownMarketplaces ?? {},
   );
+  if (Object.keys(existing.extraKnownMarketplaces).length === 0) {
+    delete existing.extraKnownMarketplaces;
+  }
 
   fs.writeFileSync(HOST_SETTINGS, JSON.stringify(existing, null, 2) + '\n');
   const summary = [
@@ -172,6 +219,7 @@ export function syncClaudeSettings() {
     `hooks:+${hooksResult.added}`,
     `plugins:+${pluginsResult.added}`,
     `marketplaces:+${marketsResult.added}`,
+    ...(upgraded > 0 ? [`legacy-hooks-upgraded:${upgraded}`] : []),
   ].join(' ');
   console.log(`Synced .claude/settings.json (${summary}).`);
 
@@ -251,7 +299,7 @@ function setCavemanUltra() {
 // Use realpath so the check survives symlinked vendor checkouts.
 import { realpathSync } from 'node:fs';
 try {
-  const here = realpathSync(new URL(import.meta.url).pathname);
+  const here = realpathSync(fileURLToPath(import.meta.url));
   const invoked = realpathSync(process.argv[1] ?? '');
   if (here === invoked) syncClaudeSettings();
 } catch {

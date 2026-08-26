@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { execSync, spawnSync } from 'node:child_process';
 import { buildUsageRecord, usageCmdFromScript } from './usage.mjs';
 // Static import forms a benign ESM cycle (common↔friction): friction never
@@ -9,7 +10,43 @@ import { buildUsageRecord, usageCmdFromScript } from './usage.mjs';
 // own init. See friction.mjs's header + the createRequire note there.
 import { instrumentFriction } from './friction.mjs';
 
-export const ROOT = process.cwd();
+/**
+ * PURE-ish (reads fs + one env var, never writes). Resolve the project root the
+ * brain operates on. The CLI (bin/cli.mjs, ADR 0028) can be invoked from any
+ * subdirectory of a consuming repo, so ROOT can no longer be a bare
+ * process.cwd(). Resolution order:
+ *
+ *   1. BRAIN_ROOT env override (tests, unusual layouts) — used verbatim.
+ *   2. Nearest ancestor (incl. startDir) containing a `.project-brain/` dir —
+ *      a brain-enabled root wins even inside nested git repos.
+ *   3. Nearest ancestor containing `.git` (dir or worktree/submodule file) —
+ *      repo root before `brain:init` has run.
+ *   4. startDir itself — preserves the old cwd semantics for bare temp dirs
+ *      and non-repo contexts (the test suite's mkdtemp fixtures rely on this).
+ */
+export function findRoot(startDir = process.cwd()) {
+  if (process.env.BRAIN_ROOT) return path.resolve(process.env.BRAIN_ROOT);
+  const start = path.resolve(startDir);
+  const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+  const markers = [
+    { name: '.project-brain', hit: isDir },              // must be a directory
+    { name: '.git', hit: (p) => fs.existsSync(p) }       // dir, or file in worktrees/submodules
+  ];
+  for (const marker of markers) {
+    let dir = start;
+    for (;;) {
+      if (marker.hit(path.join(dir, marker.name))) return dir;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return start;
+}
+
+export const ROOT = findRoot();
+/** Root of the project-brain package itself (parent of scripts/), independent of cwd. */
+export const PACKAGE_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const BRAIN_DIR = path.join(ROOT, '.project-brain');
 export const SKILL_DIR = path.join(ROOT, 'skills', 'project-brain');
 export const VECTOR_DIR = path.join(BRAIN_DIR, 'vector-db');
@@ -264,6 +301,7 @@ export function mergePackageScripts(pkg) {
     'brain:compact': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-compact.mjs',
     'brain:prune': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-prune.mjs',
     'brain:digest': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-session-digest.mjs',
+    'brain:state-digest': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-state-digest.mjs',
     'brain:adr': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-adr.mjs',
     'brain:lint-conventions': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-lint-conventions.mjs',
     'brain:link-check': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-link-check.mjs',
@@ -301,13 +339,21 @@ export function mergePackageScripts(pkg) {
 export function mergePackageDeps(pkg) {
   pkg.dependencies ||= {};
   const deps = {
-    '@xenova/transformers': '^2.17.2',
     'fast-glob': '^3.3.2'
   };
   for (const [k, v] of Object.entries(deps)) {
     if (!pkg.dependencies[k] && !(pkg.devDependencies && pkg.devDependencies[k])) pkg.dependencies[k] = v;
   }
   pkg.optionalDependencies ||= {};
+  // @xenova/transformers is optional everywhere (M2): installs must survive
+  // platforms where onnxruntime prebuilds fail; the index degrades to lexical.
+  if (
+    !pkg.optionalDependencies['@xenova/transformers'] &&
+    !pkg.dependencies['@xenova/transformers'] &&
+    !(pkg.devDependencies && pkg.devDependencies['@xenova/transformers'])
+  ) {
+    pkg.optionalDependencies['@xenova/transformers'] = '^2.17.2';
+  }
   if (!pkg.optionalDependencies['@lancedb/lancedb']) pkg.optionalDependencies['@lancedb/lancedb'] = '^0.9.0';
   if (!pkg.optionalDependencies.typescript) pkg.optionalDependencies.typescript = '^5.6.0';
   return pkg;
