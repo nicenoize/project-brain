@@ -10,9 +10,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { BRAIN_DIR, ROOT, ensureDir, slugify, write } from './common.mjs';
 import { activeStateJson, addWorkstream, addLease, releaseLeases } from './active-state.mjs';
+import { spawnDetachedRunner } from './runner-supervisor.mjs';
 
 const args = process.argv.slice(2);
 const opts = parseArgs(args);
@@ -308,7 +309,44 @@ function renderIssuePackagePlan(issue, plan) {
   ].join('\n');
 }
 
-function spawnWorktrees(plan) {
+/**
+ * Acquire the per-slot orchestration lease (ADR 0006) so a concurrent
+ * orchestrator sees this slot as taken even though the workstream row
+ * isn't written yet. Returns the lease target for the paired release.
+ */
+export function acquireSlotLease({ slot, lockedBy, taskId }) {
+  const slotTarget = `orchestration-slot/${slot}`;
+  addLease({ target: slotTarget, lockedBy, until: '', notes: `spawning ${taskId || 'unassigned'}` });
+  return slotTarget;
+}
+
+/** Release a per-slot orchestration lease acquired via acquireSlotLease. */
+export function releaseSlotLease(slotTarget) {
+  releaseLeases({ target: slotTarget });
+}
+
+/**
+ * Create one git worktree for a worker slot via `npm run brain:worktree spawn`.
+ * Returns { status, worker } — status is the spawn exit code (0 = ok),
+ * worker is the parsed worker entry (path/branch) or null.
+ */
+export function spawnSlotWorktree({ base, tool, issue, slug, slot, cwd = ROOT }) {
+  const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
+    'run', 'brain:worktree', '--', 'spawn',
+    '--count', '1',
+    '--base', base,
+    '--type', 'feature',
+    ...(issue ? ['--issue', String(issue)] : []),
+    '--slug', `${slug}-wp${slot}`,
+    '--tool', tool,
+    '--json'
+  ], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  if (result.status) return { status: result.status, worker: null };
+  const parsed = parseJsonFromOutput(result.stdout || '{}');
+  return { status: 0, worker: parsed.workers?.[0] || null };
+}
+
+export function spawnWorktrees(plan) {
   const spawned = [];
   const lockedBy = `orchestrator:${process.pid}`;
   for (const slot of plan.workerSlots) {
@@ -325,25 +363,19 @@ function spawnWorktrees(plan) {
     const slug = slugify(a.issueTitle).slice(0, 48);
     // Hold an orchestration-slot lease so a concurrent orchestrator sees this
     // slot as taken even though the workstream row isn't written yet.
-    const slotTarget = `orchestration-slot/${slot.slot}`;
-    addLease({ target: slotTarget, lockedBy, until: '', notes: `spawning ${a.taskId || 'unassigned'}` });
+    const slotTarget = acquireSlotLease({ slot: slot.slot, lockedBy, taskId: a.taskId });
     try {
-      const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', [
-        'run', 'brain:worktree', '--', 'spawn',
-        '--count', '1',
-        '--base', plan.base,
-        '--type', 'feature',
-        ...(issue ? ['--issue', String(issue)] : []),
-        '--slug', `${slug}-wp${slot.slot}`,
-        '--tool', plan.tool,
-        '--json'
-      ], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
-      if (result.status) {
-        releaseLeases({ target: slotTarget });
-        process.exit(result.status);
+      const { status, worker } = spawnSlotWorktree({
+        base: plan.base,
+        tool: plan.tool,
+        issue,
+        slug,
+        slot: slot.slot
+      });
+      if (status) {
+        releaseSlotLease(slotTarget);
+        process.exit(status);
       }
-      const parsed = parseJsonFromOutput(result.stdout || '{}');
-      const worker = parsed.workers?.[0];
       if (worker) {
         a.branch = worker.branch;
         slot.runnerPrompt = runnerPrompt(a, slot.actor, plan.tool);
@@ -365,13 +397,13 @@ function spawnWorktrees(plan) {
       }
     } finally {
       // Workstream row (added by recordSpawnedWorkstreams) supersedes the lease.
-      releaseLeases({ target: slotTarget });
+      releaseSlotLease(slotTarget);
     }
   }
   return spawned;
 }
 
-function launchRunners(plan, spawned, opts) {
+export function launchRunners(plan, spawned, opts) {
   const runnerCmd = ensureRunnerCommand(opts);
   const logDir = path.resolve(ROOT, opts.runnerLogDir || process.env.BRAIN_RUNNER_LOG_DIR || '.project-brain/runner-logs');
   ensureDir(logDir);
@@ -391,14 +423,13 @@ function launchRunners(plan, spawned, opts) {
       cwd: worker.path
     });
     const logPath = path.join(logDir, `${assignment.taskId}.log`);
-    const out = fs.openSync(logPath, 'a');
-    const child = spawn(command, {
+    // Detached spawn lives in runner-supervisor.mjs (extracted from here) so
+    // the serve daemon's supervisor and the orchestrator share one spawn path.
+    const { pid } = spawnDetachedRunner({
+      command,
       cwd: worker.path,
-      shell: true,
-      detached: true,
-      stdio: ['ignore', out, out],
+      logFile: logPath,
       env: {
-        ...process.env,
         BRAIN_TASK: assignment.taskId,
         BRAIN_ACTOR: slot.actor,
         BRAIN_TOOL: plan.tool,
@@ -407,11 +438,9 @@ function launchRunners(plan, spawned, opts) {
         BRAIN_RUNNER_PROMPT: prompt
       }
     });
-    fs.closeSync(out);
-    child.unref();
-    worker.runnerPid = child.pid;
+    worker.runnerPid = pid;
     worker.runnerLog = logPath;
-    console.log(`Launched runner ${slot.actor} pid=${child.pid} log=${logPath}`);
+    console.log(`Launched runner ${slot.actor} pid=${pid} log=${logPath}`);
   }
 }
 
@@ -424,7 +453,7 @@ function ensureRunnerCommand(opts) {
   return runnerCmd;
 }
 
-function recordSpawnedWorkstreams(spawned) {
+export function recordSpawnedWorkstreams(spawned) {
   for (const worker of spawned) {
     addWorkstream({
       taskId: worker.task,
