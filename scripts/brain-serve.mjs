@@ -224,6 +224,22 @@ function runGitLog(root, { limit }) {
   return r.stdout || '';
 }
 
+// Parsed-commit cache keyed by HEAD + window: the three intel endpoints are
+// pure functions over the same commit array, and a dashboard load hits all
+// three back-to-back. Without this every request would block the single-
+// threaded daemon on a fresh synchronous `git log` (1-5s on large repos).
+const intelCache = { key: null, commits: null };
+
+function cachedCommits(root, { limit }) {
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
+  const key = `${(head.stdout || '').trim() || 'no-head'}|${limit}`;
+  if (intelCache.key !== key) {
+    intelCache.commits = parseLog(runGitLog(root, { limit }));
+    intelCache.key = key;
+  }
+  return intelCache.commits;
+}
+
 // ---------------------------------------------------------------------------
 // built-in status page (deliberately unstyled beyond system-font basics —
 // the real UI comes later through docs/design-direction.md's pipeline)
@@ -382,7 +398,7 @@ export function createHandler(ctx) {
     const live = { state_age: 0, stale_warning: null, generated_at: new Date().toISOString() };
     let commits;
     try {
-      commits = parseLog(runGitLog(root, { limit: commitsCap }));
+      commits = cachedCommits(root, { limit: commitsCap });
     } catch (error) {
       // Empty-state friendliness: not-a-repo is a degraded 200, not a 500.
       const empty = kind === 'hotspots' ? { files: [] } : kind === 'co-change' ? { pairs: [] } : { prefixes: [], files: [] };

@@ -22,9 +22,9 @@ import { openStore, JsonStore, matchesFilter } from './store.mjs';
 import { retrieve, tfidfScore } from './retrieval.mjs';
 
 export const LEXICAL_FALLBACK_WARNING =
-  'semantic index unavailable — install @xenova/transformers or set OPENAI_API_KEY; falling back to lexical search';
+  'semantic index unavailable — install @xenova/transformers (or set BRAIN_EMBED_PROVIDER=openai + OPENAI_API_KEY); falling back to lexical search';
 export const NO_RESULTS_WARNING =
-  'semantic index unavailable — install @xenova/transformers or set OPENAI_API_KEY; no results possible (no JSON index mirror found)';
+  'semantic index unavailable — install @xenova/transformers (or set BRAIN_EMBED_PROVIDER=openai + OPENAI_API_KEY); no results possible (no JSON index mirror found)';
 
 /**
  * Select the index provider. Honors `options.provider`, then
@@ -43,10 +43,14 @@ export async function getIndexProvider(options = {}) {
     if (requested === 'builtin') {
       throw new EmbedderUnavailableError(
         'BRAIN_INDEX_PROVIDER=builtin requested but no embedder is available ' +
-        '(@xenova/transformers not installed and OPENAI_API_KEY not set).'
+        '(@xenova/transformers is not installed; for the OpenAI path set ' +
+        'BRAIN_EMBED_PROVIDER=openai AND OPENAI_API_KEY).'
       );
     }
-    return noneProvider('@xenova/transformers is not installed and OPENAI_API_KEY is not set');
+    return noneProvider(
+    '@xenova/transformers is not installed (npm i @xenova/transformers), and the ' +
+    'OpenAI embedder is not active (requires BRAIN_EMBED_PROVIDER=openai plus OPENAI_API_KEY)'
+  );
   }
   return builtinProvider(embedder);
 }

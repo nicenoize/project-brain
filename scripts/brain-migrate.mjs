@@ -45,6 +45,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, PACKAGE_DIR, read, write, takeFlag } from './common.mjs';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Public verb table — MUST mirror bin/cli.mjs (VERBS + ADVANCED_VERBS),
@@ -64,7 +65,8 @@ export const VERB_BY_SCRIPT = {
   'brain-search.mjs': 'search',
   'brain-ask.mjs': 'ask',
   'brain-orchestrate.mjs': 'orchestrate',
-  'brain-migrate.mjs': 'migrate'
+  'brain-migrate.mjs': 'migrate',
+  'brain-serve.mjs': 'serve'
 };
 
 /** Provisional bin name (bin/cli.mjs, package.json `bin`). */
@@ -364,7 +366,7 @@ function applyPlan(plan, accepted, cwd) {
 // ---------------------------------------------------------------------------
 function isMain() {
   try {
-    const here = fs.realpathSync(new URL(import.meta.url).pathname);
+    const here = fs.realpathSync(fileURLToPath(import.meta.url));
     const invoked = fs.realpathSync(process.argv[1] ?? '');
     return here === invoked;
   } catch {

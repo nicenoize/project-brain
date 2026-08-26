@@ -47,7 +47,10 @@ test('planPackageJson: fresh host (no package.json) plans full script + dep set'
 
   const depKeys = p.dependencies.changes.map((c) => `${c.field}:${c.key}`);
   assert.ok(depKeys.includes('dependencies:fast-glob'));
-  assert.ok(depKeys.includes('dependencies:@xenova/transformers'));
+  // M2: the embedder is optional everywhere — consumer installs must survive
+  // platforms where onnxruntime prebuilds fail (review finding on PR #41).
+  assert.ok(depKeys.includes('optionalDependencies:@xenova/transformers'));
+  assert.ok(!depKeys.includes('dependencies:@xenova/transformers'));
   assert.ok(depKeys.includes('optionalDependencies:@lancedb/lancedb'));
   assert.ok(depKeys.includes('optionalDependencies:typescript'));
 });

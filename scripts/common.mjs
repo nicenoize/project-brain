@@ -339,13 +339,21 @@ export function mergePackageScripts(pkg) {
 export function mergePackageDeps(pkg) {
   pkg.dependencies ||= {};
   const deps = {
-    '@xenova/transformers': '^2.17.2',
     'fast-glob': '^3.3.2'
   };
   for (const [k, v] of Object.entries(deps)) {
     if (!pkg.dependencies[k] && !(pkg.devDependencies && pkg.devDependencies[k])) pkg.dependencies[k] = v;
   }
   pkg.optionalDependencies ||= {};
+  // @xenova/transformers is optional everywhere (M2): installs must survive
+  // platforms where onnxruntime prebuilds fail; the index degrades to lexical.
+  if (
+    !pkg.optionalDependencies['@xenova/transformers'] &&
+    !pkg.dependencies['@xenova/transformers'] &&
+    !(pkg.devDependencies && pkg.devDependencies['@xenova/transformers'])
+  ) {
+    pkg.optionalDependencies['@xenova/transformers'] = '^2.17.2';
+  }
   if (!pkg.optionalDependencies['@lancedb/lancedb']) pkg.optionalDependencies['@lancedb/lancedb'] = '^0.9.0';
   if (!pkg.optionalDependencies.typescript) pkg.optionalDependencies.typescript = '^5.6.0';
   return pkg;

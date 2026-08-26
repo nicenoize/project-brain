@@ -24,6 +24,7 @@ import { ROOT, BRAIN_DIR, read, exists, takeFlag, takeOption } from './common.mj
 import { activeStateJson } from './active-state.mjs';
 import { inferModule } from './infer.mjs';
 import { targetMatchesFile, UnsupportedPatternError } from './lease-overlap.mjs';
+import { fileURLToPath } from 'node:url';
 
 const DECISIONS_DIR = path.join(BRAIN_DIR, 'decisions');
 const SESSIONS_DIR = path.join(BRAIN_DIR, 'sessions');
@@ -166,11 +167,25 @@ function filesMatchingTarget(files, modules, target) {
  * Kept total for the advisory path: unsupported/legacy lease targets never
  * throw here, they simply don't match.
  */
+const warnedLegacyTargets = new Set();
+
 function targetMatchesPath(target, candidate) {
   try {
     return targetMatchesFile(target, candidate);
   } catch (error) {
-    if (error instanceof UnsupportedPatternError) return false;
+    if (error instanceof UnsupportedPatternError) {
+      // Legacy rows written under the pre-M3 matcher (backslashes, `?`,
+      // braces) are invisible to every conflict check now — surface that
+      // loudly once per target instead of failing silent (review finding).
+      if (!warnedLegacyTargets.has(target)) {
+        warnedLegacyTargets.add(target);
+        console.error(
+          `[brief] WARN: lease target '${target}' uses unsupported syntax and is IGNORED by ` +
+          `conflict checks — re-create it (npm run brain:lease -- release/add) with the supported grammar.`
+        );
+      }
+      return false;
+    }
     throw error;
   }
 }
@@ -413,7 +428,7 @@ async function main() {
 }
 
 // Only run the CLI when invoked directly (not when imported by tests).
-const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
+const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 if (invokedDirectly) {
   main().then(code => process.exit(code)).catch(err => {
     process.stderr.write(`[brain:brief] ${err.message || err}\n`);

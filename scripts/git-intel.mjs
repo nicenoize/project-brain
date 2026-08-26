@@ -504,8 +504,12 @@ export function riskScore(files, {
   if (Array.isArray(leases)) {
     const conflicts = [];
     for (const lease of leases) {
+      // Legacy lease rows may hold comma/space-separated target lists; split
+      // exactly like brain-brief/brain-lease so all consumers agree per row.
+      const targets = String(lease.target || '').split(/[,\s]+/).filter(Boolean);
+      for (const target of targets) {
       for (const file of base.files) {
-        if (leaseTargetMatches(lease.target, file)) {
+        if (leaseTargetMatches(target, file)) {
           conflicts.push({
             file,
             target: lease.target,
@@ -513,6 +517,7 @@ export function riskScore(files, {
             until: lease.until || ''
           });
         }
+      }
       }
     }
     conflicts.sort((a, b) => byString(a.file, b.file) || byString(a.target, b.target));
@@ -613,9 +618,11 @@ export function calibrateRisk(commits, {
   fixRegex = DEFECT_FIX_REGEX
 } = {}) {
   const horizonMs = horizonDays * MS_PER_DAY;
+  // Sort by epoch ms, not by ISO string: author dates keep per-author UTC
+  // offsets, and lexical ISO order is not chronological across offsets.
   const chrono = commits
     .filter((c) => Number.isFinite(Date.parse(c.dateIso)))
-    .sort((a, b) => byString(a.dateIso, b.dateIso) || byString(a.hash, b.hash));
+    .sort((a, b) => Date.parse(a.dateIso) - Date.parse(b.dateIso) || byString(a.hash, b.hash));
   const lastMs = chrono.length ? Date.parse(chrono[chrono.length - 1].dateIso) : 0;
   const fixMeta = chrono.map((c) => ({
     ms: Date.parse(c.dateIso),
