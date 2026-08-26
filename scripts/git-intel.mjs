@@ -25,7 +25,12 @@
  * ({basis:'measured', source:'git-log', window:{commits,since,until}}) per the
  * Praktiken-Katalog. The thin CLI lives in brain-intel.mjs; log-parsing
  * conventions (US/RS separators, --FILES-- marker) mirror brain-why.mjs.
+ *
+ * Lease matching delegates to lease-overlap.mjs (itself pure), the single
+ * canonical glob-overlap module — importing it keeps this file side-effect
+ * free.
  */
+import { targetMatchesFile, UnsupportedPatternError } from './lease-overlap.mjs';
 
 // Unit/record-separator control chars: safe field/record delimiters for a
 // `git log --pretty` format because commit metadata never contains them.
@@ -382,30 +387,20 @@ export const RISK_SATURATION = Object.freeze({
   leaseConflicts: 2 // two overlapping leases saturate
 });
 
-/** Escape regex metacharacters (glob-to-regex helper for lease targets). */
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /**
- * PURE. Does a lease target (exact path, directory prefix, or `*` glob) cover
- * a file? Mirrors brain-brief.mjs's targetMatchesPath semantics so brief and
- * risk agree on what "leased" means.
+ * PURE. Does a lease target (exact path, directory prefix, or glob) cover a
+ * file? Thin wrapper over the canonical lease-overlap.mjs semantics (strategy
+ * M3: one implementation, one truth — brief and risk agree on what "leased"
+ * means because they run the same code). Kept total for risk scoring:
+ * unsupported/legacy targets never throw here, they simply don't match.
  */
 export function leaseTargetMatches(target, file) {
-  const t = String(target || '').trim().replace(/^\.\//, '');
-  const c = String(file || '').trim().replace(/^\.\//, '');
-  if (!t || !c) return false;
-  if (t === c) return true;
-  const dirT = t.replace(/\/$/, '');
-  if (!t.includes('*') && (c === dirT || c.startsWith(`${dirT}/`))) return true;
-  if (t.includes('*')) {
-    const re = new RegExp('^' + t.split('*').map(escapeRe).join('.*') + '$');
-    if (re.test(c)) return true;
-    // bare globs like "*.mjs" also match the basename
-    if (re.test(c.split('/').pop())) return true;
+  try {
+    return targetMatchesFile(target, file);
+  } catch (error) {
+    if (error instanceof UnsupportedPatternError) return false;
+    throw error;
   }
-  return false;
 }
 
 /**
