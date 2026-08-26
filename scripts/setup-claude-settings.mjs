@@ -18,6 +18,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const HOST_SETTINGS = path.join(process.cwd(), '.claude', 'settings.json');
 const TEMPLATE = path.join(
@@ -298,7 +299,7 @@ function setCavemanUltra() {
 // Use realpath so the check survives symlinked vendor checkouts.
 import { realpathSync } from 'node:fs';
 try {
-  const here = realpathSync(new URL(import.meta.url).pathname);
+  const here = realpathSync(fileURLToPath(import.meta.url));
   const invoked = realpathSync(process.argv[1] ?? '');
   if (here === invoked) syncClaudeSettings();
 } catch {

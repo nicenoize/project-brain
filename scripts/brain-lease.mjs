@@ -79,7 +79,16 @@ if (command === 'list') {
   else {
     if (!state.leases.length) console.log('No active leases.');
     for (const lease of state.leases) {
-      console.log(`${lease.target} | ${lease.lockedBy || 'unowned'} | until=${lease.until || 'unspecified'} | ${lease.notes || ''}`.trim());
+      // Flag legacy rows the canonical M3 grammar no longer honors, so a
+      // stale pre-migration lease can't sit silently invisible to conflict
+      // checks (review finding: silent narrowing of old semantics).
+      const invalid = splitList(lease.target)
+        .map((t) => ({ t, check: validateTarget(t) }))
+        .filter((x) => !x.check.ok);
+      const flag = invalid.length
+        ? `  [WARN: unsupported target syntax (${invalid.map((x) => x.t).join(', ')}) — IGNORED by conflict checks; re-create this lease]`
+        : '';
+      console.log(`${lease.target} | ${lease.lockedBy || 'unowned'} | until=${lease.until || 'unspecified'} | ${lease.notes || ''}`.trim() + flag);
     }
   }
 }
