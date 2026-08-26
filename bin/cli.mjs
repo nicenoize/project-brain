@@ -33,7 +33,8 @@ const VERBS = {
   ask: { script: 'brain-ask.mjs', desc: 'Ask a question, get retrieved context' }
 };
 const ADVANCED_VERBS = {
-  orchestrate: { script: 'brain-orchestrate.mjs', desc: 'Multi-agent orchestration (advanced)' }
+  orchestrate: { script: 'brain-orchestrate.mjs', desc: 'Multi-agent orchestration (advanced)' },
+  migrate: { script: 'brain-migrate.mjs', desc: 'Convert a symlink/skill-mode install to CLI mode' }
 };
 
 function listScripts() {
