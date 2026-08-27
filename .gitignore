@@ -16,3 +16,6 @@ node_modules/
 .worktrees/
 project-brain
 .project-brain/runners/
+ui/node_modules/
+ui/dist/
+.impeccable/review/
