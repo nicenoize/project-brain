@@ -1292,3 +1292,328 @@ test('runners: no zombie children survive the test run', async () => {
   const allDead = await waitFor(() => spawnedPids.every((pid) => !pidAlive(pid)), 3000);
   assert.equal(allDead, true, `zombie runner pids still alive: ${spawnedPids.filter((pid) => pidAlive(pid)).join(', ')}`);
 });
+
+// ---------------------------------------------------------------------------
+// fleet view (/api/fleet) — "which of my repos needs attention right now?"
+//
+// Two fixtures, deliberately separate:
+//   1. the single-repo FIXTURE above (0 sibling projects) proves the DEGRADED
+//      path on the shared daemon — no mutation, so it stays order-independent;
+//   2. a synthetic fleet root (2 git repos + 1 project that is NOT a git repo)
+//      served by a SECOND daemon rooted at it, proving the non-degraded path,
+//      the ranking, and the per-project error containment.
+//
+// The second daemon's brain state still resolves to the fixture's
+// active_state.md (BRAIN_ROOT is process-wide and fixed before the import). In
+// production root === BRAIN_ROOT, so this only means the fleet fixture reuses
+// the fixture's state file — which is exactly what exercises the piece under
+// test: the join from a state row's `project` column to a discovered project
+// name. Those rows are added INSIDE the test below (never at module scope) so
+// the /api/state assertions further up keep their exact counts.
+// ---------------------------------------------------------------------------
+
+// TTL off by default here: each fleet test wants to observe the live state it
+// just wrote. The TTL test flips it back on explicitly.
+process.env.BRAIN_FLEET_TTL_MS = '0';
+
+const FLEET = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-fleet-'));
+const FLEET_A = path.join(FLEET, 'svc-a');
+const FLEET_B = path.join(FLEET, 'svc-b');
+const FLEET_BROKEN = path.join(FLEET, 'svc-broken');
+
+function initFleetRepo(dir, commitIso) {
+  fs.mkdirSync(dir, { recursive: true });
+  // package.json is the discovery marker projects.mjs looks for.
+  fs.writeFileSync(path.join(dir, 'package.json'), `{"name":"${path.basename(dir)}"}\n`);
+  execSync('git init --quiet', { cwd: dir });
+  execSync('git config user.email t@example.com', { cwd: dir });
+  execSync('git config user.name Tester', { cwd: dir });
+  execSync('git add .', { cwd: dir });
+  execSync('git -c commit.gpgsign=false commit -q -m "feat: seed"', {
+    cwd: dir,
+    env: { ...process.env, GIT_AUTHOR_DATE: commitIso, GIT_COMMITTER_DATE: commitIso }
+  });
+}
+
+const FLEET_A_STALE_DAYS = 10;
+initFleetRepo(FLEET_A, new Date(Date.now() - FLEET_A_STALE_DAYS * 86_400_000).toISOString());
+// svc-a: uncommitted work (1 staged + 1 untracked) sitting on a 10-day-old commit.
+fs.writeFileSync(path.join(FLEET_A, 'src.mjs'), 'export const a = 1;\n');
+execSync('git add src.mjs', { cwd: FLEET_A });
+fs.writeFileSync(path.join(FLEET_A, 'notes.txt'), 'wip\n');
+
+// svc-b: committed just now, clean tree, no workstream, no lease → nothing to report.
+initFleetRepo(FLEET_B, new Date().toISOString());
+
+// svc-broken: a discovered project (package.json) that is NOT a git repo — and
+// the fleet root is outside any repo, so git really refuses to answer here.
+fs.mkdirSync(FLEET_BROKEN, { recursive: true });
+fs.writeFileSync(path.join(FLEET_BROKEN, 'package.json'), '{"name":"svc-broken"}\n');
+
+let fleetDaemon;
+
+before(async () => {
+  // cwd = svc-a → that project is the one "the daemon was started in".
+  fleetDaemon = await serve.startServer({ root: FLEET, port: 0, token: TOKEN, cwd: FLEET_A });
+});
+
+after(async () => {
+  if (fleetDaemon) await fleetDaemon.close();
+  fs.rmSync(FLEET, { recursive: true, force: true });
+});
+
+/** GET a JSON endpoint on an arbitrary local daemon port, with the token. */
+function getJson(port, pathname) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: pathname, headers: bearer }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(body) }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+const fleetGet = () => getJson(fleetDaemon.port, '/api/fleet');
+
+/** Every contributing reason must be human-readable AND carry its number. */
+function assertReasonsCarryNumbers(project) {
+  for (const reason of project.reasons) {
+    assert.equal(typeof reason.kind, 'string');
+    assert.equal(typeof reason.weight, 'number');
+    assert.match(reason.message, /\d/, `reason "${reason.kind}" must name its number: ${reason.message}`);
+    assert.ok(reason.message.length > 10, `reason "${reason.kind}" must be a sentence, not a label`);
+  }
+}
+
+test('/api/fleet is token-gated (401 without)', async () => {
+  const r = await request('/api/fleet');
+  assert.equal(r.status, 401);
+  const ok = await request('/api/fleet', { headers: bearer });
+  assert.equal(ok.status, 200);
+});
+
+test('/api/fleet on a single repo → degraded:true with a reason and the active repo present', async () => {
+  const r = await request('/api/fleet', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.equal(body.degraded, true, 'one repo is not a fleet');
+  assert.equal(body.fleetRoot, null);
+  assert.match(body.reason, /fleet mode off/);
+  assert.match(body.reason, /solo-multi-repo-setup/);
+  assert.equal(body.truncated, false);
+  assert.equal(body.projects.length, 1, 'the active repo is still reported');
+
+  const p = body.projects[0];
+  assert.equal(p.name, path.basename(FIXTURE));
+  assert.equal(p.path, FIXTURE);
+  assert.equal(p.isActive, true);
+  assert.equal(body.active, p.name);
+  assert.equal(typeof p.attention, 'number');
+  assert.ok(Array.isArray(p.reasons));
+  assert.equal(typeof p.dirty.staged, 'number');
+  assert.equal(typeof p.dirty.unstaged, 'number');
+  assert.ok(p.lastCommit && typeof p.lastCommit.hash === 'string', 'last commit is reported');
+  assert.equal(typeof p.staleDays, 'number');
+  assert.equal(p.error, undefined);
+  assertReasonsCarryNumbers(p);
+
+  // Provenance names the weights so the ranking stays reviewable, not magic.
+  assert.equal(body.provenance.basis, 'measured');
+  assert.deepEqual(body.provenance.weights, serve.FLEET_ATTENTION_WEIGHTS);
+  assert.deepEqual(body.provenance.thresholds, serve.FLEET_ATTENTION_THRESHOLDS);
+  assert.equal(body.provenance.maxProjects, 25);
+  assert.equal(typeof body.generated_at, 'string');
+});
+
+test('/api/fleet on a synthetic 2-repo fleet: every repo listed, sorted by attention, reasons carry numbers', async () => {
+  // Tag state rows to svc-a (per-project tagging is the fleet contract) —
+  // written here, after every single-repo /api/state assertion has run.
+  fs.writeFileSync(path.join(BRAIN, 'active_state.md'), `# Active State
+
+## Workstreams
+
+| task_id | owner | tool | project | branch | scope / links | status |
+| --- | --- | --- | --- | --- | --- | --- |
+| T-42 | seebo | claude | demo | feature/42-serve | scripts/** | active |
+| T-77 | seebo | claude | svc-a | feature/77 | src/** | active |
+
+## File Leases
+
+| path glob or file | project | locked_by | until | notes |
+| --- | --- | --- | --- | --- |
+| scripts/** | demo | claude-a | 2099-01-01T00:00 | serve work |
+| src/** | svc-a | claude-b | 2099-01-01T00:00 | agent editing svc-a |
+
+## Blockers
+
+- none
+
+## Overlaps
+
+- none
+`);
+
+  const { status, body } = await fleetGet();
+  assert.equal(status, 200);
+  assert.equal(body.degraded, false, 'two sibling projects auto-activate fleet mode');
+  assert.equal(body.fleetRoot, FLEET);
+  assert.equal(body.truncated, false);
+  assert.equal(body.active, 'svc-a', 'the repo the daemon was started in');
+
+  const names = body.projects.map((p) => p.name);
+  assert.deepEqual([...names].sort(), ['svc-a', 'svc-b', 'svc-broken']);
+
+  // Sorted by attention, descending — the ranking IS the answer.
+  const scores = body.projects.map((p) => p.attention);
+  assert.deepEqual(scores, [...scores].sort((x, y) => y - x));
+  assert.equal(names[0], 'svc-a', 'the repo with stuck work ranks first');
+
+  const a = body.projects.find((p) => p.name === 'svc-a');
+  assert.equal(a.isActive, true);
+  assert.equal(a.path, FLEET_A);
+  assert.deepEqual(a.dirty, { staged: 1, unstaged: 1 }, 'porcelain=v2 splits staged from worktree');
+  assert.equal(typeof a.branch, 'string');
+  assert.equal(a.ahead, null, 'no upstream configured → ahead/behind are unknown, not 0');
+  assert.equal(a.behind, null);
+  assert.equal(a.workstreams, 1);
+  assert.equal(a.leases, 1);
+  assert.equal(a.conflicts, 1, 'seebo owns the workstream, claude-b holds the lease');
+  assert.ok(a.staleDays >= FLEET_A_STALE_DAYS - 1 && a.staleDays <= FLEET_A_STALE_DAYS + 1);
+  assert.equal(a.lastCommit.subject, 'feat: seed');
+  assertReasonsCarryNumbers(a);
+
+  const kinds = a.reasons.map((r) => r.kind);
+  assert.ok(kinds.includes('lease-conflict'), kinds.join(','));
+  assert.ok(kinds.includes('dirty-stale'), kinds.join(','));
+  assert.ok(kinds.includes('abandoned-workstream'), kinds.join(','));
+  assert.ok(kinds.includes('stale'), kinds.join(','));
+  assert.match(a.reasons.find((r) => r.kind === 'dirty-stale').message, /1 file staged and 1 file unstaged/);
+  assert.match(a.reasons.find((r) => r.kind === 'lease-conflict').message, /claude-b/);
+  assert.ok(a.attention > 0 && a.attention <= 100);
+
+  // A quiet repo reports nothing — no invented urgency to fill a dashboard.
+  const b = body.projects.find((p) => p.name === 'svc-b');
+  assert.equal(b.isActive, false);
+  assert.equal(b.attention, 0);
+  assert.deepEqual(b.reasons, []);
+  assert.deepEqual(b.dirty, { staged: 0, unstaged: 0 });
+  assert.equal(b.conflicts, 0);
+  assert.equal(b.error, undefined);
+
+  assert.ok(a.attention > b.attention, 'the repo with a lease conflict outranks the clean one');
+});
+
+test('/api/fleet: a project that is not a git repo yields error and never breaks the fleet', async () => {
+  const { status, body } = await fleetGet();
+  assert.equal(status, 200, 'one broken sibling must not fail the whole answer');
+  const broken = body.projects.find((p) => p.name === 'svc-broken');
+  assert.ok(broken, 'a broken project is still listed');
+  assert.match(broken.error, /not a git repository/i);
+  assert.equal(broken.attention, 0, 'unknown state is never ranked as urgent');
+  assert.deepEqual(broken.reasons, []);
+  assert.equal(broken.lastCommit, null);
+  assert.equal(broken.branch, null);
+  // The healthy siblings are unaffected.
+  assert.ok(body.projects.find((p) => p.name === 'svc-a').lastCommit);
+});
+
+test('/api/fleet memoizes per (root, cwd) for a TTL — a dashboard poll cannot spawn 2N git processes', async () => {
+  const previous = process.env.BRAIN_FLEET_TTL_MS;
+  try {
+    process.env.BRAIN_FLEET_TTL_MS = '0';
+    const before0 = serve.fleetStats().computes;
+    await fleetGet();
+    await fleetGet();
+    assert.equal(serve.fleetStats().computes, before0 + 2, 'TTL 0 → every request recomputes');
+
+    process.env.BRAIN_FLEET_TTL_MS = '60000';
+    assert.equal(serve.fleetStats().ttlMs, 60_000, 'the TTL is read at call time');
+    await fleetGet(); // primes the cache under the new TTL
+    const primed = serve.fleetStats();
+    assert.equal(primed.key, `${FLEET}|${FLEET_A}`, 'cache key is (root, cwd), never a HEAD');
+    await fleetGet();
+    await fleetGet();
+    assert.equal(serve.fleetStats().computes, primed.computes, 'two more requests, zero recomputes');
+  } finally {
+    process.env.BRAIN_FLEET_TTL_MS = previous;
+  }
+});
+
+test('fleet pure core: parseGitStatusV2 splits staged/worktree and reads branch + ahead/behind', () => {
+  const sample = [
+    '# branch.oid abc123',
+    '# branch.head feature/x',
+    '# branch.upstream origin/feature/x',
+    '# branch.ab +2 -3',
+    '1 M. N... 100644 100644 100644 aaa bbb staged.mjs',
+    '1 .M N... 100644 100644 100644 aaa bbb worktree.mjs',
+    '1 MM N... 100644 100644 100644 aaa bbb both.mjs',
+    '2 R. N... 100644 100644 100644 aaa bbb R100 new.mjs\told.mjs',
+    'u UU N... 100644 100644 100644 100644 aaa bbb ccc conflict.mjs',
+    '? untracked.mjs',
+    ''
+  ].join('\n');
+  assert.deepEqual(serve.parseGitStatusV2(sample), {
+    branch: 'feature/x',
+    ahead: 2,
+    behind: 3,
+    staged: 3,      // M., MM, R.
+    unstaged: 4     // .M, MM, u, ?
+  });
+
+  const detached = serve.parseGitStatusV2('# branch.head (detached)\n');
+  assert.equal(detached.branch, null);
+  assert.equal(detached.ahead, null, 'no branch.ab line → unknown, not 0');
+  assert.equal(detached.behind, null);
+  assert.deepEqual(serve.parseGitStatusV2(''), { branch: null, ahead: null, behind: null, staged: 0, unstaged: 0 });
+});
+
+test('fleet pure core: fleetAttention weights, message numbers, and the quiet case', () => {
+  const W = serve.FLEET_ATTENTION_WEIGHTS;
+
+  const quiet = serve.fleetAttention({
+    dirty: { staged: 0, unstaged: 0 }, staleDays: 0, workstreams: 0, conflicts: 0, ahead: 0, behind: 0
+  });
+  assert.equal(quiet.attention, 0);
+  assert.deepEqual(quiet.reasons, [], 'nothing to report → no invented urgency');
+
+  // Dirty but freshly committed is NOT attention — the work is still moving.
+  const busy = serve.fleetAttention({
+    dirty: { staged: 4, unstaged: 1 }, staleDays: 0, workstreams: 1, conflicts: 0, ahead: 0, behind: 0
+  });
+  assert.deepEqual(busy.reasons, []);
+  assert.equal(busy.attention, 0);
+
+  const conflicted = serve.fleetAttention({
+    dirty: { staged: 0, unstaged: 0 }, staleDays: 0, workstreams: 0, conflicts: 3,
+    conflictActors: ['claude-b'], ahead: 0, behind: 0
+  });
+  assert.equal(conflicted.attention, W.leaseConflict);
+  assert.equal(conflicted.reasons[0].kind, 'lease-conflict');
+  assert.match(conflicted.reasons[0].message, /3 active leases held by a different actor \(claude-b\)/);
+  assert.ok(conflicted.attention > quiet.attention, 'a lease conflict outranks a clean repo');
+
+  const pushed = serve.fleetAttention({
+    dirty: { staged: 0, unstaged: 0 }, staleDays: 0, workstreams: 0, conflicts: 0,
+    ahead: 2, behind: 5, branch: 'feature/x'
+  });
+  assert.equal(pushed.attention, W.unpushed + W.behind);
+  assert.match(pushed.reasons.find((r) => r.kind === 'unpushed').message, /2 commits unpushed on feature\/x/);
+  assert.match(pushed.reasons.find((r) => r.kind === 'behind').message, /5 commits behind upstream on feature\/x/);
+
+  const stuck = serve.fleetAttention({
+    dirty: { staged: 3, unstaged: 0 }, staleDays: 6, workstreams: 1, conflicts: 0, ahead: 0, behind: 0
+  });
+  assert.match(stuck.reasons.find((r) => r.kind === 'dirty-stale').message, /3 files staged and 0 files unstaged, 6 days/);
+  // Reasons come back heaviest-first so a UI can render the headline directly.
+  assert.deepEqual(stuck.reasons.map((r) => r.weight), [...stuck.reasons.map((r) => r.weight)].sort((x, y) => y - x));
+
+  // 6 days: abandoned fires, the 7-day escalation does not. Clamped at 100.
+  assert.deepEqual(stuck.reasons.map((r) => r.kind), ['dirty-stale', 'abandoned-workstream']);
+  const everything = serve.fleetAttention({
+    dirty: { staged: 9, unstaged: 9 }, staleDays: 90, workstreams: 2, conflicts: 2, ahead: 4, behind: 4
+  });
+  assert.equal(everything.attention, 100, 'score is clamped to 100');
+});
