@@ -376,10 +376,17 @@ export function buildSnapshot(opts = {}) {
       calibration.fileHealth = {
         auc: isNum(cal.auc) ? round(cal.auc) : null,
         files: cal.evaluated,
-        positives: cal.defective
+        positives: cal.defective,
+        // An AUC without power is a number, not evidence — a snapshot that
+        // records one without the flag invites a later `compare` to read a
+        // swing in noise as progress.
+        sufficientEvidence: cal.sufficientEvidence === true,
+        minorityClass: cal.minorityClass ?? null
       };
       if (!isNum(cal.auc)) {
         caveats.push('calibration.fileHealth.auc is null — the cut point left no mixed population (need both fixed and clean files after the cut).');
+      } else if (!cal.sufficientEvidence) {
+        caveats.push(`calibration.fileHealth: UNDERPOWERED — ${cal.minorityClass} file(s) in the smaller class, below the ${cal.minPositives} this AUC needs to mean anything. Recorded, not citable.`);
       }
     } catch (error) {
       calibration.fileHealth = degrade('calibration.fileHealth', `calibrateFileHealth() threw: ${error.message || error}`);
@@ -389,10 +396,14 @@ export function buildSnapshot(opts = {}) {
       calibration.risk = {
         auc: isNum(cal.auc) ? round(cal.auc) : null,
         commits: cal.evaluated,
-        positives: cal.defective
+        positives: cal.defective,
+        sufficientEvidence: cal.sufficientEvidence === true,
+        minorityClass: cal.minorityClass ?? null
       };
       if (!isNum(cal.auc)) {
         caveats.push('calibration.risk.auc is null — the window held no mixed population (need both defective and clean commits).');
+      } else if (!cal.sufficientEvidence) {
+        caveats.push(`calibration.risk: UNDERPOWERED — ${cal.minorityClass} commit(s) in the smaller class, below the ${cal.minPositives} this AUC needs to mean anything. Recorded, not citable.`);
       }
     } catch (error) {
       calibration.risk = degrade('calibration.risk', `calibrateRisk() threw: ${error.message || error}`);
@@ -1021,8 +1032,9 @@ export function formatSnapshot(snapshot) {
     for (const t of snapshot.danger.top10.slice(0, 5)) row(`  top: ${t.file}`, String(t.score));
   } else row('danger', 'MISSING — see caveats');
   const cal = snapshot.calibration || {};
-  row('fileHealth AUC', cal.fileHealth ? `${fmtNum(cal.fileHealth.auc)} (n=${cal.fileHealth.files}, positives=${cal.fileHealth.positives})` : 'MISSING');
-  row('risk AUC', cal.risk ? `${fmtNum(cal.risk.auc)} (n=${cal.risk.commits}, positives=${cal.risk.positives})` : 'MISSING');
+  const power = (b) => (b && b.auc != null && b.sufficientEvidence === false ? ' UNDERPOWERED' : '');
+  row('fileHealth AUC', cal.fileHealth ? `${fmtNum(cal.fileHealth.auc)} (n=${cal.fileHealth.files}, positives=${cal.fileHealth.positives})${power(cal.fileHealth)}` : 'MISSING');
+  row('risk AUC', cal.risk ? `${fmtNum(cal.risk.auc)} (n=${cal.risk.commits}, positives=${cal.risk.positives})${power(cal.risk)}` : 'MISSING');
   row('lintRank AUC vs severity', cal.lintRank ? `${fmtNum(cal.lintRank.auc)} vs ${fmtNum(cal.lintRank.severityBaseline)} (Δ ${fmtNum(cal.lintRank.advantage)}, n=${cal.lintRank.files})` : 'MISSING');
   row('graph files / edges', snapshot.graph ? `${snapshot.graph.files} / ${snapshot.graph.edges}` : 'MISSING');
   row('graph cycles / orphans', snapshot.graph ? `${snapshot.graph.cycles} / ${snapshot.graph.orphans}` : 'MISSING');
