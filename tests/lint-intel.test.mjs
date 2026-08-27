@@ -25,7 +25,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const {
@@ -54,7 +54,8 @@ const {
   WEIGHTS_NOT_CALIBRATED_NOTE,
   SARIF_SAFETY_NOTE,
   NOT_SCANNED_NOTE,
-  TOOL_NAMES
+  TOOL_NAMES,
+  rankingSignals
 } = await import('../scripts/lint-intel.mjs');
 
 const SCRIPT = fileURLToPath(new URL('../scripts/lint-intel.mjs', import.meta.url));
@@ -988,6 +989,53 @@ test('CLI: --tool narrows the run and says so for the others', () => {
     const others = report.tools.filter((t) => t.name !== 'ruff');
     for (const t of others) assert.match(t.reason, /not selected \(--tool ruff\)/);
     assert.equal(report.claims.cleanBillOfHealth, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/* A saturated commit window is a slice the reader never chose.
+   Found in the field: a team ranked 476 ESLint findings, got a thin ranking,
+   and only discovered why by trying --commits 3000. The default 500 covers the
+   life of a slow repo and a fortnight of a fast one, and the tool said nothing
+   about which it had. Reporting the SPAN is the honest form — "500 commits"
+   means nothing without knowing whether that is a month or a decade. */
+test('rankingSignals: a saturated history window names the span it actually covered', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-lint-window-'));
+  try {
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'a@b.c');
+    git('config', 'user.name', 'Fixture');
+    for (let i = 0; i < 6; i++) {
+      fs.writeFileSync(path.join(dir, `f${i}.js`), `export const x = ${i};\n`);
+      git('add', '-A');
+      spawnSync('git', ['commit', '-q', '-m', `feat: ${i}`], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          // Fixed dates so the reported span is exact, not clock-dependent.
+          GIT_AUTHOR_DATE: `2026-08-${String(10 + i).padStart(2, '0')}T12:00:00Z`,
+          GIT_COMMITTER_DATE: `2026-08-${String(10 + i).padStart(2, '0')}T12:00:00Z`
+        }
+      });
+    }
+
+    // Window smaller than the history → saturated, and it must say so.
+    const tight = rankingSignals({ root: dir, commitWindow: 3, files: [] });
+    const warn = (tight.notes || []).find((n) => /SATURATED/.test(n));
+    assert.ok(warn, `expected a saturation note, got: ${JSON.stringify(tight.notes)}`);
+    assert.match(warn, /newest 3 commit\(s\)/);
+    assert.match(warn, /~2 day\(s\)/, 'the span must be the real one, not a guess');
+    assert.match(warn, /--commits/, 'the note must name the remedy');
+
+    // Window larger than the history → nothing was cut off, so no warning.
+    const wide = rankingSignals({ root: dir, commitWindow: 500, files: [] });
+    assert.ok(
+      !(wide.notes || []).some((n) => /SATURATED/.test(n)),
+      'a window that covers the whole history must not cry saturation'
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
