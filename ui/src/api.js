@@ -53,6 +53,7 @@ export const api = {
   changed: () => get('/api/changed'),
   risk: (files) => get(files?.length ? `/api/risk?files=${encodeURIComponent(files.join(','))}` : '/api/risk'),
   next: () => get('/api/next'),
+  blast: (files) => get(files?.length ? `/api/blast?files=${encodeURIComponent(files.join(','))}` : '/api/blast'),
   brief: (files) => get(files?.length ? `/api/brief?files=${encodeURIComponent(files.join(','))}` : '/api/brief')
 };
 

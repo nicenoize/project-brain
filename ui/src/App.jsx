@@ -7,12 +7,13 @@ import AuditFeed from './components/AuditFeed.jsx';
 import Records from './components/Records.jsx';
 import NextPanel from './components/NextPanel.jsx';
 import RiskPanel from './components/RiskPanel.jsx';
+import BlastPanel from './components/BlastPanel.jsx';
 
 function useData() {
   const [data, setData] = useState({ loading: true });
   const load = async () => {
     try {
-      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, brief] =
+      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief] =
         await Promise.all([
           api.meta(), api.state(), api.events(),
           api.hotspots(), api.health(), api.coChange(), api.ownership(),
@@ -21,9 +22,10 @@ function useData() {
           api.changed().catch(() => null),
           api.next().catch(() => null),
           api.risk().catch(() => null),
+          api.blast().catch(() => null),
           api.brief().catch(() => null)
         ]);
-      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, brief, loading: false });
+      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, loading: false });
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -131,6 +133,10 @@ export default function App() {
               <h2>Is this change dangerous?</h2>
               <div className="sheet">
                 <RiskPanel changed={d.changed} risk={d.risk} brief={d.brief} />
+              </div>
+              <h2>What breaks if I change this?</h2>
+              <div className="sheet">
+                <BlastPanel blast={d.blast} />
               </div>
               <h2>What's running right now?</h2>
               <div className="sheet">

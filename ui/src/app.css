@@ -398,3 +398,18 @@
 .danger-score[data-band="mid"] { color: var(--lamp-attn-ink); }
 .danger-score[data-band="low"] { color: var(--lamp-run); }
 .low-conf { color: var(--ink-3); margin-left: 2px; }
+
+/* per-edge provenance tag: a static import is a fact, history is a pattern */
+.basis-tag {
+  font: 9.5px var(--font-data);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: var(--r-chip);
+  border: 1px solid currentColor;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+.basis-tag.measured { color: var(--lamp-run); }
+.basis-tag.inferred { color: var(--ink-3); }
+.empty.covered { color: var(--lamp-run); }
