@@ -10,6 +10,7 @@ import RiskPanel from './components/RiskPanel.jsx';
 import BlastPanel from './components/BlastPanel.jsx';
 import MapPanel from './components/MapPanel.jsx';
 import FleetPanel from './components/FleetPanel.jsx';
+import ActivityPanel from './components/ActivityPanel.jsx';
 import GraphPanel from './components/GraphPanel.jsx';
 import SecurityPanel from './components/SecurityPanel.jsx';
 
@@ -17,7 +18,7 @@ function useData() {
   const [data, setData] = useState({ loading: true });
   const load = async () => {
     try {
-      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph, security] =
+      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph, security, activity] =
         await Promise.all([
           api.meta(), api.state(), api.events(),
           api.hotspots(), api.health(), api.coChange(), api.ownership(),
@@ -30,10 +31,11 @@ function useData() {
           api.brief().catch(() => null),
           api.map().catch(() => null),
           api.fleet().catch(() => null),
+          api.activity().catch(() => null),
           api.graph().catch(() => null),
           api.security().catch(() => null)
         ]);
-      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph, security, loading: false });
+      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph, security, activity, loading: false });
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -72,6 +74,13 @@ function findConflicts(workstreams, leases) {
  */
 function sectionState(id, d, { workstreams, leases, conflictsByTask }) {
   switch (id) {
+    case 'activity': {
+      const a = d.activity;
+      if (!a || a.degraded) return 'quiet';
+      // Two people in one area is the only thing here that wants a human.
+      if ((a.collisions || []).length) return 'attn';
+      return a.today?.commits > 0 ? 'run' : 'quiet';
+    }
     case 'fleet': {
       const top = (d.fleet?.projects || [])[0];
       if (d.fleet?.degraded) return 'quiet';
@@ -191,6 +200,8 @@ export default function App() {
   const describe = (id, heading, node) => ({ id, heading, node, state: sectionState(id, d, ctx) });
 
   const mainSections = [
+    describe('activity', 'What landed today, and who is where?',
+      <ActivityPanel activity={d.activity} />),
     ...(d.fleet && !d.fleet.degraded
       ? [describe('fleet', 'Which repo needs attention?', <FleetPanel fleet={d.fleet} />)] : []),
     describe('next', 'What should happen next?', <NextPanel next={d.next} />),

@@ -118,6 +118,8 @@
  *                          must resolve INSIDE .project-brain and end in .md —
  *                          traversal, absolute paths and non-.md → 400, and
  *                          nothing outside the brain dir is ever opened
+ *   /api/activity          "What landed today, and who is working where?" — from
+ *                          git, so it is never empty and needs no adoption.
  *   /api/fleet             "Which of my repos needs attention right now?" — the
  *                          multi-repo view for the solo agent-manager. Fleet
  *                          discovery is projects.mjs's contract (sibling dirs
@@ -188,6 +190,7 @@
  *   serve/docs.mjs      /api/map|doc|why (Doc-Navigator)
  *   serve/runners.mjs   the write API: runners + leases (+ the audit lines)
  *   serve/fleet.mjs     /api/fleet
+ *   serve/activity.mjs  /api/activity
  *   serve/sse.mjs       /api/stream: fs watchers, debounce, heartbeat
  *   serve/static.mjs    ui/dist (or the inline status page), traversal-guarded
  * Endpoint modules receive an explicit context object (root, brainDir, the
@@ -207,6 +210,8 @@ import { apiBrief, apiChanged, apiEvents, apiMeta, apiNext, apiState, createProv
 import { apiBlast, apiGraph, apiIntel, apiRisk, apiSecurity } from './serve/intel.mjs';
 import { apiDoc, apiMap, apiWhy } from './serve/docs.mjs';
 import { apiFleet } from './serve/fleet.mjs';
+export { summarizeActivity, areaOf, localDayStart, apiActivity } from './serve/activity.mjs';
+import { apiActivity, summarizeActivity, areaOf, localDayStart } from './serve/activity.mjs';
 import { createSseHub } from './serve/sse.mjs';
 import { serveStatic } from './serve/static.mjs';
 import {
@@ -285,6 +290,7 @@ function buildRoutes(api, sse) {
     ['/api/doc', (req, res, url) => apiDoc(api, res, url)],
     ['/api/why', (req, res, url) => apiWhy(api, res, url)],
     ['/api/fleet', (req, res) => apiFleet(api, res)],
+    ['/api/activity', (req, res, url) => apiActivity(api, res, url)],
     ['/api/meta', (req, res) => apiMeta(api, res)],
     ['/api/runners', (req, res) => apiRunners(api, res)],
     ['/api/runners/log', (req, res, url) => apiRunnerLog(api, res, url)],
