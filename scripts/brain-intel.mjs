@@ -494,7 +494,7 @@ async function cmdHealth(commits, { json, limit, nowMs, halfLifeDays, structure,
         f.factors,
         // Top author's share of the window: gates the add-owner move, which is
         // vacuous in an effectively-solo repo (every file would carry it).
-        { topAuthorShare: topAuthorShareOf(commits) }
+        { topAuthorShare: topAuthorShareOf(commits), fileScore: f.score }
       )
     ]))
     : null;
