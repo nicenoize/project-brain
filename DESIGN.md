@@ -60,6 +60,12 @@ typography:
   emptyState:
     fontFamily: "B612, system-ui, sans-serif"
     fontSize: "13px"
+  # The one large numeral on the board: the answer-panel score (0-10).
+  # Single sanctioned display size; colored only by its lamp band.
+  score:
+    fontFamily: "B612, system-ui, sans-serif"
+    fontSize: "34px"
+    fontWeight: 700
 rounded:
   chip: "2px"
   card: "3px"
