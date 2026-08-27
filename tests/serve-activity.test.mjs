@@ -33,6 +33,35 @@ test('areaOf: the area is the DIRECTORY, never the file', () => {
   // Build output tells you nothing about a person's attention.
   assert.equal(areaOf('node_modules/x/y.js'), '');
   assert.equal(areaOf('dist/bundle.js'), '');
+
+  // Vendored agent skills: the half that only showed up on a screenshot. A repo
+  // carrying the same skill under four tool directories syncs ~600 files in ONE
+  // chore commit, and those directories then sit at the top of every
+  // contributor's "working here" list, above the code they wrote.
+  assert.equal(areaOf('.claude/skills/impeccable/SKILL.md'), '');
+  assert.equal(areaOf('.cursor/skills/x/y.mjs'), '');
+  assert.equal(areaOf('.gemini/skills/x/y.mjs'), '');
+  assert.equal(areaOf('.github/skills/x/y.mjs'), '');
+  assert.equal(areaOf('.project-brain/decisions/a.md'), '', 'our own metadata is not their work');
+  // But .github itself stays: a workflow change is real work.
+  assert.equal(areaOf('.github/workflows/ci.yml'), '.github/workflows');
+});
+
+test('summarizeActivity: an area is counted once per COMMIT, not once per file', () => {
+  // "79 commits — app/[authed] (130)": a per-area number larger than the commit
+  // count beside it, because a 600-file sync commit was counted 600 times.
+  const commits = [
+    c('a1', 'ana', '2026-08-27T09:00:00Z', 'chore: sync', [
+      'lib/db/a.ts', 'lib/db/b.ts', 'lib/db/c.ts', 'ui/src/x.jsx'
+    ]),
+    c('a2', 'ana', '2026-08-27T10:00:00Z', 'feat: real', ['lib/db/d.ts'])
+  ];
+  const r = summarizeActivity(commits, { nowMs: NOW, dayStartMs: MIDNIGHT });
+  const ana = r.people.find((p) => p.author === 'ana');
+  assert.equal(ana.commits, 2);
+  assert.deepEqual(ana.areas, [{ area: 'lib/db', commits: 2 }, { area: 'ui/src', commits: 1 }]);
+  // No per-area count may exceed the person's own commit count.
+  for (const a of ana.areas) assert.ok(a.commits <= ana.commits, `${a.area} counted ${a.commits} > ${ana.commits}`);
 });
 
 test('summarizeActivity: today is what landed since the given midnight', () => {
