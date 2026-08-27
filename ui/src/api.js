@@ -19,6 +19,23 @@ async function get(path) {
   return res.json();
 }
 
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {})
+  });
+  let data = null;
+  try { data = await res.json(); } catch { /* non-JSON error body */ }
+  if (!res.ok) {
+    const err = new Error(data?.error || `${path} → ${res.status}`);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
 export const api = {
   meta: () => get('/api/meta'),
   state: () => get('/api/state'),
@@ -26,7 +43,12 @@ export const api = {
   hotspots: (limit = 40) => get(`/api/intel/hotspots?limit=${limit}`),
   coChange: (limit = 15) => get(`/api/intel/co-change?limit=${limit}`),
   ownership: (limit = 15) => get(`/api/intel/ownership?limit=${limit}`),
-  records: (type) => get(`/api/records?type=${type}`)
+  records: (type) => get(`/api/records?type=${type}`),
+  runners: () => get('/api/runners'),
+  startRunner: (task, acknowledged) => post('/api/runners/start', { task, acknowledged }),
+  stopRunner: (id) => post('/api/runners/stop', { id }),
+  runnerLog: (id, lines = 120) =>
+    get(`/api/runners/log?id=${encodeURIComponent(id)}&lines=${lines}`)
 };
 
 /** Subscribe to daemon SSE; onChange fires debounced on state-changed.
