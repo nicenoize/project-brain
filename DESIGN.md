@@ -38,6 +38,28 @@ typography:
     fontSize: "10.5px"
     fontWeight: 400
     letterSpacing: "0.06em"
+  # Instrument data steps — the mono readout sizes the shipped build uses.
+  # This is a dense Operate surface: data text spans 9.5–12.5px deliberately
+  # (finish review shipped these; contrast holds ≥4.5:1 via --ink-2/--ink-3).
+  data:
+    fontFamily: "B612 Mono, ui-monospace, monospace"
+    fontSize: "12px"
+  dataSmall:
+    fontFamily: "B612 Mono, ui-monospace, monospace"
+    fontSize: "11.5px"
+  caption:
+    fontFamily: "B612 Mono, ui-monospace, monospace"
+    fontSize: "11px"
+  micro:
+    fontFamily: "B612 Mono, ui-monospace, monospace"
+    fontSize: "9.5px"
+    letterSpacing: "0.08em"
+  action:
+    fontFamily: "B612, system-ui, sans-serif"
+    fontSize: "12.5px"
+  emptyState:
+    fontFamily: "B612, system-ui, sans-serif"
+    fontSize: "13px"
 rounded:
   chip: "2px"
   card: "3px"
