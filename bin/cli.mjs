@@ -34,6 +34,7 @@ const VERBS = {
   serve: { script: 'brain-serve.mjs', desc: 'Local Control Room: state, leases, intel — 127.0.0.1 only' }
 };
 const ADVANCED_VERBS = {
+  mcp: { script: 'brain-mcp.mjs', desc: 'MCP server over stdio for any agent host (--print-config to install)' },
   orchestrate: { script: 'brain-orchestrate.mjs', desc: 'Multi-agent orchestration (advanced)' },
   migrate: { script: 'brain-migrate.mjs', desc: 'Convert a symlink/skill-mode install to CLI mode' }
 };
