@@ -168,7 +168,7 @@ export default function App() {
           <aside className="bay" aria-label="Leases, audit and decisions">
             <h2>Who holds what — until when?</h2>
             <div className="sheet">
-              <LeaseBoard leases={leases} conflictTargets={conflictTargets} />
+              <LeaseBoard leases={leases} conflictTargets={conflictTargets} onChanged={d.reload} />
             </div>
             <h2>What happened — and who acknowledged it?</h2>
             <div className="sheet">

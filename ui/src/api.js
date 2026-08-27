@@ -51,6 +51,8 @@ export const api = {
   runners: () => get('/api/runners'),
   startRunner: (task, acknowledged) => post('/api/runners/start', { task, acknowledged }),
   stopRunner: (id) => post('/api/runners/stop', { id }),
+  claimLease: (body) => post('/api/leases/claim', body),
+  releaseLease: (body) => post('/api/leases/release', body),
   runnerLog: (id, lines = 120) =>
     get(`/api/runners/log?id=${encodeURIComponent(id)}&lines=${lines}`),
   changed: () => get('/api/changed'),

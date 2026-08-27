@@ -452,3 +452,18 @@
 .basis-tag.stop { color: var(--lamp-stop); }
 .chip.here { margin-left: 6px; }
 .quiet-ok { color: var(--lamp-run); }
+
+/* lease claim form — inline control, not a modal */
+.claim { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
+.claim input {
+  flex: 1 1 90px; min-width: 0;
+  font: 11.5px var(--font-data);
+  padding: 3px 7px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--r-chip);
+}
+.claim input::placeholder { color: var(--ink-3); }
+.claim input:focus-visible { border-color: var(--signal); }
+.claim .gate, .claim .error-note { flex: 1 0 100%; }
