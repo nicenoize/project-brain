@@ -30,9 +30,49 @@ import { syncClaudeSettings } from './setup-claude-settings.mjs';
 import { computeInitPlan, DEFAULT_PACKAGE } from './init-plan.mjs';
 
 const args = process.argv.slice(2);
+const help = args.includes('--help') || args.includes('-h');
 const dryRun = args.includes('--dry-run');
 const yes = args.includes('--yes');
 const interactive = !dryRun && !yes && Boolean(process.stdin.isTTY && process.stdout.isTTY);
+
+const KNOWN_FLAGS = new Set(['--help', '-h', '--dry-run', '--yes']);
+
+const USAGE = [
+  'project-brain setup — merge brain scripts, deps, .gitignore and templates into this repo.',
+  '',
+  'Usage: node scripts/setup-package.mjs [--dry-run | --yes]',
+  '',
+  '  --dry-run   print the full plan and exit 0 — writes NOTHING',
+  '  --yes       apply every group without prompting (bin/setup.sh and bin/update.sh pass this)',
+  '  --help      this text',
+  '',
+  'With a TTY and no flags it prompts per group. Without a TTY it refuses:',
+  'writing a repo is not something to infer from the absence of a terminal.'
+].join('\n');
+
+/* An installer must never run by accident.
+ *
+ * This script had no --help, so `setup-package.mjs --help` fell through the
+ * flag checks and performed a full install — the flag people type precisely
+ * BECAUSE they do not yet want anything to happen. Worse, a non-TTY run with
+ * no flags was defined to "behave like --yes", so any script, CI step, hook or
+ * agent that invoked it bare rewrote package.json, .gitignore and the
+ * templates with no consent and no way to have asked for less. That is the
+ * exact gate ADR 0028's consent flow was added to install, bypassed by every
+ * non-interactive caller.
+ *
+ * Both shipped callers (bin/setup.sh, bin/update.sh) pass --yes and are
+ * unaffected. Anything else now fails loudly, which is the correct failure:
+ * the fix is one word on the command line. */
+if (help) {
+  console.log(USAGE);
+  process.exit(0);
+}
+const unknown = args.filter((a) => !KNOWN_FLAGS.has(a));
+if (unknown.length) {
+  console.error(`setup-package: unknown argument(s): ${unknown.join(', ')}\n\n${USAGE}`);
+  process.exit(2);
+}
 
 const packagePath = 'package.json';
 
@@ -165,10 +205,18 @@ try {
   if (interactive) {
     printPlan(plan, { detail: true });
     accepted = await collectConsent(plan);
-  } else {
-    // Non-TTY / --yes: apply everything, exactly like the pre-consent installer.
+  } else if (yes) {
     printPlan(plan);
     accepted = new Set(plan.map((g) => g.id));
+  } else {
+    // No TTY and no --yes: show the work and stop. Never prompt (that would
+    // hang a hook), never write (that would be consent nobody gave).
+    printPlan(plan);
+    console.error(
+      '\nsetup-package: no terminal to ask on, and --yes was not given — nothing was written.\n' +
+      'Re-run with --yes to apply the plan above, or --dry-run to inspect it in full.'
+    );
+    process.exit(1);
   }
 
   applyPackageJson(plan, accepted);
