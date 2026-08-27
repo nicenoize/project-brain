@@ -43,8 +43,25 @@ const MAX_AREAS_PER_PERSON = 5;
 const MAX_COLLISIONS = 8;
 const MAX_SUBJECTS = 12;
 
-/** Directories that say nothing about WHERE someone is working. */
-const AREA_NOISE = new Set(['', '.', 'node_modules', 'dist', 'build', 'coverage', 'vendor']);
+/**
+ * Directories that say nothing about WHERE someone is working.
+ *
+ * Build output was the obvious half. The half that only showed up on a
+ * screenshot: VENDORED AGENT SKILLS. A repo carrying the same skill under
+ * `.claude/skills`, `.cursor/skills`, `.gemini/skills` and `.github/skills`
+ * syncs ~600 files in ONE chore commit, and those four directories then sit at
+ * the top of every contributor's "working here" list, above the code they
+ * actually wrote. `.project-brain` is our own metadata and belongs out for the
+ * same reason.
+ *
+ * `.github` itself stays in: workflows are real work. Only `<dot-dir>/skills`
+ * is filtered under it, which is why that rule is separate below.
+ */
+const AREA_NOISE = new Set([
+  '', '.', 'node_modules', 'dist', 'build', 'coverage', 'vendor',
+  '.claude', '.cursor', '.gemini', '.impeccable', '.vscode', '.idea',
+  '.obsidian', '.project-brain'
+]);
 
 /**
  * PURE. The working AREA a path belongs to: the first `depth` segments of its
@@ -64,6 +81,9 @@ export function areaOf(file, depth = 2) {
   const parts = String(file || '').split('/').filter(Boolean);
   if (parts.length < 2) return '';
   if (AREA_NOISE.has(parts[0])) return '';
+  // A vendored skill tree under any tool directory — `.github/skills` is the
+  // one that survives the list above, because `.github/workflows` must not.
+  if (parts[0].startsWith('.') && parts[1] === 'skills') return '';
   return parts.slice(0, -1).slice(0, Math.max(1, depth)).join('/');
 }
 
@@ -179,9 +199,10 @@ export function summarizeActivity(commits = [], opts = {}) {
     const p = people.get(author);
     p.commits += 1;
     if (c.ms > p.lastMs) p.lastMs = c.ms;
-    for (const f of c.files || []) {
-      const a = areaOf(f);
-      if (!a) continue;
+    // Per COMMIT, not per file. Counting file touches produced "79 commits —
+    // app/[authed] (130)", a per-area number larger than the commit count it
+    // sat beside, and one 600-file sync commit outranked months of real work.
+    for (const a of new Set((c.files || []).map((f) => areaOf(f)).filter(Boolean))) {
       p.areas.set(a, (p.areas.get(a) || 0) + 1);
       if (!areaAuthors.has(a)) areaAuthors.set(a, new Map());
       const m = areaAuthors.get(a);
