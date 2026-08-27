@@ -43,29 +43,41 @@
  *   /api/changed           staged/unstaged file lists + current branch
  *                          (spawnSync git diff; not-a-repo → empty arrays)
  *   /api/risk?files=a,b    riskScore factors over cachedCommits (leases from
- *                          active-state read-only, blast radius only when the
- *                          repo has TS sources) + calibrateRisk cached per
- *                          HEAD; default change-set staged ∪ unstaged, empty →
- *                          {score:null, reason:'no-changes'}
+ *                          active-state read-only, blast radius from the
+ *                          multi-language import scan — it fires in any
+ *                          language now, not just TS) + calibrateRisk cached
+ *                          per HEAD; default change-set staged ∪ unstaged,
+ *                          empty → {score:null, reason:'no-changes'}
  *   /api/blast?files=a,b&depth=N
  *                          "What breaks if I change this?" — depth-limited
  *                          blast radius (default 2, cap 3) around the change
  *                          set. Blends TWO edge kinds and labels each one:
- *                          'imports' edges are MEASURED (ts-graph resolved
- *                          static imports, confidence 1) and 'co-change'
+ *                          'imports' edges are MEASURED (import-graph.mjs
+ *                          resolved static imports across JS/TS/Python/Go/
+ *                          Ruby/PHP/Rust, edge confidence 1.0 exact / 0.8
+ *                          inferred / 0.6 alias-or-search) and 'co-change'
  *                          edges are INFERRED (git history, confidence =
  *                          P(b|a)) — the UI shows provenance per edge
  *                          (Praktiken-Katalog: measured vs inferred). Nodes
  *                          are scored by graph proximity × edge confidence so
  *                          the list ranks "most likely to break"; measured
  *                          import edges outrank inferred history at equal
- *                          depth. Non-TS repo / missing optional `typescript`
- *                          → graphAvailable:false + `reason`, and the
- *                          co-change edges are STILL returned — the honest
- *                          degradation that works in every language. Node cap
- *                          60 (→ truncated:true, highest-scoring kept);
- *                          adjacency cached per HEAD like intelCache
- *                          (blastStats() is the test hook)
+ *                          depth. `coverage` reports what the scan actually
+ *                          saw (filesScanned/resolvedEdges/unresolvedSpecs/
+ *                          byLang). No scannable file, or a scan that resolved
+ *                          no edge at all → graphAvailable:false + `reason`,
+ *                          and the co-change edges are STILL returned — the
+ *                          honest degradation. Node cap 60 (→ truncated:true,
+ *                          highest-scoring kept); the graph and the adjacency
+ *                          are cached per HEAD like intelCache (blastStats()
+ *                          and graphStats() are the test hooks)
+ *   /api/graph             The graph's own answers, unanchored to any change
+ *                          set: bounded import `cycles` (max 20, length ≤ 8),
+ *                          dead-code `orphans` (CANDIDATES + caveat + the
+ *                          entry-point patterns excluded), `fanIn`/`fanOut`
+ *                          rankings (max 25 each) and the same `coverage`.
+ *                          `truncated` says when a cap bit; a repo with no
+ *                          scannable source is a degraded 200 with `reason`
  *   /api/next              brain:route's exported PURE rule engine over
  *                          minimal read-only sensed signals — ranked next
  *                          actions (≤5, each tagged auto|human)
@@ -153,7 +165,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ROOT, PACKAGE_DIR, ensureDir, listIndexableFiles, takeFlag, takeOption } from './common.mjs';
+import { ROOT, PACKAGE_DIR, ensureDir, takeFlag, takeOption } from './common.mjs';
 import { ACTIVE_STATE, activeStateJson, addLease, releaseLeases } from './active-state.mjs';
 import { gitLogArgs, parseLog, hotspots, coChange, ownership, riskScore, calibrateRisk, fileHealth, calibrateFileHealth } from './git-intel.mjs';
 // Both imports are verified side-effect-free: brain-route's isMain guard is
@@ -165,6 +177,16 @@ import { getIndexProvider } from './index-provider.mjs';
 // contract brain:projects/edges/handoff use, so /api/fleet cannot disagree with
 // the CLI about what "the fleet" is.
 import { discoverProjects, isFleetMode } from './projects.mjs';
+// The multi-language import graph (PURE: importing it has zero side effects —
+// no argv, no fs, no clocks). It replaces ts-graph as the MEASURED half of
+// /api/blast and /api/risk because it resolves JS/TS/MJS/Python/Go/Ruby/PHP/
+// Rust, where ts-graph resolved .ts/.tsx only (and only with the optional
+// `typescript` dep installed) — on a .mjs repo like this one the measured half
+// was simply absent.
+import {
+  buildImportGraph, cycles as graphCycles, fanIn as graphFanIn, fanOut as graphFanOut,
+  orphans as graphOrphans, defaultEntryPoints, SCAN_NOTE, ORPHAN_CAVEAT
+} from './import-graph.mjs';
 // Canonical glob engine (same one brain:radar/brief/lease use) — the
 // Doc-Navigator's module→file mapping must never disagree with lease overlap.
 import { targetMatchesFile, validateTarget, targetsOverlap, UnsupportedPatternError } from './lease-overlap.mjs';
@@ -726,72 +748,175 @@ function cachedCalibration(root, commits) {
   return calibrationCache.value;
 }
 
-// TS import-graph for the blast-radius factor, cached per HEAD (graph builds
-// can take seconds on large TS repos; working-tree-only edits stay invisible
-// until committed — acceptable staleness for a read-only dashboard). Mirrors
-// brain-intel.mjs#blastRadiusFor: null (factor omitted) for non-TS repos,
-// a missing optional `typescript` dep, or any failure. Never throws.
-const tsGraphCache = { key: null, ctx: null, indexable: null, tsFiles: 0, reason: null };
+// ---------------------------------------------------------------------------
+// multi-language import graph — the MEASURED half of /api/blast, /api/risk and
+// /api/graph, cached per HEAD.
+//
+// WHY IT REPLACED ts-graph: the compiler-backed path only ever produced edges
+// for .ts/.tsx sources with the optional `typescript` dep installed. Every
+// other repo — this .mjs one included — got graphAvailable:false and fell back
+// to git history alone. import-graph.mjs resolves JS/TS/MJS/CJS/JSX, Python,
+// Go, Ruby, PHP and Rust with a regex/line scanner, so the measured half now
+// exists in the languages people actually ask about. It is NOT a parser and
+// never claims to be: every edge carries a confidence (1.0 exact relative
+// resolve / 0.8 extension-or-index inference / 0.6 alias-or-search) and every
+// unresolved specifier is counted in `coverage.unresolvedSpecs` rather than
+// dropped — which is why `coverage` is part of the response contract.
+//
+// Cost: one scan of the tracked source files (~1.2s cold on this repo), so it
+// is memoized per HEAD exactly like intelCache/blastCache. Working-tree-only
+// edits stay invisible until committed — acceptable staleness for a read-only
+// dashboard, and the same trade the TS path made. Never throws: every failure
+// becomes {graph:null, reason} and the endpoints degrade with an explanation.
+// ---------------------------------------------------------------------------
+
+/** Every source extension import-graph.mjs can scan (mirrors brain-graph-scan). */
+const GRAPH_SOURCE_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|mts|cts|py|go|rb|php|rs)$/i;
+const GRAPH_SOURCE_GLOB = '**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts,py,go,rb,php,rs}';
+
+/** Directories never scanned — applied to the git listing too (a repo may track vendor/). */
+const GRAPH_IGNORE_DIR_RE =
+  /(^|\/)(node_modules|\.git|\.next|dist|build|out|coverage|vendor|\.gocache|__pycache__|\.venv|\.tox|target|\.worktrees)(\/|$)/;
+
+/** Both forms per directory: fast-glob prunes reliably only when it can match the dir itself. */
+const GRAPH_IGNORE_GLOBS = [
+  'node_modules', '.git', '.next', 'dist', 'build', 'out', 'coverage', 'vendor',
+  '.gocache', '__pycache__', '.venv', '.tox', 'target', '.worktrees'
+].flatMap((d) => [`**/${d}`, `**/${d}/**`]).concat('**/.project-brain/vector-db/**');
+
+/** A single file bigger than this is skipped (bundles/minified blobs, never sources). */
+const GRAPH_MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 /**
- * Load (and cache per HEAD) the ts-graph semantic context. Unlike
- * blastRadiusFor this keeps the REASON a graph is missing, because /api/blast
- * has to explain the degradation instead of silently dropping the factor.
- * Never throws: every failure becomes {ctx:null, reason}.
+ * Tracked + untracked-but-not-ignored source files, straight from git — the
+ * same discovery brain-graph-scan uses, and for the same reason: `git ls-files`
+ * is instant and honours .gitignore, so a 780MB node_modules is never walked
+ * (a naive glob walk stalled for 337s here once). Returns null when `root` is
+ * not itself a git work tree, so the caller can fall back.
  */
-async function tsGraphFor(root) {
-  if (process.env.BRAIN_TS_GRAPH === '0') {
-    return { ctx: null, indexable: [], tsFiles: 0, reason: 'static import graph disabled via BRAIN_TS_GRAPH=0' };
+function graphGitFiles(root) {
+  const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8' });
+  if (top.error || top.status !== 0) return null;
+  if (path.resolve(top.stdout.trim()) !== path.resolve(root)) return null;
+  const r = spawnSync('git', ['ls-files', '-co', '--exclude-standard'], {
+    cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024
+  });
+  if (r.error || r.status !== 0) return null;
+  return (r.stdout || '').split('\n').filter((f) => f && GRAPH_SOURCE_EXT_RE.test(f));
+}
+
+/** Fallback for non-git roots. Bounded ignores keep it from walking node_modules. */
+async function graphGlobFiles(root) {
+  try {
+    const { default: fg } = await import('fast-glob');
+    return await fg([GRAPH_SOURCE_GLOB], {
+      cwd: root, dot: false, onlyFiles: true, followSymbolicLinks: false, ignore: GRAPH_IGNORE_GLOBS
+    });
+  } catch {
+    return []; // fast-glob unavailable → no scan; coverage says so honestly.
   }
-  const key = gitHead(root);
-  if (tsGraphCache.key !== key) {
-    let indexable = [];
-    let tsFiles = 0;
-    let ctx = null;
-    let reason = null;
-    try {
-      indexable = await listIndexableFiles();
-      tsFiles = indexable.filter((f) => /\.(ts|tsx)$/.test(f)).length;
-      // Cheap guard first: without TS sources the loose program is empty
-      // anyway, and loading the optional `typescript` package costs time.
-      if (tsFiles > 0) {
-        const { loadTsSemanticContext } = await import('./ts-graph.mjs');
-        ctx = (await loadTsSemanticContext(root, new Set(indexable))) || null;
-        if (!ctx) reason = 'no TypeScript program — install the optional `typescript` dependency (npm i -D typescript)';
-      } else {
-        reason = 'no .ts/.tsx sources indexed — static import graph unavailable for this repo';
-      }
-    } catch (error) {
-      ctx = null;
-      reason = `static import graph unavailable: ${error.message || error}`;
-    }
-    tsGraphCache.ctx = ctx;
-    tsGraphCache.indexable = indexable;
-    tsGraphCache.tsFiles = tsFiles;
-    tsGraphCache.reason = reason;
-    tsGraphCache.key = key;
-  }
-  return {
-    ctx: tsGraphCache.ctx,
-    indexable: tsGraphCache.indexable || [],
-    tsFiles: tsGraphCache.tsFiles,
-    reason: tsGraphCache.ctx ? null : tsGraphCache.reason
+}
+
+async function discoverGraphFiles(root) {
+  const listed = graphGitFiles(root) ?? (await graphGlobFiles(root));
+  return [...new Set(listed.map((f) => f.replace(/^\.\//, '')))]
+    .filter((f) => !GRAPH_IGNORE_DIR_RE.test(f))
+    .sort();
+}
+
+/** Injected reader for buildImportGraph: oversized/unreadable files → `skipped`. */
+function graphReadFile(root) {
+  return (rel) => {
+    const abs = path.join(root, rel);
+    const stat = fs.statSync(abs);
+    if (stat.size > GRAPH_MAX_FILE_BYTES) throw new Error(`too large (${stat.size} bytes)`);
+    return fs.readFileSync(abs, 'utf8');
   };
 }
 
+const importGraphCache = { key: null, value: null, computes: 0 };
+
+/** /api/graph caps — hard bounds, `truncated:true` is the honesty bit. */
+export const GRAPH_MAX_CYCLES = 20;
+const GRAPH_MAX_CYCLE_LEN = 8;
+const GRAPH_MAX_LIST = 25;
+
+/** Test hook: observe the import-graph cache without reaching into internals. */
+export function graphStats() {
+  return { key: importGraphCache.key, computes: importGraphCache.computes };
+}
+
+/**
+ * Build (and cache per HEAD) the whole-repo import graph.
+ * Never throws → {graph, files, reason}: `graph` is null when there is nothing
+ * to scan or the scan failed, and `reason` always explains which it was.
+ * BRAIN_IMPORT_GRAPH=0 (or the legacy BRAIN_TS_GRAPH=0) is the kill switch.
+ */
+async function importGraphFor(root) {
+  if (process.env.BRAIN_IMPORT_GRAPH === '0' || process.env.BRAIN_TS_GRAPH === '0') {
+    return { graph: null, files: [], reason: 'static import graph disabled via BRAIN_IMPORT_GRAPH=0' };
+  }
+  const key = gitHead(root);
+  if (importGraphCache.key === key && importGraphCache.value) return importGraphCache.value;
+  let value;
+  try {
+    const files = await discoverGraphFiles(root);
+    if (!files.length) {
+      value = { graph: null, files: [], reason: 'no scannable source files found (js/ts/py/go/rb/php/rs) — import graph unavailable for this repo' };
+    } else {
+      const graph = buildImportGraph({ files, readFile: graphReadFile(root) });
+      value = {
+        graph,
+        files,
+        reason: graph.edges.length
+          ? null
+          : `no static import edge resolved among ${graph.coverage.filesScanned} scanned file(s) — ` +
+            `${graph.coverage.unresolvedSpecs} specifier(s) pointed outside the repo (packages/stdlib)`
+      };
+    }
+  } catch (error) {
+    value = { graph: null, files: [], reason: `static import graph unavailable: ${error.message || error}` };
+  }
+  importGraphCache.key = key;
+  importGraphCache.value = value;
+  importGraphCache.computes += 1;
+  return value;
+}
+
+/**
+ * PURE. The scan's own numbers, response-shaped. These are the honest part of
+ * the answer: how much was actually looked at, how much resolved, and in which
+ * languages — never a bare boolean.
+ */
+function graphCoverage(entry) {
+  const c = (entry && entry.graph && entry.graph.coverage) || null;
+  return {
+    filesScanned: c ? c.filesScanned : 0,
+    filesWithImports: c ? c.filesWithImports : 0,
+    resolvedEdges: c ? c.resolvedEdges : 0,
+    totalSpecs: c ? c.totalSpecs : 0,
+    unresolvedSpecs: c ? c.unresolvedSpecs : 0,
+    externalSpecs: c ? c.externalSpecs : 0,
+    skippedFiles: c ? c.skippedFiles : 0,
+    byLang: c ? c.byLang : {}
+  };
+}
+
+/**
+ * Direct dependents of the change set (one hop, measured) for /api/risk's
+ * blast-radius factor. Null → the factor is omitted entirely rather than
+ * scored as zero, which is what "we have no graph" honestly means.
+ */
 async function blastRadiusFor(root, files) {
   try {
-    const { ctx, indexable } = await tsGraphFor(root);
-    if (!ctx) return null;
+    const { graph } = await importGraphFor(root);
+    if (!graph || !graph.edges.length) return null;
     const touched = new Set(files);
-    const dependents = [];
-    for (const rel of indexable) {
-      if (touched.has(rel)) continue;
-      const info = ctx.get(rel);
-      if (info?.resolvedImports?.some((imp) => touched.has(imp))) dependents.push(rel);
+    const dependents = new Set();
+    for (const e of graph.edges) {
+      if (touched.has(e.to) && !touched.has(e.from)) dependents.add(e.from);
     }
-    dependents.sort();
-    return { dependents, source: 'ts-graph' };
+    return { dependents: [...dependents].sort(), source: 'import-scan' };
   } catch {
     return null;
   }
@@ -808,21 +933,24 @@ const BLAST_MAX_EDGES = 400;
 // Fan-out cap per node and per edge kind: one file imported by 900 others must
 // not turn a dashboard query into a 900-node dump (the cap is a cost bound,
 // truncated:true is the honesty bit).
-const BLAST_MAX_FANOUT = 25;
+// Exported (with the two weights below) because brain-mcp.mjs renders the SAME
+// blend and must not re-derive it — one ranking rule, one place.
+export const BLAST_MAX_FANOUT = 25;
 // Score decay per hop, and the discount applied to inferred (history) edges so
 // a MEASURED import dependent always outranks an INFERRED co-change partner at
 // equal depth and equal confidence.
-const BLAST_DEPTH_DECAY = 0.6;
-const BLAST_INFERRED_WEIGHT = 0.85;
+export const BLAST_DEPTH_DECAY = 0.6;
+export const BLAST_INFERRED_WEIGHT = 0.85;
 
 /** Per-edge provenance contract the UI renders against (measured vs inferred). */
 const BLAST_PROVENANCE = Object.freeze({
   basis: 'mixed',
-  source: 'ts-graph static imports (measured) ⊕ git-log co-change (inferred)',
+  source: 'import-scan static imports (measured) ⊕ git-log co-change (inferred)',
   edgeKinds: Object.freeze({
-    imports: 'measured — compiler-resolved static import',
+    imports: 'measured — statically resolved import/require/use (multi-language scan, not a compiler)',
     'co-change': 'inferred — files landed in the same commits, confidence = P(b|a)'
-  })
+  }),
+  note: SCAN_NOTE
 });
 
 // Adjacency (reverse import index + co-change partners) cached per HEAD like
@@ -838,25 +966,31 @@ export function blastStats() {
 
 /**
  * Build both adjacency maps once per HEAD:
- *   importers: file → [files that statically import it]  (MEASURED, ts-graph)
- *   partners:  file → [{file, confidence}] co-change      (INFERRED, git log)
+ *   importers: file → [{file, confidence}] that statically import it (MEASURED)
+ *   partners:  file → [{file, confidence}] co-change                 (INFERRED)
  * Co-change partners can name deleted files — history is reported as it
  * happened; the UI marks those edges inferred anyway.
+ *
+ * The measured half is the multi-language import scan, so a resolved edge
+ * carries the scanner's own confidence (1.0 exact / 0.8 inferred extension /
+ * 0.6 alias-or-search) instead of a flat 1 — a guessed edge should not rank
+ * like an exact one.
  */
 async function blastAdjacency(root, commits) {
   const key = `${gitHead(root)}|${DEFAULT_COMMIT_WINDOW}`;
   if (blastCache.key === key && blastCache.value) return blastCache.value;
-  const { ctx, indexable, tsFiles, reason } = await tsGraphFor(root);
+  const entry = await importGraphFor(root);
   const importers = new Map();
-  if (ctx) {
-    for (const rel of indexable) {
-      const info = ctx.get(rel);
-      for (const imported of info?.resolvedImports || []) {
-        if (!importers.has(imported)) importers.set(imported, []);
-        importers.get(imported).push(rel);
-      }
-    }
-    for (const list of importers.values()) list.sort();
+  for (const e of (entry.graph && entry.graph.edges) || []) {
+    if (!importers.has(e.to)) importers.set(e.to, new Map());
+    const seen = importers.get(e.to);
+    // Two kinds (import + require) of the same pair collapse to the best edge.
+    if (!seen.has(e.from) || seen.get(e.from) < e.confidence) seen.set(e.from, e.confidence);
+  }
+  for (const [file, seen] of importers) {
+    importers.set(file, [...seen.entries()]
+      .map(([f, confidence]) => ({ file: f, confidence }))
+      .sort((x, y) => y.confidence - x.confidence || (x.file < y.file ? -1 : x.file > y.file ? 1 : 0)));
   }
   const cc = coChange(commits);
   const partners = new Map();
@@ -867,12 +1001,15 @@ async function blastAdjacency(root, commits) {
   for (const list of partners.values()) {
     list.sort((x, y) => y.confidence - x.confidence || (x.file < y.file ? -1 : x.file > y.file ? 1 : 0));
   }
+  // "The scan produced edges" — an empty graph is honestly unavailable, not a
+  // silent zero: with no measured edge the answer is history-only and says so.
+  const graphAvailable = Boolean(entry.graph && entry.graph.edges.length);
   const value = {
     importers,
     partners,
-    graphAvailable: Boolean(ctx),
-    tsFiles,
-    reason: ctx ? null : reason,
+    graphAvailable,
+    coverage: graphCoverage(entry),
+    reason: graphAvailable ? null : entry.reason,
     window: cc.window
   };
   blastCache.key = key;
@@ -885,16 +1022,25 @@ async function blastAdjacency(root, commits) {
  * PURE. Breadth-first blast radius over the two adjacency maps.
  *
  * Blend rule (documented, because the UI shows it): an 'imports' edge is
- * MEASURED — the compiler resolved that module specifier, confidence 1. A
- * 'co-change' edge is INFERRED — the two files landed in the same commits,
- * confidence = P(b|a) from git history. Node score is the best path product
- * seen: parent_score × edge_confidence × kind_weight × depth_decay. Nodes
- * reached by any measured edge are 'dependent'; history-only nodes are
- * 'co-change'.
+ * MEASURED — the scan resolved that specifier to a repo file, and the edge
+ * carries the resolution's own confidence. A 'co-change' edge is INFERRED —
+ * the two files landed in the same commits, confidence = P(b|a) from git
+ * history. Node score is the best path product seen: parent_score ×
+ * edge_confidence × kind_weight × depth_decay. Nodes reached by any measured
+ * edge are 'dependent'; history-only nodes are 'co-change'.
+ *
+ * `importers` entries may be a bare path or {file, confidence} (a caller with
+ * a flat graph passes strings; the import scan passes confidences).
+ * Exported because brain-mcp.mjs renders the same ranking over the same maps —
+ * duplicating it there would let the MCP answer and the Blast panel drift.
+ *
+ * @returns {{nodes, edges, truncated, reachedCount}} `nodes` are seeds + the
+ *   highest-scoring kept nodes; `reachedCount` is how many were reached BEFORE
+ *   the cap, so a caller can say "showing top N of M" honestly.
  */
-function buildBlast({ seeds, importers, partners, depth }) {
+export function buildBlast({ seeds, importers, partners, depth }) {
   const nodes = new Map();
-  for (const file of seeds) nodes.set(file, { file, kind: 'seed', depth: 0, score: 1 });
+  for (const file of seeds) nodes.set(file, { file, kind: 'seed', basis: 'seed', depth: 0, score: 1, confidence: 1 });
   const edges = [];
   const seenEdges = new Set();
   let overflow = false;
@@ -922,7 +1068,9 @@ function buildBlast({ seeds, importers, partners, depth }) {
       if (!parent) continue;
       const expansions = [
         ...(importers.get(from) || []).slice(0, BLAST_MAX_FANOUT)
-          .map((file) => ({ file, kind: 'imports', confidence: 1, weight: 1 })),
+          .map((entry) => (typeof entry === 'string'
+            ? { file: entry, kind: 'imports', confidence: 1, weight: 1 }
+            : { file: entry.file, kind: 'imports', confidence: entry.confidence ?? 1, weight: 1 })),
         ...(partners.get(from) || []).slice(0, BLAST_MAX_FANOUT)
           .map((p) => ({ file: p.file, kind: 'co-change', confidence: p.confidence, weight: BLAST_INFERRED_WEIGHT }))
       ];
@@ -932,15 +1080,19 @@ function buildBlast({ seeds, importers, partners, depth }) {
         const score = parent.score * exp.confidence * exp.weight * BLAST_DEPTH_DECAY;
         const existing = nodes.get(exp.file);
         const kind = exp.kind === 'imports' ? 'dependent' : 'co-change';
+        const basis = exp.kind === 'imports' ? 'measured' : 'inferred';
         if (!existing) {
-          nodes.set(exp.file, { file: exp.file, kind, depth: d, score });
+          nodes.set(exp.file, { file: exp.file, kind, basis, depth: d, score, confidence: exp.confidence });
           next.push(exp.file);
           continue;
         }
         if (existing.kind === 'seed') continue; // the question itself never demotes
-        existing.score = Math.max(existing.score, score);
+        if (score > existing.score) {
+          existing.score = score;
+          existing.confidence = exp.confidence;
+        }
         existing.depth = Math.min(existing.depth, d);
-        if (kind === 'dependent') existing.kind = 'dependent'; // measured wins
+        if (kind === 'dependent') { existing.kind = 'dependent'; existing.basis = 'measured'; } // measured wins
       }
     }
     frontier = next;
@@ -958,9 +1110,14 @@ function buildBlast({ seeds, importers, partners, depth }) {
     .filter((e) => keptFiles.has(e.from) && keptFiles.has(e.to))
     .sort((a, b) => b.confidence - a.confidence || (a.from < b.from ? -1 : a.from > b.from ? 1 : 0) || (a.to < b.to ? -1 : a.to > b.to ? 1 : 0));
   return {
-    nodes: [...seedNodes, ...kept].map((n) => ({ ...n, score: Math.round(n.score * 1000) / 1000 })),
+    nodes: [...seedNodes, ...kept].map((n) => ({
+      ...n,
+      score: Math.round(n.score * 1000) / 1000,
+      confidence: Math.round((n.confidence ?? 1) * 1000) / 1000
+    })),
     edges: keptEdges,
-    truncated
+    truncated,
+    reachedCount: reached.length
   };
 }
 
@@ -1715,7 +1872,14 @@ export function createHandler(ctx) {
       // `data` (full partner/conflict/dependent lists) is dropped to bound the
       // payload — the evidence string already summarizes each factor.
       factors: scored.factors.map(({ data, ...f }) => f),
-      provenance: { basis: scored.basis, source: scored.source, window: scored.window },
+      provenance: {
+        basis: scored.basis,
+        // riskScore only knows it read git; when the measured graph contributed
+        // a factor the answer must name that second source too, or the reader
+        // cannot tell which half produced the blast-radius evidence.
+        source: blastRadius ? `${scored.source} ⊕ ${blastRadius.source} static imports` : scored.source,
+        window: scored.window
+      },
       calibration: cachedCalibration(root, commits),
       ...liveMeta()
     });
@@ -1725,7 +1889,8 @@ export function createHandler(ctx) {
    * "What breaks if I change this?" — see the file header for the blend rule.
    * Degradation ladder, never a 500: no seeds → empty answer with
    * reason 'no-changes'; no git history → co-change edges empty + warning; no
-   * TS graph → graphAvailable:false + reason, co-change edges still returned.
+   * resolved import edge → graphAvailable:false + reason, co-change edges
+   * still returned.
    */
   async function apiBlast(res, url) {
     const explicit = filesParam(url);
@@ -1744,7 +1909,7 @@ export function createHandler(ctx) {
       return sendJson(res, 200, {
         files: [], nodes: [], edges: [], truncated: false,
         graphAvailable: false,
-        coverage: { tsFiles: 0, totalSeeds: 0 },
+        coverage: { ...graphCoverage(null), totalSeeds: 0 },
         reason: 'no-changes',
         depth,
         provenance: BLAST_PROVENANCE,
@@ -1771,11 +1936,84 @@ export function createHandler(ctx) {
       edges,
       truncated,
       graphAvailable: adjacency.graphAvailable,
-      coverage: { tsFiles: adjacency.tsFiles, totalSeeds: files.length },
+      // The scan's real numbers, not a single boolean: how many files were read,
+      // how many edges resolved, how many specifiers pointed outside the repo.
+      coverage: { ...adjacency.coverage, totalSeeds: files.length },
       ...(adjacency.reason ? { reason: adjacency.reason } : {}),
       ...(warning ? { warning } : {}),
       depth,
       provenance: { ...BLAST_PROVENANCE, window: adjacency.window || null },
+      ...liveMeta()
+    });
+  }
+
+  /**
+   * The import graph's OWN answers — the questions /api/blast cannot ask
+   * because it is always anchored to a change set: which files import each
+   * other in a circle, which files nothing imports at all, and which files
+   * everything depends on.
+   *
+   * Everything is capped (cycles 20, every list 25) so a 5000-file repo cannot
+   * turn one dashboard poll into a megabyte, and `truncated` says when a cap
+   * bit. Orphans ship with their caveat and the entry-point patterns that were
+   * excluded — a file nothing imports is a CANDIDATE, never a deletion order.
+   * No scannable files → a degraded 200 with `reason`, never a 500.
+   */
+  async function apiGraph(res) {
+    const entry = await importGraphFor(root);
+    const coverage = graphCoverage(entry);
+    const provenance = {
+      ...(entry.graph ? entry.graph.provenance : { basis: 'measured', source: 'import-scan', note: SCAN_NOTE }),
+      caps: { cycles: GRAPH_MAX_CYCLES, cycleLength: GRAPH_MAX_CYCLE_LEN, lists: GRAPH_MAX_LIST }
+    };
+    if (!entry.graph) {
+      return sendJson(res, 200, {
+        cycles: [],
+        orphans: { candidates: [], total: 0, caveat: ORPHAN_CAVEAT, entryPoints: [], entryPointsTotal: 0 },
+        fanIn: [], fanOut: [],
+        coverage,
+        truncated: false,
+        degraded: true,
+        reason: entry.reason,
+        provenance,
+        ...liveMeta()
+      });
+    }
+    const graph = entry.graph;
+    const found = graphCycles(graph, { maxLen: GRAPH_MAX_CYCLE_LEN, maxCycles: GRAPH_MAX_CYCLES });
+    let pkg = {};
+    try { pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')); } catch {}
+    const orphanView = graphOrphans(graph, {
+      entryPoints: defaultEntryPoints({ pkg, files: entry.files })
+    });
+    const inbound = graphFanIn(graph).filter((e) => e.count);
+    const outbound = graphFanOut(graph).filter((e) => e.count);
+    const capped = [
+      found.truncated,
+      found.cycles.length > GRAPH_MAX_CYCLES,
+      orphanView.candidates.length > GRAPH_MAX_LIST,
+      orphanView.entryPoints.length > GRAPH_MAX_LIST,
+      inbound.length > GRAPH_MAX_LIST,
+      outbound.length > GRAPH_MAX_LIST
+    ].some(Boolean);
+    sendJson(res, 200, {
+      cycles: found.cycles.slice(0, GRAPH_MAX_CYCLES).map((files) => ({ files, length: files.length })),
+      orphans: {
+        candidates: orphanView.candidates.slice(0, GRAPH_MAX_LIST),
+        total: orphanView.candidates.length,
+        caveat: orphanView.caveat,
+        // The exclusions are evidence, not decoration — but a repo with 50 npm
+        // scripts would otherwise ship 50 paths on every poll, so they are
+        // capped like every other list and counted honestly.
+        entryPoints: orphanView.entryPoints.slice(0, GRAPH_MAX_LIST),
+        entryPointsTotal: orphanView.entryPoints.length
+      },
+      fanIn: inbound.slice(0, GRAPH_MAX_LIST),
+      fanOut: outbound.slice(0, GRAPH_MAX_LIST),
+      coverage,
+      truncated: capped,
+      degraded: false,
+      provenance,
       ...liveMeta()
     });
   }
@@ -2583,6 +2821,7 @@ export function createHandler(ctx) {
         if (url.pathname === '/api/changed') return apiChanged(res);
         if (url.pathname === '/api/risk') return await apiRisk(res, url);
         if (url.pathname === '/api/blast') return await apiBlast(res, url);
+        if (url.pathname === '/api/graph') return await apiGraph(res);
         if (url.pathname === '/api/next') return await apiNext(res);
         if (url.pathname === '/api/brief') return await apiBrief(res, url);
         if (url.pathname === '/api/map') return apiMap(res);

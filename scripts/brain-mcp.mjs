@@ -78,7 +78,7 @@ import {
   freshness, frontmatterTitle, parseFrontmatter, decisionExcerpt, moduleGlobs,
   globMatchesFile, inferModuleFromPath, moduleAliases, normPath,
   isOpenWorkstream, CALIBRATION_WINDOW,
-  BLAST_DEFAULT_DEPTH, BLAST_MAX_DEPTH, BLAST_MAX_NODES
+  BLAST_DEFAULT_DEPTH, BLAST_MAX_DEPTH, BLAST_MAX_NODES, buildBlast
 } from './brain-serve.mjs';
 
 // ---------------------------------------------------------------------------
@@ -113,14 +113,6 @@ const CAP = Object.freeze({
   conflicts: 8,
   actions: 5
 });
-
-// Blast blend constants. brain-serve exports the depth/node caps but keeps the
-// decay/fan-out weights module-private; they are mirrored here (and only here)
-// so the ranking matches the Blast panel. If brain-serve ever exports them,
-// delete these three lines and import instead.
-const BLAST_DEPTH_DECAY = 0.6;
-const BLAST_INFERRED_WEIGHT = 0.85;
-const BLAST_MAX_FANOUT = 25;
 
 // ---------------------------------------------------------------------------
 // transport discipline: stdout is protocol-only
@@ -443,48 +435,19 @@ async function blastAdjacency(commits) {
 }
 
 /**
- * PURE. Breadth-first blast radius. Node score = parent × edge confidence ×
- * kind weight × depth decay, so a MEASURED import dependent always outranks an
- * INFERRED co-change partner at equal depth — the same blend rule the Blast
- * panel documents.
+ * The blast ranking itself is brain-serve's exported buildBlast — the decay,
+ * the inferred discount and the fan-out cap used to be mirrored here, which
+ * meant this answer and the Blast panel could silently drift apart. This
+ * wrapper only reshapes the shared result into what the text renderer wants:
+ * `kept` = the ranked non-seed nodes, `reachedCount` = how many were reached
+ * before the node cap, so "showing top N" stays honest.
  */
-function buildBlast({ seeds, importers, partners, depth }) {
-  const nodes = new Map();
-  for (const file of seeds) nodes.set(file, { file, kind: 'seed', depth: 0, score: 1, basis: 'seed' });
-  let frontier = [...seeds];
-  for (let d = 1; d <= depth; d++) {
-    const next = [];
-    for (const from of frontier) {
-      const parent = nodes.get(from);
-      if (!parent) continue;
-      const expansions = [
-        ...(importers.get(from) || []).slice(0, BLAST_MAX_FANOUT)
-          .map((file) => ({ file, kind: 'dependent', basis: 'measured', confidence: 1, weight: 1 })),
-        ...(partners.get(from) || []).slice(0, BLAST_MAX_FANOUT)
-          .map((p) => ({ file: p.file, kind: 'co-change', basis: 'inferred', confidence: p.confidence, weight: BLAST_INFERRED_WEIGHT }))
-      ];
-      for (const exp of expansions) {
-        if (exp.file === from) continue;
-        const score = parent.score * exp.confidence * exp.weight * BLAST_DEPTH_DECAY;
-        const existing = nodes.get(exp.file);
-        if (!existing) {
-          nodes.set(exp.file, { file: exp.file, kind: exp.kind, basis: exp.basis, depth: d, score, confidence: exp.confidence });
-          next.push(exp.file);
-          continue;
-        }
-        if (existing.kind === 'seed') continue; // the question itself never demotes
-        if (score > existing.score) { existing.score = score; existing.confidence = exp.confidence; }
-        existing.depth = Math.min(existing.depth, d);
-        if (exp.basis === 'measured') { existing.kind = 'dependent'; existing.basis = 'measured'; }
-      }
-    }
-    frontier = next;
-  }
-  const reached = [...nodes.values()]
-    .filter((n) => n.kind !== 'seed')
-    .sort((a, b) => b.score - a.score || a.depth - b.depth || (a.file < b.file ? -1 : 1));
-  const kept = reached.slice(0, Math.max(0, BLAST_MAX_NODES - seeds.length));
-  return { reached, kept, truncated: kept.length < reached.length };
+function rankBlast({ seeds, importers, partners, depth }) {
+  const { nodes, reachedCount } = buildBlast({ seeds, importers, partners, depth });
+  const kept = nodes.filter((n) => n.kind !== 'seed');
+  // The shared flag also trips on the EDGE budget, which this renderer never
+  // shows; "showing top N" must mean the NODE list was cut, nothing else.
+  return { kept, reachedCount, truncated: kept.length < reachedCount };
 }
 
 // ---------------------------------------------------------------------------
@@ -812,7 +775,7 @@ async function toolBlast(args = {}) {
   }
   const { commits, warning } = commitsSafe();
   const adjacency = await blastAdjacency(commits);
-  const { reached, kept, truncated } = buildBlast({
+  const { kept, reachedCount, truncated } = rankBlast({
     seeds: files, importers: adjacency.importers, partners: adjacency.partners, depth
   });
 
@@ -823,10 +786,10 @@ async function toolBlast(args = {}) {
       ? `import graph: available (${adjacency.tsFiles} TS file(s)) — measured edges outrank inferred history`
       : `import graph: unavailable — ${adjacency.reason}; co-change (inferred) edges are still reported`
   ];
-  if (!reached.length) {
+  if (!reachedCount) {
     lines.push('likely affected: nothing — no importer and no recurring co-change partner in the window.');
   } else {
-    lines.push(`likely affected: ${reached.length} file(s)${truncated ? ` (showing top ${Math.min(kept.length, CAP.blastNodes)})` : ''}`);
+    lines.push(`likely affected: ${reachedCount} file(s)${truncated ? ` (showing top ${Math.min(kept.length, CAP.blastNodes)})` : ''}`);
     for (const n of kept.slice(0, CAP.blastNodes)) {
       const how = n.basis === 'measured'
         ? 'imports it (measured)'
@@ -1297,4 +1260,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 }
 
 // Exported for unit tests / reuse — the tool table and the pure-ish helpers.
-export { TOOLS, provenanceLine, buildBlast, leaseLine, ageHuman, SUPPORTED_PROTOCOLS, LATEST_PROTOCOL };
+export { TOOLS, provenanceLine, rankBlast, leaseLine, ageHuman, SUPPORTED_PROTOCOLS, LATEST_PROTOCOL };

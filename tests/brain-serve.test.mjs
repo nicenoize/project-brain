@@ -615,12 +615,14 @@ test('/api/brief with no target files → empty advisories, still 200', async ()
 // ---------------------------------------------------------------------------
 // /api/blast — "what breaks if I change this?" (measured ⊕ inferred)
 //
-// The fixture is a .mjs repo with no .ts/.tsx sources, so it exercises exactly
-// the degradation that matters: graphAvailable:false with a reason, while the
-// co-change (inferred) edges still answer the question. The co-change block
-// below appends three commits to the fixture — deliberately AFTER every test
-// that asserts on the two seed commits, and before the runner section (which
-// does not read git history).
+// The measured half is import-graph.mjs (JS/TS/MJS/Python/Go/Ruby/PHP/Rust),
+// NOT ts-graph — which is why a .mjs fixture can prove a measured edge at all.
+// The fixture starts with two .mjs files that import nothing, so the first test
+// still exercises the degradation (graphAvailable:false + reason, co-change
+// edges still answering); the block further down adds a REAL relative import
+// and proves the measured edge appears. The co-change block appends three
+// commits — deliberately AFTER every test that asserts on the two seed commits,
+// and before the runner section (which does not read git history).
 // ---------------------------------------------------------------------------
 
 test('/api/blast on the fixture: 200 with nodes/edges arrays + graphAvailable boolean', async () => {
@@ -631,12 +633,19 @@ test('/api/blast on the fixture: 200 with nodes/edges arrays + graphAvailable bo
   assert.ok(Array.isArray(body.nodes) && Array.isArray(body.edges));
   assert.equal(typeof body.truncated, 'boolean');
   assert.equal(typeof body.graphAvailable, 'boolean');
-  // A .mjs-only fixture has no TS sources → the static graph honestly reports
-  // itself unavailable and explains why, instead of pretending to be empty.
+  // Nothing in the fixture imports anything yet → the scan resolved no edge, so
+  // the graph honestly reports itself unavailable and explains why (it no longer
+  // means "no TypeScript" — the scan covers every language it supports).
   assert.equal(body.graphAvailable, false);
   assert.equal(typeof body.reason, 'string');
-  assert.match(body.reason, /ts|tsx|TypeScript/i);
-  assert.equal(body.coverage.tsFiles, 0);
+  assert.match(body.reason, /no static import edge resolved/);
+  // Coverage is the scan's own numbers, not a TS-file count: files really read,
+  // edges really resolved, specifiers that pointed outside the repo, per language.
+  assert.equal(body.coverage.resolvedEdges, 0);
+  assert.ok(body.coverage.filesScanned >= 2, 'the .mjs sources were scanned, not skipped');
+  assert.equal(typeof body.coverage.unresolvedSpecs, 'number');
+  assert.equal(typeof body.coverage.byLang, 'object');
+  assert.ok(body.coverage.byLang.js >= 2, 'byLang counts the .mjs files as js');
   assert.equal(body.coverage.totalSeeds, 1);
   // Seeds are always node depth 0 with kind 'seed'.
   const seed = body.nodes.find((n) => n.file === 'app.mjs');
@@ -727,6 +736,163 @@ test('/api/blast caches adjacency per HEAD (a second query never rebuilds it)', 
   await request('/api/blast?files=app.mjs,lib.mjs&depth=3', { headers: bearer });
   const second = serve.blastStats();
   assert.equal(second.computes, first.computes, 'same HEAD → cached, not recomputed');
+  assert.equal(second.key, first.key);
+});
+
+// ---------------------------------------------------------------------------
+// The language-coverage regression: MEASURED edges in a .mjs repo.
+//
+// This is the whole point of swapping ts-graph for the multi-language import
+// scan. Before, this fixture could NEVER produce a measured edge (no .ts/.tsx,
+// no `typescript` dep) and /api/blast was history-only. The block below adds a
+// REAL relative import between two .mjs files, an import cycle, and enough
+// unimported files to bite the /api/graph list caps — then proves each answer.
+//
+// Everything lands in graphfix/ and is COMMITTED: the per-HEAD graph cache only
+// re-scans when HEAD moves, and a clean tree keeps the later fleet assertions
+// (dirty counts) exactly as they were.
+// ---------------------------------------------------------------------------
+
+const GRAPHFIX_ORPHANS = 25;
+
+/**
+ * Seeded from inside the first test of this block, NOT from a before() hook —
+ * a hook would run before the whole file and retroactively give the earlier
+ * "no measured edges yet" assertions an import graph.
+ */
+function seedGraphFixture() {
+  const dir = path.join(FIXTURE, 'graphfix');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'helper.mjs'), 'export const help = () => 1;\n');
+  // The measured edge under test: a plain relative import, resolved exactly.
+  fs.writeFileSync(path.join(dir, 'consumer.mjs'),
+    "import { help } from './helper.mjs';\nexport const use = () => help();\n");
+  // A two-file cycle so /api/graph has a real cycle to report.
+  fs.writeFileSync(path.join(dir, 'cycle-a.mjs'), "import './cycle-b.mjs';\nexport const a = 1;\n");
+  fs.writeFileSync(path.join(dir, 'cycle-b.mjs'), "import './cycle-a.mjs';\nexport const b = 2;\n");
+  // Unimported filler: pushes the orphan list past its cap so `truncated` and
+  // `total` can be asserted against a known number instead of a guess.
+  for (let i = 0; i < GRAPHFIX_ORPHANS; i++) {
+    fs.writeFileSync(path.join(dir, `orphan${String(i).padStart(2, '0')}.mjs`), `export const o${i} = ${i};\n`);
+  }
+  execSync('git add graphfix', { cwd: FIXTURE });
+  execSync('git -c commit.gpgsign=false commit -q -m "feat: graph fixture"', { cwd: FIXTURE });
+}
+
+test('/api/blast now returns a MEASURED edge for a real .mjs relative import', async () => {
+  seedGraphFixture();
+  const r = await request('/api/blast?files=graphfix/helper.mjs', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.equal(body.graphAvailable, true, 'the scan produced edges — this repo has no TypeScript at all');
+  assert.equal(body.reason, undefined, 'an available graph explains nothing away');
+
+  const edge = body.edges.find((e) => e.from === 'graphfix/helper.mjs' && e.to === 'graphfix/consumer.mjs');
+  assert.ok(edge, 'the importer surfaced through a measured import edge');
+  assert.equal(edge.kind, 'imports');
+  assert.equal(edge.basis, 'measured', 'a resolved import is measured, never inferred');
+  assert.equal(edge.confidence, 1, 'an exact relative resolve is full confidence');
+
+  const node = body.nodes.find((n) => n.file === 'graphfix/consumer.mjs');
+  assert.ok(node, 'the importer is a ranked node');
+  assert.equal(node.kind, 'dependent');
+  assert.equal(node.basis, 'measured');
+  assert.equal(node.depth, 1);
+
+  assert.ok(body.coverage.resolvedEdges >= 3, 'coverage counts the real edges (import + cycle pair)');
+  assert.ok(body.coverage.filesScanned >= GRAPHFIX_ORPHANS + 4);
+  assert.equal(typeof body.coverage.unresolvedSpecs, 'number');
+  assert.ok(body.coverage.byLang.js > 0);
+  assert.match(body.provenance.source, /import-scan/);
+});
+
+test('/api/risk blast-radius factor now fires in a non-TS repo', async () => {
+  const r = await request('/api/risk?files=graphfix/helper.mjs', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  const factor = body.factors.find((f) => f.name === 'blast-radius');
+  assert.ok(factor, 'the measured dependency factor is wired for .mjs sources');
+  assert.match(factor.evidence, /1 downstream dependent file\(s\): graphfix\/consumer\.mjs/);
+  assert.ok(factor.contribution > 0, 'it actually moves the score');
+  assert.match(body.provenance.source, /import-scan static imports/,
+    'the answer names the second source it used, not just git-log');
+
+  // A file nothing imports still gets the factor — with an honest zero, which
+  // is different from the factor being absent (= "we have no graph").
+  const lone = JSON.parse((await request('/api/risk?files=graphfix/orphan00.mjs', { headers: bearer })).body);
+  const loneFactor = lone.factors.find((f) => f.name === 'blast-radius');
+  assert.ok(loneFactor);
+  assert.equal(loneFactor.raw, 0);
+  assert.equal(loneFactor.contribution, 0);
+});
+
+test('/api/graph is token-gated', async () => {
+  const r = await request('/api/graph');
+  assert.equal(r.status, 401);
+});
+
+test('/api/graph answers the graph\'s own questions: cycles, orphans, fan-in/out', async () => {
+  const r = await request('/api/graph', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+
+  // Cycles: the seeded pair, reported as {files, length}.
+  const cycle = body.cycles.find((c) => c.files.includes('graphfix/cycle-a.mjs'));
+  assert.ok(cycle, 'the real import cycle is reported');
+  assert.deepEqual(cycle.files, ['graphfix/cycle-a.mjs', 'graphfix/cycle-b.mjs']);
+  assert.equal(cycle.length, 2);
+
+  // Fan-in / fan-out: only files with edges, each {file, count}.
+  const inbound = body.fanIn.find((e) => e.file === 'graphfix/helper.mjs');
+  assert.ok(inbound, 'the imported file ranks in fan-in');
+  assert.equal(inbound.count, 1);
+  const outbound = body.fanOut.find((e) => e.file === 'graphfix/consumer.mjs');
+  assert.ok(outbound, 'the importing file ranks in fan-out');
+  assert.equal(outbound.count, 1);
+  for (const row of [...body.fanIn, ...body.fanOut]) assert.ok(row.count > 0, 'zero-degree rows are never padding');
+
+  // Orphans are CANDIDATES and say so, with the entry-point patterns excluded.
+  assert.ok(body.orphans.candidates.some((c) => c.file === 'graphfix/consumer.mjs'),
+    'nothing imports the consumer → it is a candidate');
+  assert.ok(!body.orphans.candidates.some((c) => c.file === 'graphfix/helper.mjs'),
+    'an imported file is never an orphan candidate');
+  assert.ok(!body.orphans.candidates.some((c) => c.file === 'feature.test.mjs'),
+    'test files are entry points, not dead code');
+  assert.match(body.orphans.caveat, /CANDIDATES ONLY/);
+  assert.ok(body.orphans.entryPoints.includes('**/*.test.*'), 'the exclusions travel with the answer');
+  assert.ok(body.orphans.entryPoints.length <= 25 && body.orphans.entryPointsTotal >= body.orphans.entryPoints.length);
+
+  assert.equal(body.degraded, false);
+  assert.ok(body.coverage.resolvedEdges >= 3);
+  assert.ok(body.coverage.filesScanned >= GRAPHFIX_ORPHANS + 4);
+  assert.ok(body.coverage.byLang.js > 0);
+  assert.equal(body.provenance.basis, 'measured');
+  assert.equal(body.provenance.source, 'import-scan');
+  assert.match(body.provenance.note, /not a parser/);
+  assert.deepEqual(body.provenance.caps, { cycles: 20, cycleLength: 8, lists: 25 });
+  assert.equal(body.state_age, 0, 'freshness on every answer');
+  assert.equal(body.stale_warning, null);
+});
+
+test('/api/graph caps every list and says so with truncated:true', async () => {
+  const body = JSON.parse((await request('/api/graph', { headers: bearer })).body);
+  assert.ok(body.cycles.length <= 20, 'cycles capped at 20');
+  assert.ok(body.fanIn.length <= 25 && body.fanOut.length <= 25, 'rankings capped at 25');
+  assert.equal(body.orphans.candidates.length, 25, 'the orphan list is capped at 25');
+  assert.ok(body.orphans.total > 25, 'the honest total is still reported');
+  assert.equal(body.truncated, true, 'a cap that bit is never silent');
+});
+
+test('/api/graph caches the scan per HEAD (a second request never re-scans)', async () => {
+  await request('/api/graph', { headers: bearer });
+  const first = serve.graphStats();
+  assert.ok(first.computes >= 1, 'the graph was scanned at least once');
+  assert.equal(typeof first.key, 'string');
+  // Different endpoint, same HEAD → the same scan answers both.
+  await request('/api/blast?files=graphfix/helper.mjs', { headers: bearer });
+  await request('/api/graph', { headers: bearer });
+  const second = serve.graphStats();
+  assert.equal(second.computes, first.computes, 'same HEAD → cached, not re-scanned');
   assert.equal(second.key, first.key);
 });
 
