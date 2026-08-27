@@ -7,7 +7,10 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // Pure exports — importing the script must NOT run its CLI (isMain guard).
-import { generateChallenges, renderInterview } from '../scripts/brain-grill.mjs';
+import {
+  generateChallenges, renderInterview, STAKEHOLDER_LENSES, LENS_IDS,
+  resolveLenses, parseLensVerdicts, lensConflict
+} from '../scripts/brain-grill.mjs';
 import { serializeGrill, parseGrill, GRILL_VERDICTS } from '../scripts/findings.mjs';
 import { inferType } from '../scripts/infer.mjs';
 
@@ -169,4 +172,177 @@ test('CLI list shows the verdict and is JSON-clean', () => {
   const rows = JSON.parse(list.stdout);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].verdict, 'block');
+});
+
+/* ---------------------------------------------------------------------------
+ * Stakeholder lenses — the second grill axis.
+ *
+ * The category bank asks how the CODE fails. These ask whose INTERESTS the
+ * plan trades against, which finds different things: a change can be correct,
+ * fast and tested and still be wrong because it moves cost onto whoever runs
+ * it at 3am. The value is the DISAGREEMENT, not the extra questions, so the
+ * conflict machinery gets the same test attention as the bank itself.
+ * ------------------------------------------------------------------------ */
+
+test('lenses: every lens declares who it speaks for and what they lose', () => {
+  assert.ok(LENS_IDS.length >= 5, 'a single-lens bank is not a second axis');
+  for (const id of LENS_IDS) {
+    const l = STAKEHOLDER_LENSES[id];
+    assert.ok(l.who && l.who.length > 10, `${id}: missing 'who'`);
+    // `stake` is what makes an answerer argue against a real interest instead
+    // of role-playing a job title — an empty one guts the lens.
+    assert.ok(l.stake && l.stake.length > 10, `${id}: missing 'stake'`);
+    assert.ok(Array.isArray(l.questions) && l.questions.length >= 2, `${id}: too few questions`);
+    for (const q of l.questions) assert.match(q, /\?/, `${id}: not a question: ${q}`);
+  }
+  // Frozen: a lens bank mutated at runtime would make two grills incomparable.
+  assert.throws(() => { STAKEHOLDER_LENSES.user = null; });
+});
+
+test('resolveLenses: opt-in by default, "all" expands, order is declared not typed', () => {
+  assert.deepEqual(resolveLenses('').ids, [], 'lenses must stay opt-in');
+  assert.deepEqual(resolveLenses(undefined).ids, []);
+  assert.deepEqual(resolveLenses('all').ids, [...LENS_IDS]);
+  assert.deepEqual(resolveLenses('ALL').ids, [...LENS_IDS]);
+  // Typed in reverse, returned in declared order → two runs are comparable.
+  const rev = [...LENS_IDS].reverse().join(',');
+  assert.deepEqual(resolveLenses(rev).ids, [...LENS_IDS]);
+  assert.deepEqual(resolveLenses('user, user ,USER').ids, ['user']);
+});
+
+test('resolveLenses: an unknown lens is reported, never silently dropped', () => {
+  // A typo that quietly removes a perspective is the exact failure this axis
+  // exists to prevent, so it surfaces rather than degrading to fewer lenses.
+  const r = resolveLenses('maintainer,maintaner,payer');
+  assert.deepEqual(r.ids, ['maintainer', 'payer']);
+  assert.deepEqual(r.unknown, ['maintaner']);
+});
+
+test('generateChallenges: lenses add their own sections and only when asked', () => {
+  const without = generateChallenges({ category: 'correctness' });
+  assert.ok(!without.some((c) => c.section.startsWith('Lens:')), 'lenses leaked in unasked');
+
+  const withLens = generateChallenges({ category: 'correctness', lenses: ['maintainer', 'payer'] });
+  const sections = [...new Set(withLens.map((c) => c.section))];
+  assert.ok(sections.includes('Lens: maintainer'));
+  assert.ok(sections.includes('Lens: payer'));
+  // The existing bank is untouched — this is an added axis, not a replacement.
+  assert.ok(sections.includes('Correctness'));
+  assert.ok(sections.includes('Fundamentals'));
+  // People before platitudes: lenses precede the generic bank.
+  assert.ok(
+    sections.indexOf('Lens: maintainer') < sections.indexOf('Fundamentals'),
+    'lens sections must come before the generic bank'
+  );
+  // An unknown id in the array is skipped rather than rendering an empty section.
+  assert.deepEqual(
+    generateChallenges({ lenses: ['nope'] }).filter((c) => c.section.startsWith('Lens:')),
+    []
+  );
+});
+
+test('renderInterview: a per-lens verdict block, or none at all', () => {
+  const meta = { title: 'T', lenses: ['maintainer', 'on-call'] };
+  const md = renderInterview(meta, generateChallenges({ lenses: meta.lenses }));
+  assert.match(md, /## Verdict per lens/);
+  assert.match(md, /- \*\*maintainer\*\* — .+; loses: /);
+  assert.match(md, /maintainer: proceed\|revise\|block/);
+  assert.match(md, /on-call: proceed\|revise\|block/);
+  // The instruction that carries the whole idea must survive edits to the text.
+  assert.match(md, /do not\n?\s*harmonise them/);
+  assert.match(md, /One lens blocking is enough to stop/);
+
+  const plain = renderInterview({ title: 'T' }, generateChallenges({}));
+  assert.doesNotMatch(plain, /Verdict per lens/, 'lens block appeared without lenses');
+  assert.match(plain, /## Verdict/, 'the overall verdict must still be there');
+});
+
+test('parseLensVerdicts: tolerant of shape, silent on unanswered', () => {
+  const body = [
+    '- **maintainer**: block — the schema becomes load-bearing',
+    'on-call — proceed',
+    '  payer verdict: REVISE',
+    'user: definitely maybe'                       // not a verdict word
+  ].join('\n');
+  const v = parseLensVerdicts(body);
+  assert.equal(v.maintainer, 'block');
+  assert.equal(v['on-call'], 'proceed');
+  assert.equal(v.payer, 'revise');
+  // Unanswered comes back null — never assumed to agree, which would let a
+  // lens nobody thought about vote 'proceed' by default.
+  assert.equal(v.user, null);
+  assert.equal(v.newcomer, null);
+});
+
+test('lensConflict: disagreement is the signal, and block outranks', () => {
+  const agree = lensConflict({ maintainer: 'proceed', payer: 'proceed' });
+  assert.equal(agree.conflict, false);
+  assert.equal(agree.worst, 'proceed');
+  assert.equal(agree.answered, 2);
+
+  const split = lensConflict({ maintainer: 'block', payer: 'proceed', 'on-call': 'revise' });
+  assert.equal(split.conflict, true);
+  assert.equal(split.worst, 'block', 'one veto is enough to stop');
+  assert.deepEqual(split.split.block, ['maintainer']);
+
+  // A lens left blank is missing, not agreeing.
+  const partial = lensConflict({ maintainer: 'revise', payer: null });
+  assert.deepEqual(partial.missing, ['payer']);
+  assert.equal(partial.answered, 1);
+  assert.equal(partial.conflict, false, 'one answer cannot disagree with itself');
+
+  const empty = lensConflict({});
+  assert.equal(empty.worst, null);
+  assert.equal(empty.conflict, false);
+});
+
+test('brain-grill.mjs save: a blocking lens is never outranked in silence', () => {
+  // The whole point of asking several perspectives is to let one neglected
+  // interest veto. Recording an overall `proceed` over a lens that said `block`
+  // without saying so would quietly undo that.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-grill-lens-'));
+  try {
+    const answers = path.join(dir, 'answers.md');
+    fs.writeFileSync(answers, [
+      '- maintainer: block — the schema becomes load-bearing across twelve repos',
+      '- payer: proceed — two weeks, and it unblocks the pitch',
+      '- on-call: revise — no signal when pooling silently degrades'
+    ].join('\n') + '\n');
+    const r = spawnSync(process.execPath, [
+      GRILL_SCRIPT, 'save', '--title', 'Lens conflict fixture', '--verdict', 'proceed',
+      '--body-file', answers
+    ], { cwd: dir, encoding: 'utf8', env: { ...process.env, BRAIN_ROOT: dir }, timeout: 30000 });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Lenses \(3 answered\)/);
+    assert.match(r.stdout, /block: maintainer/);
+    assert.match(r.stdout, /CONFLICT: the lenses do not agree/);
+    assert.match(r.stdout, /WARNING: overall verdict is `proceed` while maintainer said `block`/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('brain-grill.mjs save: no lens answers → no lens noise', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-grill-nolens-'));
+  try {
+    const answers = path.join(dir, 'answers.md');
+    fs.writeFileSync(answers, 'Plain prose with no per-lens verdict lines at all.\n');
+    const r = spawnSync(process.execPath, [
+      GRILL_SCRIPT, 'save', '--title', 'No lenses', '--verdict', 'proceed', '--body-file', answers
+    ], { cwd: dir, encoding: 'utf8', env: { ...process.env, BRAIN_ROOT: dir }, timeout: 30000 });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stdout, /Lenses \(/);
+    assert.doesNotMatch(r.stdout, /CONFLICT/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('brain-grill.mjs scaffold: an unknown --lens fails loudly', () => {
+  const r = spawnSync(process.execPath, [GRILL_SCRIPT, 'scaffold', '--title', 'X', '--lens', 'maintaner'], {
+    cwd: path.resolve(here, '..'), encoding: 'utf8', timeout: 30000
+  });
+  assert.equal(r.status, 2, 'a typo must not silently drop a perspective');
+  assert.match(r.stderr, /unknown lens\(es\): maintaner/);
+  assert.match(r.stderr, /--lens all/);
 });
