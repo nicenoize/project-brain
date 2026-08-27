@@ -77,15 +77,21 @@ function sectionState(id, d, { workstreams, leases, conflictsByTask }) {
       if (d.fleet?.degraded) return 'quiet';
       return top?.attention >= 50 ? 'stop' : top?.attention >= 20 ? 'attn' : 'run';
     }
-    case 'next':
-      return (d.next?.actions || []).length ? 'attn' : 'quiet';
+    case 'next': {
+      const acts = d.next?.actions || [];
+      if (!acts.length) return 'quiet';
+      // A queue of safe-to-run commands is information; only a decision that
+      // needs a person earns the lamp.
+      return acts.some((a) => a.boundary === 'human') ? 'attn' : 'run';
+    }
     case 'risk': {
       const sc = d.risk?.score;
       if (sc == null) return 'quiet';
       return sc >= 6.5 ? 'stop' : sc >= 3.5 ? 'attn' : 'run';
     }
     case 'blast':
-      return (d.blast?.nodes || []).some((n) => n.kind !== 'seed') ? 'attn' : 'quiet';
+      // A measured radius is evidence, not an alarm.
+      return (d.blast?.nodes || []).some((n) => n.kind !== 'seed') ? 'run' : 'quiet';
     case 'security': {
       const reach = d.security?.vulnerabilities?.reachable || [];
       const secrets = d.security?.secrets?.findings || [];
@@ -99,12 +105,18 @@ function sectionState(id, d, { workstreams, leases, conflictsByTask }) {
       return leases.length ? 'run' : 'quiet';
     case 'graph':
       return (d.graph?.cycles || []).length ? 'attn' : 'quiet';
-    case 'danger':
-      return (d.health?.files || []).length ? 'attn' : 'quiet';
+    case 'danger': {
+      const files = d.health?.files || [];
+      if (!files.length) return 'quiet';
+      // A ranking always exists; only a file in the top band asks for someone.
+      return files[0]?.score >= 6.5 ? 'attn' : 'run';
+    }
     case 'map':
       return (d.map?.orphans?.codeDirs || []).length ? 'attn' : 'quiet';
     case 'audit':
       return (d.events?.events || []).length ? 'run' : 'quiet';
+    case 'records':
+      return (d.records?.records || []).length ? 'run' : 'quiet';
     default:
       return 'quiet';
   }
@@ -119,7 +131,10 @@ function Section({ id, heading, node, state }) {
   return (
     <section className={`bay-section state-${state}`} aria-labelledby={`h-${id}`}>
       <h2 id={`h-${id}`}>
-        <span className={`lamp ${state === 'quiet' ? '' : state}`} aria-hidden="true" />
+        {/* Only a state that wants a human lights the head; 'run' and 'quiet'
+            stay dark. Green at section level would mean "has content", which
+            is how the lamp lost its meaning the first time. */}
+        <span className={`lamp ${state === 'stop' || state === 'attn' ? state : ''}`} aria-hidden="true" />
         {heading}
       </h2>
       <div className="sheet">{node}</div>
@@ -190,6 +205,11 @@ export default function App() {
     describe('graph', 'What is tangled?', <GraphPanel graph={d.graph} />),
     describe('map', 'Why is it built this way?', <MapPanel map={d.map} records={d.records} />)
   ].sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state]);
+
+  // The rail-and-T-card board is the surface's signature. Rank may move it up,
+  // never far down: a quiet board is still the thing this product IS.
+  const boardIdx = mainSections.findIndex((x) => x.id === 'board');
+  if (boardIdx > 1) mainSections.splice(1, 0, mainSections.splice(boardIdx, 1)[0]);
 
   const sideSections = [
     describe('leases', 'Who holds what — until when?',

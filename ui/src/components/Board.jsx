@@ -81,12 +81,20 @@ export default function Board({ workstreams, conflictsByTask, runnersInfo, onCha
   };
 
   if (!workstreams.length) {
+    // An empty board is an empty RAIL, not a paragraph: the slot is the point,
+    // and seeing it wait is what makes the filled version legible.
     return (
-      <p className="empty">
-        No work in flight. Start one with{' '}
-        <code>npm run brain:work -- start --task &lt;slug&gt;</code> — the card
-        appears here with its lamp and a start control.
-      </p>
+      <div>
+        <div className="rail-row empty-rail" aria-hidden="true">
+          <span className="lamp" />
+          <div className="tcard placeholder" />
+        </div>
+        <p className="empty">
+          No work in flight. Start one with{' '}
+          <code>npm run brain:work -- start --task &lt;slug&gt;</code> — the card
+          hangs in that slot with its lamp and a start control.
+        </p>
+      </div>
     );
   }
   return (
