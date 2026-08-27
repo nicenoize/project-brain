@@ -359,8 +359,10 @@ test('fileHealth: churn-percentile isolated — rank in the decay ranking drives
   assert.equal(churnOf(result.files[2]).raw, 0.3333);
   assert.match(churnOf(result.files[0]).evidence, /churn rank #1 of 3/);
   // scatter 0 (never co-changes), bus raw 1 (single author), fix 0 for all three →
-  // scores differ ONLY through churn: 10×(0.35×pct + 0.2×1)
-  assert.deepEqual(result.files.map((f) => f.score), [5.5, 4.3, 3.2]);
+  // Scores differ ONLY through churn: 10×(0.4×pct). bus-factor is still
+  // measured and still in the factor list, but at weight 0 since it scored
+  // AUC 0.50 on two independent repos — so it no longer moves the number.
+  assert.deepEqual(result.files.map((f) => f.score), [4, 2.7, 1.3]);
   // no file flagged: each has 3 commits (= minCommits)
   assert.ok(result.files.every((f) => !f.lowConfidence));
 });
@@ -486,30 +488,14 @@ function structureFixture() {
  * a caller that passes no structure data must get exactly what it got before
  * they existed. This is the stored expectation of the history-only output —
  * if any of it changes, that contract broke and this test says where.
+ *
+ * Updated once, deliberately: bus-factor dropped to weight 0 after measuring
+ * AUC 0.50 on two independent repos, and the remaining three weights were
+ * renormalised. The factor is still emitted (same name, same raw, same
+ * evidence) so the SHAPE of the contract is unchanged — only the numbers it
+ * no longer influences.
  */
-const FILE_HEALTH_HISTORY_ONLY_SNAPSHOT = [
-  "{\"basis\":\"measured\",\"source\":\"git-log\",\"window\":{\"commits\":4,\"since\":\"2026-07-27T00:00:00.000Z\",\"until\":\"2026-07-31T00:00:00.000Z\"}",
-  ",\"params\":{\"weights\":{\"churnPercentile\":0.35,\"coChangeScatter\":0.2,\"busFactor\":0.2,\"fixDensity\":0.25}",
-  ",\"saturation\":{\"scatterPartners\":8},\"scatterSupport\":2,\"minCommits\":3,\"halfLifeDays\":90,\"maxFilesPerCommit\":30,",
-  "\"fixPattern\":\"/\\\\b(fix(es|ed)?|hotfix|revert(s|ed)?|regression)\\\\b/i\",\"now\":\"2026-08-01T00:00:00.000Z\"}",
-  ",\"files\":[{\"file\":\"scripts/core.mjs\",\"score\":6.6,\"commits\":3,\"lastCommit\":\"2026-07-31T00:00:00.000Z\",",
-  "\"factors\":[{\"name\":\"churn-percentile\",\"weight\":0.35,\"raw\":1,\"contribution\":0.35,\"evidence\":\"churn rank #1 of 3 (percentile 1)\"}",
-  ",{\"name\":\"co-change-scatter\",\"weight\":0.2,\"raw\":0.125,\"contribution\":0.025,\"evidence\":\"co-changes with 1 distinct partner(s) (≥2×): scripts/util.mjs\"}",
-  ",{\"name\":\"bus-factor\",\"weight\":0.2,\"raw\":1,\"contribution\":0.2,\"evidence\":\"bus factor 1 — A owns 67% of 3 commits\"}",
-  ",{\"name\":\"fix-density\",\"weight\":0.25,\"raw\":0.3333,\"contribution\":0.0833,\"evidence\":\"1 of 3 commits are fix/revert commits (33%)\"}",
-  "]},{\"file\":\"scripts/util.mjs\",\"score\":5.8,\"commits\":2,\"lastCommit\":\"2026-07-31T00:00:00.000Z\",\"factors\":[{\"name\":\"churn-percentile\",",
-  "\"weight\":0.35,\"raw\":0.6667,\"contribution\":0.2333,\"evidence\":\"churn rank #2 of 3 (percentile 0.67)\"},",
-  "{\"name\":\"co-change-scatter\",\"weight\":0.2,\"raw\":0.125,\"contribution\":0.025,\"evidence\":\"co-changes with 1 distinct partner(s) (≥2×): scripts/core.mjs\"}",
-  ",{\"name\":\"bus-factor\",\"weight\":0.2,\"raw\":1,\"contribution\":0.2,\"evidence\":\"bus factor 1 — A owns 100% of 2 commits\"}",
-  ",{\"name\":\"fix-density\",\"weight\":0.25,\"raw\":0.5,\"contribution\":0.125,\"evidence\":\"1 of 2 commits are fix/revert commits (50%)\"}",
-  "],\"lowConfidence\":true,\"reason\":\"insufficient history\"},{\"file\":\"scripts/leaf.mjs\",\"score\":3.2,\"commits\":1,",
-  "\"lastCommit\":\"2026-07-27T00:00:00.000Z\",\"factors\":[{\"name\":\"churn-percentile\",\"weight\":0.35,\"raw\":0.3333,",
-  "\"contribution\":0.1167,\"evidence\":\"churn rank #3 of 3 (percentile 0.33)\"},{\"name\":\"co-change-scatter\",",
-  "\"weight\":0.2,\"raw\":0,\"contribution\":0,\"evidence\":\"no recurring co-change partners\"},{\"name\":\"bus-factor\",",
-  "\"weight\":0.2,\"raw\":1,\"contribution\":0.2,\"evidence\":\"bus factor 1 — A owns 100% of 1 commits\"},{\"name\":\"fix-density\",",
-  "\"weight\":0.25,\"raw\":0,\"contribution\":0,\"evidence\":\"no fix-pattern commits in 1 commits\"}],\"lowConfidence\":true,",
-  "\"reason\":\"insufficient history\"}]}"
-].join('');
+const FILE_HEALTH_HISTORY_ONLY_SNAPSHOT = "{\"basis\":\"measured\",\"source\":\"git-log\",\"window\":{\"commits\":4,\"since\":\"2026-07-27T00:00:00.000Z\",\"until\":\"2026-07-31T00:00:00.000Z\"},\"params\":{\"weights\":{\"churnPercentile\":0.4,\"coChangeScatter\":0.25,\"fixDensity\":0.35},\"saturation\":{\"scatterPartners\":8},\"scatterSupport\":2,\"minCommits\":3,\"halfLifeDays\":90,\"maxFilesPerCommit\":30,\"fixPattern\":\"/\\\\b(fix(es|ed)?|hotfix|revert(s|ed)?|regression)\\\\b/i\",\"now\":\"2026-08-01T00:00:00.000Z\"},\"files\":[{\"file\":\"scripts/core.mjs\",\"score\":5.5,\"commits\":3,\"lastCommit\":\"2026-07-31T00:00:00.000Z\",\"factors\":[{\"name\":\"churn-percentile\",\"weight\":0.4,\"raw\":1,\"contribution\":0.4,\"evidence\":\"churn rank #1 of 3 (percentile 1)\"},{\"name\":\"co-change-scatter\",\"weight\":0.25,\"raw\":0.125,\"contribution\":0.0313,\"evidence\":\"co-changes with 1 distinct partner(s) (\u22652\u00d7): scripts/util.mjs\"},{\"name\":\"bus-factor\",\"weight\":0,\"raw\":1,\"contribution\":0,\"evidence\":\"bus factor 1 \u2014 A owns 67% of 3 commits\"},{\"name\":\"fix-density\",\"weight\":0.35,\"raw\":0.3333,\"contribution\":0.1167,\"evidence\":\"1 of 3 commits are fix/revert commits (33%)\"}]},{\"file\":\"scripts/util.mjs\",\"score\":4.7,\"commits\":2,\"lastCommit\":\"2026-07-31T00:00:00.000Z\",\"factors\":[{\"name\":\"churn-percentile\",\"weight\":0.4,\"raw\":0.6667,\"contribution\":0.2667,\"evidence\":\"churn rank #2 of 3 (percentile 0.67)\"},{\"name\":\"co-change-scatter\",\"weight\":0.25,\"raw\":0.125,\"contribution\":0.0313,\"evidence\":\"co-changes with 1 distinct partner(s) (\u22652\u00d7): scripts/core.mjs\"},{\"name\":\"bus-factor\",\"weight\":0,\"raw\":1,\"contribution\":0,\"evidence\":\"bus factor 1 \u2014 A owns 100% of 2 commits\"},{\"name\":\"fix-density\",\"weight\":0.35,\"raw\":0.5,\"contribution\":0.175,\"evidence\":\"1 of 2 commits are fix/revert commits (50%)\"}],\"lowConfidence\":true,\"reason\":\"insufficient history\"},{\"file\":\"scripts/leaf.mjs\",\"score\":1.3,\"commits\":1,\"lastCommit\":\"2026-07-27T00:00:00.000Z\",\"factors\":[{\"name\":\"churn-percentile\",\"weight\":0.4,\"raw\":0.3333,\"contribution\":0.1333,\"evidence\":\"churn rank #3 of 3 (percentile 0.33)\"},{\"name\":\"co-change-scatter\",\"weight\":0.25,\"raw\":0,\"contribution\":0,\"evidence\":\"no recurring co-change partners\"},{\"name\":\"bus-factor\",\"weight\":0,\"raw\":1,\"contribution\":0,\"evidence\":\"bus factor 1 \u2014 A owns 100% of 1 commits\"},{\"name\":\"fix-density\",\"weight\":0.35,\"raw\":0,\"contribution\":0,\"evidence\":\"no fix-pattern commits in 1 commits\"}],\"lowConfidence\":true,\"reason\":\"insufficient history\"}]}";
 
 test('fileHealth: WITHOUT structure data the output is byte-identical to the stored expectation', () => {
   const result = fileHealth(structureFixture(), { now: NOW });
@@ -778,8 +764,15 @@ test('calibrateRisk: labels from later fixes, AUC beats random on the known stru
   assert.equal(result.auc, 0.875);
   assert.ok(result.auc > 0.5);
   assert.match(result.verdict, /AUC 0\.88 over 9 commits/);
-  assert.match(result.verdict, /better than random/);
-  assert.match(result.verdict, /gate \(0\.6\) met/);
+  // The ranking is right (AUC 0.875 above); the verdict must still refuse to
+  // open the --score gate on 4 commits in the smaller class. This fixture used
+  // to assert "gate met" — the same overclaim calibrateFileHealth made in the
+  // field on a single fixed file.
+  assert.equal(result.sufficientEvidence, false);
+  assert.equal(result.minorityClass, 4);
+  assert.match(result.verdict, /only 4 clean commit\(s\)/);
+  assert.match(result.verdict, /do NOT enable --score on it/);
+  assert.doesNotMatch(result.verdict, /gate \(0\.6\) met/);
   // honest methodology: the output itself says what this is and is not
   assert.match(result.method, /self-calibration/);
   assert.match(result.method, /NOT a cross-repo benchmark/);
@@ -852,7 +845,9 @@ test('calibrateFileHealth: the repeatedly-fixed file wins the ranking → AUC be
   assert.equal(result.futureFixCommits, 1);
   const byFile = new Map(result.files.map((r) => [r.file, r]));
   // hot.js: churn rank 1 (raw 0.35) + bus 1 (0.2) + fix density 2/7 (0.0714) → 6.2
-  assert.equal(byFile.get('hot.js').score, 6.2);
+  // 6.2 -> 5 when bus-factor dropped to weight 0 (AUC 0.50 on two repos);
+  // the defect labels and the AUC-beats-random invariant are unchanged.
+  assert.equal(byFile.get('hot.js').score, 5);
   assert.equal(byFile.get('hot.js').defective, true);
   assert.equal(byFile.get('hot.js').fixedBy, 'F1');
   assert.equal(byFile.get('calm.js').defective, false);
@@ -862,8 +857,16 @@ test('calibrateFileHealth: the repeatedly-fixed file wins the ranking → AUC be
   assert.equal(result.auc, 1);
   assert.ok(result.auc > 0.5);
   assert.match(result.verdict, /AUC 1\.00 over 3 files/);
-  assert.match(result.verdict, /better than random/);
-  assert.match(result.verdict, /gate \(0\.6\) met/);
+  // The RANKING is right (AUC 1 above) and the verdict must still refuse to
+  // endorse it: one positive cannot establish anything. This fixture used to
+  // assert "gate met" — the same overclaim a colleague's repo produced in the
+  // field, where a single fixed file yielded "the health ranking is defensible
+  // on this repo". Correct number, false sentence.
+  assert.equal(result.sufficientEvidence, false);
+  assert.equal(result.minPositives, 10);
+  assert.match(result.verdict, /only 1 fixed file\(s\)/);
+  assert.match(result.verdict, /do NOT cite this number/);
+  assert.doesNotMatch(result.verdict, /gate \(0\.6\) met/);
   // honest methodology in the output itself
   assert.match(result.method, /self-calibration/);
   assert.match(result.method, /NOT a cross-repo benchmark/);
@@ -1100,7 +1103,9 @@ test('brain-intel.mjs health --json: scored files, lowConfidence flag, mandatory
   //   b: 10×(0.35×⅔ + 0.025 + 0.2) = 4.6
   //   c: 10×(0.35×⅓ + 0 + 0.2) = 3.2, flagged (1 commit < 3)
   assert.deepEqual(parsed.files.map((f) => f.file), ['a.js', 'b.js', 'c.js']);
-  assert.deepEqual(parsed.files.map((f) => f.score), [5.8, 4.6, 3.2]);
+  // Values shifted when bus-factor went to weight 0 (AUC 0.50 on two repos);
+  // the ORDER and the lowConfidence flags below are the real invariants.
+  assert.deepEqual(parsed.files.map((f) => f.score), [4.3, 3, 1.3]);
   assert.equal(parsed.files[0].lowConfidence, undefined);
   assert.equal(parsed.files[2].lowConfidence, true);
   assert.equal(parsed.files[2].reason, 'insufficient history');
@@ -1352,4 +1357,100 @@ test('brain-intel.mjs --help documents the structural flags', () => {
   assert.match(help.stdout, /--structure/);
   assert.match(help.stdout, /--plans/);
   assert.match(help.stdout, /Implies --structure/);
+});
+
+/* ---------------------------------------------------------------------------
+ * Calibration power + the short-history diagnosis.
+ *
+ * Both defects were found by running health-calibrate across a colleague's
+ * workspace of 23 unrelated repos. Small repos are the common case out there,
+ * and both failures were confident, well-formatted, and wrong.
+ * ------------------------------------------------------------------------ */
+
+/** 12 files fixed after the cut, 12 clean — enough positives for the gate. */
+function poweredFixture() {
+  const log = [];
+  for (let i = 0; i < 12; i++) {
+    // churned + repeatedly fixed before the cut → high score
+    log.push(hCal(`d${i}a`, 0 + i % 5, `feat: dirty ${i}`, [`dirty${i}.js`]));
+    log.push(hCal(`d${i}b`, 2 + i % 5, `fix: dirty ${i}`, [`dirty${i}.js`]));
+    log.push(hCal(`d${i}c`, 4 + i % 5, `feat: dirty ${i} again`, [`dirty${i}.js`]));
+    // touched once before the cut → low score
+    log.push(hCal(`k${i}`, 6 + i % 5, `feat: kalm ${i}`, [`kalm${i}.js`]));
+    // the label: each dirty file is fixed again after the cut
+    log.push(hCal(`F${i}`, 40, `fix: dirty ${i} exploded`, [`dirty${i}.js`]));
+  }
+  log.push(hCal('Z1', 60, 'chore: close observation window', ['closer.js']));
+  return log;
+}
+
+test('calibrateFileHealth: the gate opens once there are enough fixed files', () => {
+  const r = calibrateFileHealth(poweredFixture(), { horizonDays: 30 });
+  assert.equal(r.defective, 12);
+  assert.ok(r.defective >= r.minPositives, 'fixture must clear the power bar');
+  assert.equal(r.sufficientEvidence, true);
+  assert.ok(r.auc >= 0.6, `expected a separating fixture, got AUC ${r.auc}`);
+  assert.match(r.verdict, /gate \(0\.6\) met/);
+  assert.doesNotMatch(r.verdict, /do NOT cite/);
+});
+
+test('calibrateFileHealth: a repo younger than the horizon is told the real reason', () => {
+  // Every commit inside a 10-day span, evaluated at a 30-day horizon → the cut
+  // lands before the first commit, so there is no pre-cut period to score from.
+  const log = [
+    hCal('a1', 0, 'feat: one', ['a.js']),
+    hCal('a2', 3, 'fix: two', ['a.js']),
+    hCal('b1', 6, 'feat: three', ['b.js']),
+    hCal('b2', 10, 'fix: four', ['b.js'])
+  ];
+  const r = calibrateFileHealth(log, { horizonDays: 30 });
+  assert.equal(r.evaluated, 0);
+  assert.equal(r.auc, null);
+  assert.equal(r.sufficientEvidence, false);
+  assert.equal(r.historySpanDays, 10);
+  // The remedy must be the true one. It used to say "need both fixed and clean
+  // files after the cut", sending the reader off to wait for fix commits —
+  // which would never have helped, since the problem is upstream of labelling.
+  assert.match(r.verdict, /shorter than the 30-day horizon/);
+  assert.match(r.verdict, /--horizon-days/);
+  assert.match(r.verdict, /more fix commits will NOT help/);
+
+  // Same log, a horizon that fits inside the history → the real path runs.
+  const ok = calibrateFileHealth(log, { horizonDays: 5 });
+  assert.ok(ok.evaluated > 0, 'a horizon inside the span must produce rows');
+  assert.doesNotMatch(ok.verdict, /shorter than the/);
+});
+
+test('calibrateFileHealth: an empty log still reports the label-variety reason', () => {
+  const r = calibrateFileHealth([], { horizonDays: 30 });
+  assert.equal(r.evaluated, 0);
+  assert.equal(r.historySpanDays, 0);
+  assert.match(r.verdict, /need both fixed and clean files/);
+  assert.doesNotMatch(r.verdict, /shorter than the/);
+});
+
+test('calibrateFileHealth: scarcity of CLEAN files is underpowered too', () => {
+  // The mirror image of the one-fixed-file case, taken from a repo where 34 of
+  // 43 files were fixed after the cut: plenty of positives, almost no negatives.
+  // The ranking has only a handful of clean files to be right about, so the
+  // number is exactly as fragile — the gate must refuse it from both sides.
+  const log = [];
+  for (let i = 0; i < 14; i++) {
+    log.push(hCal(`p${i}a`, i % 6, `feat: p${i}`, [`p${i}.js`]));
+    log.push(hCal(`p${i}b`, 6 + i % 6, `feat: p${i} more`, [`p${i}.js`]));
+    log.push(hCal(`F${i}`, 40, `fix: p${i} after the cut`, [`p${i}.js`]));
+  }
+  // Two lonely clean files.
+  log.push(hCal('n1', 3, 'feat: clean one', ['clean1.js']));
+  log.push(hCal('n2', 4, 'feat: clean two', ['clean2.js']));
+  log.push(hCal('Z1', 60, 'chore: close observation window', ['closer.js']));
+
+  const r = calibrateFileHealth(log, { horizonDays: 30 });
+  assert.equal(r.defective, 14, 'fixture must have plenty of positives');
+  assert.equal(r.evaluated - r.defective, 2, 'and almost no negatives');
+  assert.ok(r.defective >= r.minPositives, 'positives alone would have passed the old gate');
+  assert.equal(r.minorityClass, 2);
+  assert.equal(r.sufficientEvidence, false);
+  assert.match(r.verdict, /unfixed file\(s\) — nearly everything here was fixed/);
+  assert.doesNotMatch(r.verdict, /gate \(0\.6\) met/);
 });

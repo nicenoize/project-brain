@@ -46,7 +46,37 @@ export const BUDGETS = {
   // the brain has: budgeted an order of magnitude below the once-per-session
   // digest above. 700 B ≈ 175 tok. Enforced by tests/brain-answer.test.mjs;
   // BRAIN_ANSWER_BUDGET_BYTES overrides it per process.
-  answerBytes: 700
+  answerBytes: 700,
+
+  // --- LATENCY budgets (milliseconds) -------------------------------------
+  // The byte budgets above are exact: a file either is or is not 12001 bytes.
+  // These are NOT. A millisecond reading on shared CI hardware is a wall-clock
+  // sample from a box we do not control, and one descheduling multiplies it.
+  // So these numbers are deliberately blunt: they exist to catch an
+  // ORDER-OF-MAGNITUDE regression — an accidental O(n²), a sync read pulled
+  // into a loop, a cache that stopped caching — and nothing finer. Percent-
+  // level drift is scripts/bench.mjs --against's job, where both readings come
+  // from the same machine and the noise band is measured rather than assumed.
+  //
+  // HEADROOM: each budget is ~15-20× the median measured on the dev machine
+  // (Apple M4 Pro, node 24, this repo — see .project-brain/bench-baseline.json
+  // for the reading these were derived from). That factor is not timidity, it
+  // is the price of the test being trustworthy: a perf test that goes red when
+  // CI is merely busy gets muted within a week, and a muted test protects
+  // nothing. A 15× breach is not noise on any machine — it is a bug.
+  // Enforced by tests/bench-budget.test.mjs, which additionally SKIPS (never
+  // fails) when the machine proves itself too loaded to measure on.
+
+  // First /api/state call against a fresh in-process daemon — the read behind
+  // every Control-Room page load. Measured ≈5 ms cold.
+  apiStateMs: 100,
+  // brain-answer-hook.mjs end-to-end, spawn included — the ambient per-EDIT
+  // latency every agent pays. Measured ≈58 ms, most of it node startup, which
+  // is exactly the part a loaded CI box inflates.
+  answerHookMs: 1000,
+  // buildImportGraph over the repo's git source set — the scan behind
+  // /api/blast, /api/graph and brain:impact. Measured ≈83 ms for 220 files.
+  importScanMs: 1500
 };
 
 /** Resolve the state-digest byte budget — BRAIN_STATE_DIGEST_BUDGET_BYTES env override wins. PURE given env. */
