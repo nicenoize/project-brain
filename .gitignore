@@ -8,6 +8,8 @@ node_modules/
 .project-brain/.sync-state.json
 .project-brain/.dirty-files
 .project-brain/.usage.jsonl
+.project-brain/.answer-cache.json
+.project-brain/.route-hook-state.json
 .project-brain/.skill-audit-cache/
 .claude/worktrees/
 .project-brain/history/
