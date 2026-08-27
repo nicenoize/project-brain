@@ -467,3 +467,15 @@
 .claim input::placeholder { color: var(--ink-3); }
 .claim input:focus-visible { border-color: var(--signal); }
 .claim .gate, .claim .error-note { flex: 1 0 100%; }
+
+/* graph panel */
+.graph-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 20px; }
+.graph-cols section { min-width: 0; }
+.graph-cols .k { margin-bottom: 6px; }
+.graph-cols .reason-list li { display: flex; gap: 7px; align-items: baseline; }
+.graph-cols .path { overflow-wrap: anywhere; font-size: 12px; }
+
+/* refactor moves under a dangerous file */
+.plan-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.plan-list li { display: flex; gap: 7px; align-items: baseline; padding: 2px 0; font-size: 12.5px; color: var(--ink-2); }
+.compact .plan-list { display: none; }
