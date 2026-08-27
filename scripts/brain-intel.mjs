@@ -12,6 +12,15 @@
  *   brain-intel.mjs risk [--files a,b,c] [--score] [--since <rev|date>] [--json]
  *       (without --files: reads staged files via `git diff --cached --name-only`)
  *   brain-intel.mjs calibrate [--window N] [--horizon-days K] [--json]
+ *   brain-intel.mjs health [--limit N] [--structure] [--plans] [--json]
+ *       (per-file 0-10 danger score: churn percentile × co-change scatter ×
+ *        bus factor × fix density — receipt-backed, lowConfidence-flagged;
+ *        --structure adds the three code-shape factors, --plans adds named
+ *        refactoring moves per file)
+ *   brain-intel.mjs health-calibrate [--window N] [--horizon-days K]
+ *                                    [--structure] [--json]
+ *       (cut-point replay: do TODAY's file scores predict NEAR-FUTURE fixes?
+ *        always reports per-factor AUC so structure can be judged, not assumed)
  *
  * Shared flags: --commits N (history window, default 500 commits to bound
  * cost — mirrors brain-why's -n convention; --since replaces the cap),
@@ -50,10 +59,14 @@ import {
   riskFactors,
   riskScore,
   calibrateRisk,
+  fileHealth,
+  calibrateFileHealth,
   DEFAULT_HALF_LIFE_DAYS,
   DEFAULT_MIN_SUPPORT,
   DEFAULT_MIN_CONFIDENCE
 } from './git-intel.mjs';
+import { buildImportGraph, cycles } from './import-graph.mjs';
+import { measureFiles, refactorPlan, STRUCTURE_NOTE } from './code-structure.mjs';
 
 const DEFAULT_COMMIT_WINDOW = 500;
 const DEFAULT_ROW_LIMIT = 15;
@@ -70,6 +83,8 @@ function usage() {
     '  ownership    Top authors + bus factor per path prefix and file.',
     '  risk         Risk factors for a change-set (--files a,b,c or staged files).',
     '  calibrate    Validate the risk weights against this repo\'s own fix/revert history.',
+    '  health       Per-file 0-10 danger score (churn × coupling × bus factor × fix density).',
+    '  health-calibrate  Validate the health score: do today\'s scores predict near-future fixes?',
     '',
     'Flags:',
     '  --json            Parseable JSON on stdout, nothing else.',
@@ -78,8 +93,11 @@ function usage() {
     '  --since <rev|date> Analyze <rev>..HEAD or --since=<date> instead of the commit cap.',
     '  --files a,b,c     (risk) Change-set; default: staged files (git diff --cached).',
     '  --score           (risk) Aggregate factors into the 0-10 score (opt-in until calibrated).',
-    `  --window N        (calibrate) Commits to evaluate (default ${DEFAULT_CALIBRATE_WINDOW}).`,
-    `  --horizon-days K  (calibrate) Fix-observation horizon in days (default ${DEFAULT_HORIZON_DAYS}).`,
+    '  --structure       (health, health-calibrate) Add the code-shape factors (size, nesting,',
+    '                    coupling). Opt-in: without it the score is byte-identical to history-only.',
+    '  --plans           (health) Named refactoring moves per file. Implies --structure.',
+    `  --window N        (calibrate) Commits to evaluate; (health-calibrate) prefix commits scored (default ${DEFAULT_CALIBRATE_WINDOW}).`,
+    `  --horizon-days K  (calibrate, health-calibrate) Fix-observation horizon in days (default ${DEFAULT_HORIZON_DAYS}).`,
     `  --half-life N     Hotspot decay half-life in days (default ${DEFAULT_HALF_LIFE_DAYS}).`,
     '  --now <iso>       Clock override for reproducible hotspot/risk output.'
   ].join('\n');
@@ -106,6 +124,93 @@ function stagedFiles() {
   const r = spawnSync('git', ['diff', '--cached', '--name-only'], { cwd: ROOT, encoding: 'utf8' });
   if (r.error || r.status !== 0) return [];
   return (r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+// ---------------------------------------------------------------------------
+// structural context (import graph + shape metrics) — only built on --structure
+// ---------------------------------------------------------------------------
+
+/** Every source extension both import-graph and code-structure understand. */
+const SOURCE_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|mts|cts|py|go|rb|php|rs)$/i;
+/** Never scanned. Mirrors brain-graph-scan's set (duplicated on purpose: this
+ * command must not mutate shared discovery). */
+const IGNORE_DIR_RE =
+  /(^|\/)(node_modules|\.git|\.next|dist|build|out|coverage|vendor|\.gocache|__pycache__|\.venv|\.tox|target|\.worktrees)(\/|$)/;
+const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
+const MAX_CYCLE_LEN = 8;
+const MAX_CYCLES = 50;
+
+/** Tracked + untracked-but-not-ignored source files. null outside a git work tree. */
+function gitSourceFiles() {
+  const r = spawnSync('git', ['ls-files', '-co', '--exclude-standard'], {
+    cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024
+  });
+  if (r.error || r.status !== 0) return null;
+  return (r.stdout || '').split('\n').filter((f) => f && SOURCE_EXT_RE.test(f));
+}
+
+/**
+ * Build the structural context: shape metrics per file plus the import graph
+ * (fan-in/fan-out and cycles). The only impure part is discovery + reads; both
+ * pure libraries take an injected readFile, and every file is read at most once
+ * (the graph and the measurer share one memo).
+ */
+async function structuralContext() {
+  const discovered = gitSourceFiles() ?? (await listIndexableFiles()).filter((f) => SOURCE_EXT_RE.test(f));
+  const files = [...new Set(discovered)].filter((f) => !IGNORE_DIR_RE.test(f)).sort();
+  const memo = new Map();
+  const readFile = (rel) => {
+    if (memo.has(rel)) {
+      const cached = memo.get(rel);
+      if (cached instanceof Error) throw cached;
+      return cached;
+    }
+    try {
+      const abs = path.join(ROOT, rel);
+      if (fs.statSync(abs).size > MAX_SOURCE_BYTES) throw new Error('file exceeds the 2MB scan cap');
+      const text = fs.readFileSync(abs, 'utf8');
+      memo.set(rel, text);
+      return text;
+    } catch (error) {
+      memo.set(rel, error);
+      throw error;
+    }
+  };
+  const graph = buildImportGraph({ files, readFile });
+  const measured = measureFiles({ files, readFile });
+  const cycleView = cycles(graph, { maxLen: MAX_CYCLE_LEN, maxCycles: MAX_CYCLES });
+  return {
+    files,
+    graph,
+    measured,
+    cycles: cycleView,
+    measureByFile: new Map(measured.files.map((m) => [m.file, m])),
+    degreeByFile: new Map(graph.nodes.map((n) => [n.file, { fanIn: n.importedBy, fanOut: n.imports }]))
+  };
+}
+
+/**
+ * Share of commits by the most prolific author in the window (0..1). Used to
+ * detect an effectively-solo repo — a distinct-name count would be fooled by
+ * one person committing under several git identities.
+ */
+function topAuthorShareOf(commits) {
+  const counts = new Map();
+  let total = 0;
+  for (const c of commits || []) {
+    const a = (c && c.author || '').trim();
+    if (!a) continue;
+    counts.set(a, (counts.get(a) || 0) + 1);
+    total += 1;
+  }
+  if (!total) return null;
+  return Math.max(...counts.values()) / total;
+}
+
+/** Per-file graph facts in the shape refactorPlan() expects. */
+function graphFactsFor(ctx, file) {
+  const deg = ctx.degreeByFile.get(file) || { fanIn: 0, fanOut: 0 };
+  return { file, fanIn: deg.fanIn, fanOut: deg.fanOut, cycles: ctx.cycles.cycles };
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +447,183 @@ function cmdCalibrate(commits, { json, window, horizonDays, halfLifeDays }) {
 }
 
 // ---------------------------------------------------------------------------
+// health — per-file danger score + its calibration receipt
+// ---------------------------------------------------------------------------
+
+/** The factor that drives a file's score: highest contribution, name tiebreak. */
+function topFactorOf(entry) {
+  return [...entry.factors]
+    .sort((a, b) => b.contribution - a.contribution || (a.name < b.name ? -1 : 1))[0];
+}
+
+/** "Kein Score ohne Aktion": the health table always ends in a concrete next step. */
+function healthNextAction(result, plansByFile) {
+  const top = result.files.find((f) => !f.lowConfidence) || result.files[0];
+  if (!top) return '→ no git history to rank yet; start with: project-brain brief';
+  const riskCmd = `before touching: project-brain x intel risk --files ${top.file}`;
+  // With --plans the action is the move itself: a named refactoring beats a
+  // restatement of the score every time.
+  const plan = plansByFile && (plansByFile.get(top.file) || [])[0];
+  if (plan) {
+    return `→ ${top.file} scores ${top.score.toFixed(1)}/10 — ${plan.move}: ${plan.why}; ${riskCmd}`;
+  }
+  const bus = top.factors.find((f) => f.name === 'bus-factor');
+  if (bus && bus.raw >= 1) {
+    return `→ highest-risk file ${top.file} also has bus factor 1 — pair or document it; ${riskCmd}`;
+  }
+  const lead = topFactorOf(top);
+  return `→ ${top.file} scores ${top.score.toFixed(1)}/10, driven by ${lead.name} ` +
+    `(${lead.evidence}); ${riskCmd}`;
+}
+
+async function cmdHealth(commits, { json, limit, nowMs, halfLifeDays, structure, plans }) {
+  const ctx = structure ? await structuralContext() : null;
+  const result = fileHealth(commits, {
+    now: nowMs,
+    halfLifeDays,
+    ...(ctx ? { structure: ctx.measured, graph: ctx.graph } : {})
+  });
+
+  // Plans are per FILE, computed from the same three inputs the score used.
+  const plansByFile = plans && ctx
+    ? new Map(result.files.map((f) => [
+      f.file,
+      refactorPlan(
+        ctx.measureByFile.get(f.file) || null,
+        graphFactsFor(ctx, f.file),
+        f.factors,
+        // Top author's share of the window: gates the add-owner move, which is
+        // vacuous in an effectively-solo repo (every file would carry it).
+        { topAuthorShare: topAuthorShareOf(commits) }
+      )
+    ]))
+    : null;
+
+  const withAction = {
+    ...result,
+    ...(ctx
+      ? {
+        files: result.files.map((f) => ({
+          ...f,
+          structure: ctx.measureByFile.get(f.file) || null,
+          graph: ctx.degreeByFile.get(f.file) || null,
+          ...(plansByFile ? { plans: plansByFile.get(f.file) || [] } : {})
+        })),
+        structureNote: STRUCTURE_NOTE
+      }
+      : {}),
+    nextAction: healthNextAction(result, plansByFile)
+  };
+  if (json) return printJson(withAction);
+
+  out('File health (0-10, 10 = most dangerous: churn percentile × co-change scatter × bus factor × fix density' +
+    (ctx ? ' × size × nesting × coupling)' : ')'));
+  if (!result.files.length) {
+    out('  (no commits found)');
+    out(provenanceLine(result));
+    out(withAction.nextAction);
+    return;
+  }
+  const rows = result.files.slice(0, limit);
+  if (ctx) {
+    table(
+      rows.map((f, i) => {
+        const m = ctx.measureByFile.get(f.file);
+        const d = ctx.degreeByFile.get(f.file);
+        return [
+          i + 1,
+          f.score.toFixed(1) + (f.lowConfidence ? '*' : ' '),
+          f.commits,
+          m ? m.codeLines : '-',
+          m ? m.maxNestingDepth : '-',
+          d ? `${d.fanIn}/${d.fanOut}` : '-',
+          topFactorOf(f).evidence,
+          f.file
+        ];
+      }),
+      ['#', 'SCORE', 'COMMITS', 'LINES', 'DEPTH', 'IN/OUT', 'TOP FACTOR', 'FILE']
+    );
+  } else {
+    table(
+      rows.map((f, i) =>
+        [i + 1, f.score.toFixed(1) + (f.lowConfidence ? '*' : ' '), f.commits, topFactorOf(f).evidence, f.file]),
+      ['#', 'SCORE', 'COMMITS', 'TOP FACTOR', 'FILE']
+    );
+  }
+  if (result.files.some((f) => f.lowConfidence)) {
+    out(`  * low confidence: fewer than ${result.params.minCommits} commits — insufficient history`);
+  }
+  if (plansByFile) {
+    out('');
+    out(`Refactor plans (top ${rows.length} by danger; a file with no rule firing gets no advice)`);
+    let anyPlan = false;
+    for (const f of rows) {
+      const items = plansByFile.get(f.file) || [];
+      if (!items.length) continue;
+      anyPlan = true;
+      out(`  ${f.file} — ${f.score.toFixed(1)}/10`);
+      for (const item of items) out(`    · ${item.move.padEnd(17)} ${item.why}  [${item.evidence}]`);
+    }
+    if (!anyPlan) out('  (no rule fired on these files — nothing to recommend)');
+  }
+  if (ctx) {
+    out('');
+    out(`  Structure: ${ctx.measured.files.length} file(s) measured, ${ctx.graph.coverage.resolvedEdges} import edge(s), ` +
+      `${ctx.cycles.cycles.length} cycle(s)${ctx.cycles.truncated ? '+' : ''} — ${STRUCTURE_NOTE}`);
+  }
+  out('  Weights are uncalibrated defaults — validate with: project-brain x intel health-calibrate' +
+    (ctx ? ' --structure' : ''));
+  out(provenanceLine(result));
+  out(withAction.nextAction);
+}
+
+async function cmdHealthCalibrate(commits, { json, window, horizonDays, halfLifeDays, structure }) {
+  const ctx = structure ? await structuralContext() : null;
+  const result = calibrateFileHealth(commits, {
+    window,
+    horizonDays,
+    halfLifeDays,
+    ...(ctx ? { structure: ctx.measured, graph: ctx.graph } : {})
+  });
+  if (json) return printJson(result);
+  out(`File-health calibration — ${result.method}`);
+  out(`  Every file is scored from commits at or before the cut (${(result.params.cut || '').slice(0, 10) || 'n/a'});`);
+  out(`  "defective" = a fix/revert/hotfix/regression commit within the ${horizonDays}d after the cut touches it.`);
+  out(`  evaluated ${result.evaluated} file(s) · fixed after cut ${result.defective} · ` +
+    `future commits ${result.futureCommits} (${result.futureFixCommits} fix)`);
+  if (result.quantiles.length) {
+    out('');
+    table(
+      result.quantiles.map((q) =>
+        [q.quantile, `${q.scoreMin.toFixed(1)}–${q.scoreMax.toFixed(1)}`, q.files, q.defective, pct(q.defectRate)]),
+      ['BIN', 'SCORE', 'FILES', 'FIXED', 'RATE']
+    );
+  }
+  if (result.perFactor.length) {
+    out('');
+    out('Per-factor discrimination (AUC of each factor ALONE — 0.50 = coin flip)');
+    table(
+      result.perFactor.map((f) =>
+        [f.name, f.kind, f.weight.toFixed(2), f.evaluated, f.auc === null ? 'n/a' : f.auc.toFixed(2)]),
+      ['FACTOR', 'KIND', 'WEIGHT', 'FILES', 'AUC']
+    );
+    const fmt = (v) => (v === null || v === undefined ? 'n/a' : v.toFixed(2));
+    const c = result.comparison;
+    out(`  Per-factor AUCs are NOT directly comparable across rows: each is computed over the files`);
+    out(`  that carry that factor (FILES column). The apples-to-apples comparison is below.`);
+    out(`  Same-population comparison over ${c.files} file(s) — ${c.basis} — of which ${c.defective} fixed: ` +
+      `history-only ${fmt(c.historyOnlyAuc)} · combined ${fmt(c.combinedAuc)}` +
+      (c.structureOnlyAuc !== null ? ` · structure-only ${fmt(c.structureOnlyAuc)}` : '') +
+      (c.delta !== null ? ` · delta ${c.delta > 0 ? '+' : ''}${c.delta.toFixed(2)}` : ''));
+    out(`  Headline AUC ${fmt(result.auc)} covers all ${result.evaluated} evaluated file(s).`);
+    if (result.structureCaveat) out(`  ⚠ ${result.structureCaveat}`);
+  }
+  out('');
+  out(provenanceLine(result));
+  out(result.verdict);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -354,6 +636,10 @@ async function main() {
 
   const json = takeFlag(args, '--json');
   const score = takeFlag(args, '--score');
+  const plans = takeFlag(args, '--plans');
+  // --plans needs the measurements the moves are derived from, so it implies
+  // --structure rather than silently producing an empty plan list.
+  const structure = takeFlag(args, '--structure') || plans;
   const limitRaw = takeOption(args, '--limit');
   const commitsRaw = takeOption(args, '--commits');
   const since = takeOption(args, '--since');
@@ -395,18 +681,20 @@ async function main() {
   }
 
   const sub = args.shift();
-  if (!sub || !['hotspots', 'co-change', 'ownership', 'risk', 'calibrate'].includes(sub)) {
+  if (!sub || !['hotspots', 'co-change', 'ownership', 'risk', 'calibrate', 'health', 'health-calibrate'].includes(sub)) {
     process.stderr.write(usage() + '\n');
     process.exit(1);
   }
 
   try {
     const commits = parseLog(runGitLog({ limit: commitWindow, since }));
-    const opts = { json, limit, nowMs, halfLifeDays, score, window, horizonDays };
+    const opts = { json, limit, nowMs, halfLifeDays, score, window, horizonDays, structure, plans };
     if (sub === 'hotspots') return cmdHotspots(commits, opts);
     if (sub === 'co-change') return cmdCoChange(commits, opts);
     if (sub === 'ownership') return cmdOwnership(commits, opts);
     if (sub === 'calibrate') return cmdCalibrate(commits, opts);
+    if (sub === 'health') return await cmdHealth(commits, opts);
+    if (sub === 'health-calibrate') return await cmdHealthCalibrate(commits, opts);
     // risk
     const files = filesRaw
       ? filesRaw.split(',').map((s) => s.trim().replace(/^\.\//, '')).filter(Boolean)

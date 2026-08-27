@@ -8,6 +8,8 @@ node_modules/
 .project-brain/.sync-state.json
 .project-brain/.dirty-files
 .project-brain/.usage.jsonl
+.project-brain/.answer-cache.json
+.project-brain/.route-hook-state.json
 .project-brain/.skill-audit-cache/
 .claude/worktrees/
 .project-brain/history/
@@ -16,3 +18,8 @@ node_modules/
 .worktrees/
 project-brain
 .project-brain/runners/
+ui/node_modules/
+ui/dist/
+.impeccable/review/
+.obsidian/
+.impeccable/questions/

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "project-brain": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "scripts/brain-mcp.mjs"
+      ],
+      "env": {}
+    }
+  }
+}

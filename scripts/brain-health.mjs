@@ -15,6 +15,7 @@ import { parseUsageLog, summarizeUsage, commandUniverseFromPackageScripts } from
 import {
   measureFile,
   measureHook,
+  measureAnswerHook,
   footprintWarnings,
   FOOTPRINT_THRESHOLDS,
   PACK_MAX_TOKENS_DEFAULT,
@@ -41,6 +42,16 @@ function contextFootprintReport() {
   const hooks = fs.existsSync(routeScript)
     ? ['sessionstart', 'userpromptsubmit'].map((ev) => measureHook(routeScript, ev, ROOT))
     : [];
+
+  // The edit-time answer hook fires far more often than the session hooks, so
+  // its per-injection cost belongs in the same audit (decisions/0024).
+  const answerScript = path.join(HEALTH_DIR, 'brain-answer-hook.mjs');
+  if (fs.existsSync(answerScript)) {
+    const probe = ['SKILL.md', 'README.md', 'package.json']
+      .map((f) => path.join(ROOT, f))
+      .find((abs) => fs.existsSync(abs));
+    if (probe) hooks.push(measureAnswerHook(answerScript, probe, ROOT));
+  }
 
   const packDefaults = {
     BRAIN_PACK_MAX_TOKENS: Number(process.env.BRAIN_PACK_MAX_TOKENS) || PACK_MAX_TOKENS_DEFAULT

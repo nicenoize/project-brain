@@ -40,7 +40,13 @@ export const BUDGETS = {
   // SessionStart state digest (brain-state-digest.mjs stdout) — replaces the
   // historical raw `cat active_state.md` (≈30 kB ≈ 7.5k tok in the field, see
   // header note + decisions/0024).
-  stateDigestBytes: 8000
+  stateDigestBytes: 8000,
+  // brain:answer / the PreToolUse answer hook (brain-answer-hook.mjs stdout) —
+  // the AMBIENT per-EDIT injection, so it is the most frequently paid surface
+  // the brain has: budgeted an order of magnitude below the once-per-session
+  // digest above. 700 B ≈ 175 tok. Enforced by tests/brain-answer.test.mjs;
+  // BRAIN_ANSWER_BUDGET_BYTES overrides it per process.
+  answerBytes: 700
 };
 
 /** Resolve the state-digest byte budget — BRAIN_STATE_DIGEST_BUDGET_BYTES env override wins. PURE given env. */
@@ -89,6 +95,50 @@ export function measureHook(routeScript, event, cwd) {
     return { event, bytes, tokens: estimateTokens(bytes), status: r.status ?? null };
   } catch (err) {
     return { event, bytes: 0, tokens: 0, status: null, error: String((err && err.message) || err) };
+  }
+}
+
+/**
+ * Measure the PreToolUse answer hook (scripts/brain-answer-hook.mjs): what a
+ * single edit-time injection actually costs. Driven with a synthetic Edit
+ * payload on stdin and dedupe disabled, so the reading is the raw per-edit
+ * cost, not the deduped runtime behaviour — same discipline as measureHook.
+ * Never throws; a missing hook degrades to a zero reading with a note.
+ */
+export function measureAnswerHook(hookScript, filePath, cwd) {
+  try {
+    const payload = JSON.stringify({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Edit',
+      tool_input: { file_path: filePath }
+    });
+    const r = spawnSync(process.execPath, [hookScript], {
+      cwd,
+      input: payload,
+      encoding: 'utf8',
+      timeout: 20000,
+      env: { ...process.env, BRAIN_ANSWER_DEDUPE: '0', BRAIN_USAGE_LOG: '0' }
+    });
+    const out = String(r.stdout || '');
+    // The wire payload carries JSON envelope bytes; what lands in the agent's
+    // context is additionalContext, so report both and budget against the
+    // injected string (that is what the user pays for).
+    let injected = out;
+    try {
+      const parsed = JSON.parse(out);
+      injected = parsed?.hookSpecificOutput?.additionalContext ?? '';
+    } catch { /* non-JSON (empty) output measures as itself */ }
+    const bytes = Buffer.byteLength(injected, 'utf8');
+    return {
+      event: 'pretooluse-answer',
+      file: filePath,
+      bytes,
+      wireBytes: Buffer.byteLength(out, 'utf8'),
+      tokens: estimateTokens(bytes),
+      status: r.status ?? null
+    };
+  } catch (err) {
+    return { event: 'pretooluse-answer', file: filePath, bytes: 0, wireBytes: 0, tokens: 0, status: null, error: String((err && err.message) || err) };
   }
 }
 
