@@ -38,6 +38,11 @@ delete process.env.BRAIN_RUNNER_CMD;
 // packWarning) instead of probing/loading an embedding stack mid-test.
 delete process.env.BRAIN_ACTOR;
 process.env.BRAIN_INDEX_PROVIDER = 'none';
+// /api/security must exercise the DEGRADED contract deterministically: whether
+// gitleaks happens to be installed on the machine running the suite is not
+// allowed to change the assertions. (npm audit degrades on its own — the
+// fixture has no package-lock.json, so no child process is ever spawned.)
+process.env.BRAIN_SECURITY_GITLEAKS = '0';
 
 const BRAIN = path.join(FIXTURE, '.project-brain');
 fs.mkdirSync(path.join(BRAIN, 'decisions'), { recursive: true });
@@ -894,6 +899,68 @@ test('/api/graph caches the scan per HEAD (a second request never re-scans)', as
   const second = serve.graphStats();
   assert.equal(second.computes, first.computes, 'same HEAD → cached, not re-scanned');
   assert.equal(second.key, first.key);
+});
+
+// ---------------------------------------------------------------------------
+// /api/security — advisories WITH reachability + secret LOCATIONS.
+//
+// The fixture repo has no package-lock.json and BRAIN_SECURITY_GITLEAKS=0 is
+// set at the top of this file, so both scanners are deliberately absent: the
+// contract under test is the DEGRADED one, which is exactly the contract that
+// must never read as a clean bill of health. (npm audit is never spawned here
+// — the lockfile check short-circuits before any child process.)
+// ---------------------------------------------------------------------------
+
+test('/api/security is token-gated', async () => {
+  const r = await request('/api/security');
+  assert.equal(r.status, 401);
+  assert.match(r.body, /unauthorized/);
+});
+
+test('/api/security is GET-only', async () => {
+  const r = await post('/api/security', {});
+  assert.equal(r.status, 405);
+  assert.equal(r.headers.allow, 'GET');
+});
+
+test('/api/security returns the degraded shape (200) when no scanner ran', async () => {
+  const r = await request('/api/security', { headers: bearer });
+  assert.equal(r.status, 200, 'absent tools are a degraded 200, never a 500');
+  const body = JSON.parse(r.body);
+
+  assert.deepEqual(body.vulnerabilities.reachable, []);
+  assert.deepEqual(body.vulnerabilities.transitiveOnly, []);
+  assert.deepEqual(body.vulnerabilities.counts, { critical: 0, high: 0, moderate: 0, low: 0 });
+  assert.equal(body.vulnerabilities.degraded, true);
+  assert.match(body.vulnerabilities.reason, /package/);
+  assert.deepEqual(body.secrets.findings, []);
+  assert.equal(body.secrets.degraded, true);
+  assert.match(body.secrets.reason, /BRAIN_SECURITY_GITLEAKS=0/);
+
+  // The honesty rules live in the response, not only in the docs.
+  assert.equal(body.claims.cleanBillOfHealth, false);
+  assert.equal(body.claims.secretsScanned, false);
+  assert.match(body.secrets.statement, /NOT scanned/);
+  assert.ok(!/no secrets found/i.test(body.secrets.statement), 'never implies "clean" for a scanner that did not run');
+  const tools = Object.fromEntries(body.provenance.tools.map((t) => [t.name, t]));
+  assert.equal(tools['npm audit'].ran, false);
+  assert.equal(tools.gitleaks.ran, false);
+  assert.ok(tools.gitleaks.reason, 'an absent tool always carries a reason');
+
+  // Freshness metadata, like every other endpoint.
+  assert.equal(typeof body.state_age, 'number');
+  assert.equal(typeof body.scannedAt, 'string');
+  assert.equal(typeof body.cache.ageSeconds, 'number');
+});
+
+test('/api/security caches the report per HEAD and reports its age', async () => {
+  await request('/api/security', { headers: bearer });
+  const first = serve.securityStats();
+  assert.ok(first.computes >= 1, 'the report was computed at least once');
+  const r = await request('/api/security', { headers: bearer });
+  const second = serve.securityStats();
+  assert.equal(second.computes, first.computes, 'same HEAD → cached, npm audit is not re-run');
+  assert.equal(JSON.parse(r.body).cache.cached, true);
 });
 
 // ---------------------------------------------------------------------------
