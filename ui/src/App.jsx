@@ -5,19 +5,25 @@ import LeaseBoard from './components/LeaseBoard.jsx';
 import Intel from './components/Intel.jsx';
 import AuditFeed from './components/AuditFeed.jsx';
 import Records from './components/Records.jsx';
+import NextPanel from './components/NextPanel.jsx';
+import RiskPanel from './components/RiskPanel.jsx';
 
 function useData() {
   const [data, setData] = useState({ loading: true });
   const load = async () => {
     try {
-      const [meta, state, events, hotspots, coChange, ownership, records, runnersInfo] =
+      const [meta, state, events, hotspots, coChange, ownership, records, runnersInfo, changed, next, risk, brief] =
         await Promise.all([
           api.meta(), api.state(), api.events(),
           api.hotspots(), api.coChange(), api.ownership(),
           api.records('decision').catch(() => ({ records: [] })),
-          api.runners().catch(() => ({ runners: [], runnerCmdConfigured: false }))
+          api.runners().catch(() => ({ runners: [], runnerCmdConfigured: false })),
+          api.changed().catch(() => null),
+          api.next().catch(() => null),
+          api.risk().catch(() => null),
+          api.brief().catch(() => null)
         ]);
-      setData({ meta, state, events, hotspots, coChange, ownership, records, runnersInfo, loading: false });
+      setData({ meta, state, events, hotspots, coChange, ownership, records, runnersInfo, changed, next, risk, brief, loading: false });
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -118,11 +124,19 @@ export default function App() {
           )}
           {!d.loading && !d.error && (
             <>
-              <h2>In flight</h2>
+              <h2>What should happen next?</h2>
+              <div className="sheet">
+                <NextPanel next={d.next} />
+              </div>
+              <h2>Is this change dangerous?</h2>
+              <div className="sheet">
+                <RiskPanel changed={d.changed} risk={d.risk} brief={d.brief} />
+              </div>
+              <h2>What's running right now?</h2>
               <div className="sheet">
                 <Board workstreams={workstreams} conflictsByTask={conflictsByTask} runnersInfo={d.runnersInfo} onChanged={d.reload} />
               </div>
-              <h2>Intel</h2>
+              <h2>Which files are actually dangerous?</h2>
               <Intel hotspots={d.hotspots} coChange={d.coChange} ownership={d.ownership} leases={leases} />
             </>
           )}
@@ -130,15 +144,15 @@ export default function App() {
 
         {!d.loading && !d.error && (
           <aside className="bay" aria-label="Leases, audit and decisions">
-            <h2>Leases</h2>
+            <h2>Who holds what — until when?</h2>
             <div className="sheet">
               <LeaseBoard leases={leases} conflictTargets={conflictTargets} />
             </div>
-            <h2>Audit</h2>
+            <h2>What happened — and who acknowledged it?</h2>
             <div className="sheet">
               <AuditFeed events={d.events?.events || []} />
             </div>
-            <h2>Decisions</h2>
+            <h2>Why is it built this way?</h2>
             <div className="sheet">
               <Records records={d.records?.records || []} />
             </div>
