@@ -58,7 +58,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ROOT, PACKAGE_DIR, listIndexableFiles, takeFlag } from './common.mjs';
+import { ROOT, PACKAGE_DIR, takeFlag } from './common.mjs';
 import { ACTIVE_STATE, activeStateJson } from './active-state.mjs';
 import {
   gitLogArgs, parseLog, hotspots, coChange, riskScore, calibrateRisk,
@@ -368,60 +368,56 @@ function healthReceipt(commits) {
 }
 
 // ---------------------------------------------------------------------------
-// blast adjacency: measured (ts-graph imports) ⊕ inferred (git co-change)
+// blast adjacency: measured (import-scan, any language) ⊕ inferred (git co-change)
 // ---------------------------------------------------------------------------
 
 /**
- * Load the TS import graph, keeping the REASON it is missing — a blast answer
- * has to explain its degradation, not silently drop the measured half. Never
- * throws.
+ * Load the multi-language import graph, keeping the REASON it is missing — a
+ * blast answer has to explain its degradation, not silently drop the measured
+ * half. Delegates to brain-serve's provider so MCP and the Control Room draw
+ * from exactly the same scan (and the same per-HEAD cache semantics).
+ * Never throws.
  */
-async function tsGraphFor() {
-  if (process.env.BRAIN_TS_GRAPH === '0') {
-    return { ctx: null, indexable: [], tsFiles: 0, reason: 'static import graph disabled via BRAIN_TS_GRAPH=0' };
+async function importScanFor() {
+  if (process.env.BRAIN_IMPORT_GRAPH === '0' || process.env.BRAIN_TS_GRAPH === '0') {
+    return { graph: null, reason: 'static import graph disabled via BRAIN_IMPORT_GRAPH=0' };
   }
   const key = caches.head || 'no-history';
   if (caches.tsGraph.key === key && caches.tsGraph.value) return caches.tsGraph.value;
-  const value = await loadTsGraph();
-  caches.tsGraph = { key, value };
-  return value;
-}
-
-async function loadTsGraph() {
-  let indexable = [];
-  let tsFiles = 0;
+  let value;
   try {
-    indexable = await listIndexableFiles();
-    tsFiles = indexable.filter((f) => /\.(ts|tsx)$/.test(f)).length;
-    if (!tsFiles) {
-      return { ctx: null, indexable, tsFiles, reason: 'no .ts/.tsx sources indexed — static import graph unavailable for this repo' };
-    }
-    const { loadTsSemanticContext } = await import('./ts-graph.mjs');
-    const ctx = (await loadTsSemanticContext(ROOT, new Set(indexable))) || null;
-    return {
-      ctx, indexable, tsFiles,
-      reason: ctx ? null : 'no TypeScript program — install the optional `typescript` dependency (npm i -D typescript)'
+    const { importGraphFor } = await import('./brain-serve.mjs');
+    const entry = await importGraphFor(ROOT);
+    value = {
+      graph: entry?.graph || null,
+      reason: entry?.graph ? null : (entry?.reason || 'no static import edge resolved in this repo')
     };
   } catch (error) {
-    return { ctx: null, indexable, tsFiles, reason: `static import graph unavailable: ${error.message || error}` };
+    value = { graph: null, reason: `static import graph unavailable: ${error.message || error}` };
   }
+  caches.tsGraph = { key, value };
+  return value;
 }
 
 /** importers (measured) + co-change partners (inferred), memoized per HEAD. */
 async function blastAdjacency(commits) {
   const key = caches.head || 'no-history';
   if (caches.blast.key === key && caches.blast.value) return caches.blast.value;
-  const { ctx, indexable, tsFiles, reason } = await tsGraphFor();
+  const { graph, reason } = await importScanFor();
   const importers = new Map();
-  if (ctx) {
-    for (const rel of indexable) {
-      for (const imported of ctx.get(rel)?.resolvedImports || []) {
-        if (!importers.has(imported)) importers.set(imported, []);
-        importers.get(imported).push(rel);
-      }
+  if (graph) {
+    // Reverse the edge list: who imports X is what a blast radius needs.
+    for (const edge of graph.edges || []) {
+      if (!importers.has(edge.to)) importers.set(edge.to, []);
+      importers.get(edge.to).push({ file: edge.from, confidence: edge.confidence ?? 1 });
     }
-    for (const list of importers.values()) list.sort();
+    for (const list of importers.values()) {
+      list.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+    }
   }
+  // Kept under the old key for the adjacency contract; it counts resolved
+  // import edges now, not TypeScript files.
+  const tsFiles = graph ? (graph.coverage?.resolvedEdges || 0) : 0;
   const cc = coChange(commits);
   const partners = new Map();
   for (const pair of cc.pairs) {
@@ -429,7 +425,7 @@ async function blastAdjacency(commits) {
     partners.get(pair.a).push({ file: pair.b, confidence: pair.confidence });
   }
   for (const list of partners.values()) list.sort((x, y) => y.confidence - x.confidence);
-  const value = { importers, partners, graphAvailable: Boolean(ctx), tsFiles, reason: ctx ? null : reason, window: cc.window };
+  const value = { importers, partners, graphAvailable: Boolean(graph), tsFiles, reason: graph ? null : reason, window: cc.window };
   caches.blast = { key, value };
   return value;
 }
@@ -724,12 +720,17 @@ async function toolRisk(args = {}) {
   const leases = readLeasesSafe(now);
   let blastRadius = null;
   try {
-    const { ctx, indexable } = await tsGraphFor();
-    if (ctx) {
+    const { graph } = await importScanFor();
+    if (graph) {
+      // One-hop dependents from the import scan (any language), mirroring
+      // brain-serve's blastRadiusFor so both surfaces score identically.
       const touched = new Set(files);
-      const dependents = indexable.filter((rel) =>
-        !touched.has(rel) && (ctx.get(rel)?.resolvedImports || []).some((imp) => touched.has(imp)));
-      blastRadius = { dependents: dependents.sort(), source: 'ts-graph' };
+      const dependents = [...new Set(
+        (graph.edges || [])
+          .filter((e) => touched.has(e.to) && !touched.has(e.from))
+          .map((e) => e.from)
+      )].sort();
+      if (dependents.length) blastRadius = { dependents, source: 'import-scan' };
     }
   } catch { blastRadius = null; }
 
@@ -783,7 +784,7 @@ async function toolBlast(args = {}) {
     `blast radius depth ${depth} from ${files.length} seed(s): ${listPreview(files, CAP.riskFiles)}`,
     warning ? `⚠ ${warning} — co-change edges omitted` : null,
     adjacency.graphAvailable
-      ? `import graph: available (${adjacency.tsFiles} TS file(s)) — measured edges outrank inferred history`
+      ? `import graph: available (${adjacency.tsFiles} resolved import edge(s), any language) — measured edges outrank inferred history`
       : `import graph: unavailable — ${adjacency.reason}; co-change (inferred) edges are still reported`
   ];
   if (!reachedCount) {

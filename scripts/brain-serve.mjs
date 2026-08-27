@@ -852,7 +852,7 @@ export function graphStats() {
  * to scan or the scan failed, and `reason` always explains which it was.
  * BRAIN_IMPORT_GRAPH=0 (or the legacy BRAIN_TS_GRAPH=0) is the kill switch.
  */
-async function importGraphFor(root) {
+export async function importGraphFor(root) {
   if (process.env.BRAIN_IMPORT_GRAPH === '0' || process.env.BRAIN_TS_GRAPH === '0') {
     return { graph: null, files: [], reason: 'static import graph disabled via BRAIN_IMPORT_GRAPH=0' };
   }
