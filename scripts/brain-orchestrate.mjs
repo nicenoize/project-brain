@@ -14,11 +14,24 @@ import { spawnSync } from 'node:child_process';
 import { BRAIN_DIR, ROOT, ensureDir, slugify, write } from './common.mjs';
 import { activeStateJson, addWorkstream, addLease, releaseLeases } from './active-state.mjs';
 import { spawnDetachedRunner } from './runner-supervisor.mjs';
+import { fileURLToPath } from 'node:url';
+import { targetsOverlap, UnsupportedPatternError } from './lease-overlap.mjs';
+
+/** Extensions we treat as source/doc files when a path carries one. */
+const SCOPE_FILE_EXT = /\.(?:[cm]?[jt]sx?|mdx?|json|ya?ml|css|scss|sql|sh|go|py|rb|rs|php|toml)$/i;
 
 const args = process.argv.slice(2);
 const opts = parseArgs(args);
 
-if (opts.help) {
+/* Importing this module must not run an orchestration. Every other script here
+   guards its CLI; this one did not, so `import { extractScopes } from
+   './brain-orchestrate.mjs'` planned and printed a real orchestration as a side
+   effect — which is also why its pure helpers had no unit tests. The argv parse
+   and the derived consts stay at module scope: runOnce() closes over them, and
+   they are pure computation. Only the side effects are gated. */
+const isMain = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain && opts.help) {
   console.log(`Usage:
   npm run brain:orchestrate -- --limit 6 --concurrency 3 --write
   npm run brain:orchestrate -- --refill --limit 6 --concurrency 3 --write
@@ -57,12 +70,14 @@ const concurrency = Math.min(Math.max(1, Number(opts.concurrency || 3)), 24);
 const tool = normalizeTool(opts.tool || process.env.BRAIN_WORKTREE_TOOL || process.env.BRAIN_TOOL || 'codex');
 const base = opts.base || 'develop';
 
-if (opts.watch) {
-  await watchLoop();
-} else {
-  const plan = runOnce();
-  if (opts.json) console.log(JSON.stringify(plan, null, 2));
-  else console.log(renderMarkdown(plan));
+if (isMain) {
+  if (opts.watch) {
+    await watchLoop();
+  } else {
+    const plan = runOnce();
+    if (opts.json) console.log(JSON.stringify(plan, null, 2));
+    else console.log(renderMarkdown(plan));
+  }
 }
 
 async function watchLoop() {
@@ -391,7 +406,10 @@ export function spawnWorktrees(plan) {
           actor: slot.actor,
           tool: plan.tool,
           issueNumber: a.issueNumber || '',
-          title: a.issueTitle
+          title: a.issueTitle,
+          // The files/directories this package said it would touch, so the
+          // workstream row is paired with real file leases (see below).
+          scope: a.files || []
         });
         console.log(`Spawned worker ${slot.slot}: ${worker.path}`);
       }
@@ -453,7 +471,77 @@ function ensureRunnerCommand(opts) {
   return runnerCmd;
 }
 
-export function recordSpawnedWorkstreams(spawned) {
+/**
+ * PURE. Which of these lease targets collide with a lease someone else holds?
+ *
+ * This is the mechanism the whole "agents that do not step on each other"
+ * claim rests on, and it had no caller: `targetsOverlap` — the glob-vs-glob
+ * intersection in lease-overlap.mjs, written for exactly this — was imported
+ * by nobody. Overlap is the right test, not string equality: `scripts/serve/**`
+ * and `scripts/serve/records.mjs` are the same work seen at two granularities,
+ * and comparing them as strings finds nothing.
+ *
+ * A lease held by the SAME actor is not a conflict (re-planning its own slot).
+ * An unsupported pattern is reported as a conflict rather than assumed safe:
+ * "I cannot tell" must not read as "clear".
+ *
+ * @returns {Array<{target: string, heldBy: string, existing: string, reason: string}>}
+ */
+export function leaseConflicts(targets = [], leases = [], { actor = '' } = {}) {
+  const out = [];
+  for (const target of targets) {
+    for (const lease of leases) {
+      const existing = String(lease.target || '').trim();
+      if (!existing) continue;
+      const heldBy = String(lease.lockedBy || '').trim();
+      if (heldBy && actor && heldBy === actor) continue;
+      let hit = false;
+      let reason = 'overlapping claim';
+      try {
+        hit = targetsOverlap(target, existing);
+      } catch (error) {
+        if (error instanceof UnsupportedPatternError) {
+          hit = true;
+          reason = `cannot decide overlap (${error.message}) — treated as a conflict`;
+        } else throw error;
+      }
+      if (hit) out.push({ target, heldBy: heldBy || '(unattributed)', existing, reason });
+    }
+  }
+  return out;
+}
+
+/**
+ * Default life of an orchestration file lease. A crashed or abandoned runner
+ * must not hold `scripts/**` forever; `until` is advisory today (nothing sweeps
+ * expired rows yet) but it is READ by brief/lease/the Control Room, so a stale
+ * claim is at least visibly stale rather than silently authoritative.
+ */
+export const ORCHESTRATION_LEASE_HOURS = 4;
+
+/** PURE. The `until` stamp for an orchestration lease, given a start instant. */
+export function leaseUntil(nowMs, hours = ORCHESTRATION_LEASE_HOURS) {
+  return new Date(nowMs + hours * 3600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * Record the workstream row AND the file leases for each spawned worker.
+ *
+ * The file leases are the point. Until now the only lease this orchestrator
+ * ever took was `orchestration-slot/<n>` — a lock on its own spawner slot,
+ * released again the moment the worktree existed. Nothing ever claimed a FILE.
+ * So `brain:orchestrate --launch-runners` started N agents whose coordination
+ * was, in full, "each one has its own branch" — which is what git does for
+ * humans already, and not what "agents that do not step on each other" means.
+ * The parts were all here (addLease, lease-overlap.mjs, brain:lease); they were
+ * simply never wired to the one command that launches parallel agents.
+ *
+ * A package whose scope could not be extracted takes no lease and says so:
+ * claiming nothing is honest, claiming everything would deadlock the fleet.
+ */
+export function recordSpawnedWorkstreams(spawned, { now = Date.now() } = {}) {
+  const unscoped = [];
+  const conflicts = [];
   for (const worker of spawned) {
     addWorkstream({
       taskId: worker.task,
@@ -463,7 +551,52 @@ export function recordSpawnedWorkstreams(spawned) {
       scope: worker.issueNumber ? `#${worker.issueNumber} ${worker.title}` : worker.title,
       status: 'active'
     });
+    const targets = scopeToLeaseTargets(splitScope(worker.scope));
+    if (!targets.length) { unscoped.push(worker.task || worker.actor); continue; }
+    // Re-read leases per worker: the previous iteration just added some.
+    const held = activeStateJson().leases || [];
+    const clashes = leaseConflicts(targets, held, { actor: worker.actor });
+    const blocked = new Set(clashes.map((c) => c.target));
+    for (const c of clashes) conflicts.push({ worker: worker.task || worker.actor, ...c });
+    const until = leaseUntil(now);
+    for (const target of targets) {
+      if (blocked.has(target)) continue;   // never overwrite someone else's claim
+      addLease({
+        target,
+        lockedBy: worker.actor,
+        until,
+        notes: `${worker.task || 'work package'} on ${worker.branch}`
+      });
+    }
   }
+  if (unscoped.length) {
+    // Never silent: an agent running without a lease is exactly the case the
+    // board is supposed to make visible.
+    console.warn(
+      `brain:orchestrate: no file scope found for ${unscoped.join(', ')} — ` +
+      'launched WITHOUT a lease. Name the files or directories in the issue body ' +
+      '(a trailing slash marks a directory) so siblings can see the claim.'
+    );
+  }
+  for (const c of conflicts) {
+    console.warn(
+      `brain:orchestrate: ${c.worker} did NOT claim ${c.target} — ${c.heldBy} already ` +
+      `holds ${c.existing} (${c.reason}). Two agents are now aimed at the same files.`
+    );
+  }
+  return { unscoped, conflicts };
+}
+
+/** PURE. Split a mixed scope list back into files and trailing-slash dirs. */
+export function splitScope(scope = []) {
+  const files = [];
+  const dirs = [];
+  for (const entry of scope) {
+    const e = String(entry || '').trim();
+    if (!e || e === 'Needs discovery') continue;
+    if (e.endsWith('/')) dirs.push(e); else files.push(e);
+  }
+  return { files, dirs };
 }
 
 function fetchGithubIssues(opts) {
@@ -551,11 +684,92 @@ function verification(kind) {
   return base;
 }
 
+/**
+ * PURE. Pull the work-package SCOPE out of an issue body: the files and the
+ * DIRECTORIES it says it will touch.
+ *
+ * Why directories matter as much as files. This used to require an extension on
+ * both patterns, and to whitelist a fixed set of top-level directory names
+ * (app|src|lib|...|e2e). Planning three real packages against this repo, two of
+ * them came back `Needs discovery` — one said "Touches .project-brain/decisions/
+ * and docs/", the other "Touches scripts/serve/ and ui/src/components/". Both
+ * named their scope perfectly clearly; neither used a filename, and `ui/` and
+ * `.project-brain/` were not on the whitelist. Describing a package by AREA is
+ * the normal case, not the exception, and a package with no scope cannot hold a
+ * lease — which is precisely the mechanism that is supposed to keep parallel
+ * agents apart.
+ *
+ * Conservative by construction: a bare directory must end in `/` to count,
+ * which is a deliberate author signal and keeps prose ("and/or", "he/she"),
+ * dates ("2026/08") and URLs out. Anything inside backticks is trusted as a
+ * path either way.
+ *
+ * @returns {{files: string[], dirs: string[]}} dirs keep their trailing slash
+ */
+export function extractScopes(text) {
+  const body = String(text || '');
+  const files = new Set();
+  const dirs = new Set();
+
+  // Strip sentence punctuation BEFORE anything inspects the path: "…and
+  // tests/foo.test.mjs." arrives as `foo.test.mjs.`, which matches no extension
+  // and used to be dropped without a word. Normalising inside addPath was not
+  // enough — the extension guard at the call site ran on the raw string first.
+  const clean = (raw) => String(raw).trim().replace(/[.,;:]+$/, '').replace(/^\.\//, '');
+
+  const addPath = (raw) => {
+    const p = clean(raw);
+    if (!p || p.startsWith('http') || p.includes('://')) return;
+    if (p.endsWith('/')) { if (p.length > 1) dirs.add(p); return; }
+    if (SCOPE_FILE_EXT.test(p)) { files.add(p); return; }
+    // A backticked path with no extension and no trailing slash: only trust it
+    // as a directory when it actually looks like a path, never a bare word.
+    if (p.includes('/')) dirs.add(`${p}/`);
+  };
+
+  // Backticked paths — the author marked them up, so trust the shape.
+  for (const m of body.matchAll(/`([^`\n\s]+)`/g)) {
+    const c = clean(m[1]);
+    if (c.includes('/') || SCOPE_FILE_EXT.test(c)) addPath(c);
+  }
+  // Bare file paths: any depth, any top-level name, but a real extension.
+  for (const m of body.matchAll(/(?:^|[\s(,"'\[])((?:\.{0,2}[A-Za-z0-9_.-]+)(?:\/[A-Za-z0-9_.-]+)+)(?=[\s),.;:!?"'\]]|$)/gm)) {
+    const c = clean(m[1]);
+    if (SCOPE_FILE_EXT.test(c)) addPath(c);
+  }
+  // Bare directories: must end in a slash — the author's own signal.
+  for (const m of body.matchAll(/(?:^|[\s(,"'\[])((?:\.{0,2}[A-Za-z0-9_.-]+)(?:\/[A-Za-z0-9_.-]+)*\/)(?=[\s),.;:!?"'\]]|$)/gm)) {
+    addPath(m[1]);
+  }
+
+  // A directory that already contains a named file adds nothing to the scope.
+  const covered = new Set([...files].map((f) => `${f.split('/').slice(0, -1).join('/')}/`));
+  return {
+    files: [...files].sort().slice(0, 40),
+    dirs: [...dirs].filter((d) => !covered.has(d) || files.size === 0).sort().slice(0, 20)
+  };
+}
+
+/**
+ * PURE. Lease targets for a work package: files verbatim, directories widened
+ * to a `**` glob so lease-overlap.mjs can intersect them against anything a
+ * sibling agent claims underneath.
+ */
+export function scopeToLeaseTargets({ files = [], dirs = [] } = {}) {
+  const out = [];
+  for (const f of files) if (f && f !== 'Needs discovery' && !out.includes(f)) out.push(f);
+  for (const d of dirs) {
+    const glob = `${String(d).replace(/\/+$/, '')}/**`;
+    if (!out.includes(glob)) out.push(glob);
+  }
+  return out;
+}
+
 function extractFiles(text) {
-  const matches = new Set();
-  for (const match of text.matchAll(/`([^`\n]+\.(?:[cm]?[jt]sx?|mdx?|json|ya?ml|css|scss|sql))`/g)) matches.add(match[1]);
-  for (const match of text.matchAll(/\b((?:app|src|lib|components|pages|server|scripts|packages|apps|db|test|tests|e2e)\/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+)\b/g)) matches.add(match[1]);
-  return [...matches].slice(0, 40);
+  const { files, dirs } = extractScopes(text);
+  // Directories are part of the scope, carried with their slash so a reader
+  // (and scopeToLeaseTargets) can tell them from files.
+  return [...files, ...dirs].slice(0, 40);
 }
 
 function extractModules(body, labels) {
