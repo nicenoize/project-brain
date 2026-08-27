@@ -445,3 +445,10 @@
 .why-decision { margin: 0 0 8px; }
 .why-title { margin: 0; font-size: 12.5px; font-weight: 700; }
 .why-history { margin-top: 8px; }
+
+/* fleet */
+.reason-list { list-style: none; margin: 0; padding: 0; }
+.reason-list li { padding: 1px 0; }
+.basis-tag.stop { color: var(--lamp-stop); }
+.chip.here { margin-left: 6px; }
+.quiet-ok { color: var(--lamp-run); }

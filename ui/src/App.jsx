@@ -9,12 +9,13 @@ import NextPanel from './components/NextPanel.jsx';
 import RiskPanel from './components/RiskPanel.jsx';
 import BlastPanel from './components/BlastPanel.jsx';
 import MapPanel from './components/MapPanel.jsx';
+import FleetPanel from './components/FleetPanel.jsx';
 
 function useData() {
   const [data, setData] = useState({ loading: true });
   const load = async () => {
     try {
-      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map] =
+      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet] =
         await Promise.all([
           api.meta(), api.state(), api.events(),
           api.hotspots(), api.health(), api.coChange(), api.ownership(),
@@ -25,9 +26,10 @@ function useData() {
           api.risk().catch(() => null),
           api.blast().catch(() => null),
           api.brief().catch(() => null),
-          api.map().catch(() => null)
+          api.map().catch(() => null),
+          api.fleet().catch(() => null)
         ]);
-      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, loading: false });
+      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, loading: false });
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -128,6 +130,14 @@ export default function App() {
           )}
           {!d.loading && !d.error && (
             <>
+              {d.fleet && !d.fleet.degraded && (
+                <>
+                  <h2>Which repo needs attention?</h2>
+                  <div className="sheet">
+                    <FleetPanel fleet={d.fleet} />
+                  </div>
+                </>
+              )}
               <h2>What should happen next?</h2>
               <div className="sheet">
                 <NextPanel next={d.next} />
@@ -164,6 +174,14 @@ export default function App() {
             <div className="sheet">
               <AuditFeed events={d.events?.events || []} />
             </div>
+            {d.fleet?.degraded && (
+              <>
+                <h2>Fleet</h2>
+                <div className="sheet">
+                  <FleetPanel fleet={d.fleet} />
+                </div>
+              </>
+            )}
             <h2>Decisions on record</h2>
             <div className="sheet">
               <Records records={d.records?.records || []} />
