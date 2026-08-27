@@ -84,6 +84,17 @@ Full policy, splitting heuristics, and step-by-step operating-mode runbooks: [`r
 - `brain:verify` — read-only drift check (curated docs vs. code).
 - `brain:skill-audit` — supply-chain risk score for a third-party skill (opt-in scanner).
 - `brain:lint-conventions` / `brain:link-check` — conventions linter / markdown path check.
+- `brain:lint` — consume ESLint/tsc/SARIF output, rank findings by where a change actually hurts.
+- `brain:security` — advisories ordered by REACHABILITY (does our code import it), not severity alone.
+
+**Code intelligence (measured from git + imports, no index needed)**
+- `brain:intel health` — per-file danger score from churn, co-change scatter and fix density. `--structure` adds size/nesting/coupling; `--plans` names the refactoring move.
+- `brain:intel health-calibrate` — does that ranking predict THIS repo's own next fixes? Prints an AUC and refuses to endorse it below 10 files in the smaller class.
+- `brain:intel hotspots|co-change|ownership|risk` — churn ranking / "who changes A changes B" / bus factor / risk of the staged change.
+- `brain:graph-scan` — multi-language import graph: blast radius, cycles, dead-code CANDIDATES. Reports unresolved specifiers rather than dropping them.
+- `brain:draft` — module-record draft for a code area no `.project-brain/modules/*.md` claims.
+- `brain:serve` — local Control Room (127.0.0.1, session token) over that same data.
+- `brain:release snapshot|tag|compare` — pin the measurements to a version so two versions can be compared, and `git checkout <tag>` is the way back.
 
 **Index & maintenance**
 - `brain:init` / `brain:index` — scaffold `.project-brain/` / build the index (`--force`).
