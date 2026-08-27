@@ -585,3 +585,8 @@
   .risk-files .path { white-space: normal; }
   /* (score-first needs no special case any more — every table stacks) */
 }
+
+/* Sub-blocks inside one section card: separated by a rule, never by a second
+   card. A nested card is the lazy container the craft floor bans. */
+.block + .block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--hairline); }
+.compact .block + .block { margin-top: 8px; padding-top: 7px; }

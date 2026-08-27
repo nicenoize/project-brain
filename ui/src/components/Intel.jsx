@@ -27,7 +27,7 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
   return (
     <>
       {dangerous.length > 0 && (
-        <div className="sheet">
+        <div className="block">
           <table className="score-first">
             <thead>
               <tr><th className="num">danger</th><th>File</th><th>Top factor</th></tr>
@@ -80,10 +80,8 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
           <Provenance data={health} />
         </div>
       )}
-      <div className="sheet">
-        <h2 style={{ font: '700 12px var(--font-ui)', textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--ink-2)', marginBottom: 8 }}>
-          Hotspots — churn × recency
-        </h2>
+      <div className="block">
+        <span className="k">Hotspots — churn × recency</span>
         {files.length ? (
           <>
             <Treemap files={files} leases={leases} />
@@ -95,7 +93,7 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
       </div>
 
       {pairs.length > 0 && (
-        <div className="sheet">
+        <div className="block">
           <table>
             <thead>
               <tr><th>Usually change together</th><th className="num">conf.</th><th className="num">×</th></tr>
@@ -104,7 +102,7 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
               {pairs.slice(0, 8).map((p) => (
                 <tr key={`${p.a}|${p.b}`}>
                   <td className="path">{p.a} → {p.b}</td>
-                  <td className="num">{Math.round(p.confidence * 100)}%</td>
+                  <td className="num" data-label="confidence">{Math.round(p.confidence * 100)}%</td>
                   <td className="num" data-label="together">{p.together}</td>
                 </tr>
               ))}
@@ -119,7 +117,7 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
       )}
 
       {prefixes.length > 0 && (
-        <div className="sheet">
+        <div className="block">
           <table>
             <thead>
               <tr><th>Area</th><th>Top owner</th><th className="num">bus factor</th></tr>
