@@ -84,8 +84,9 @@ export default function MapPanel({ map, records }) {
 
       {orphans.length > 0 && (
         <div className="action-line">
-          no record covers <span className="path">{orphans.join(', ')}</span> — write one:{' '}
-          <code>npm run brain:adr -- "how {orphans[0]} works"</code>
+          no record covers <span className="path">{orphans.join(', ')}</span> — draft one
+          from the structure:{' '}
+          <code>{map?.orphans?.action || `project-brain x draft module ${orphans[0]}`}</code>
         </div>
       )}
       <div className="provenance">

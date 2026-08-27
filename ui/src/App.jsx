@@ -11,12 +11,13 @@ import BlastPanel from './components/BlastPanel.jsx';
 import MapPanel from './components/MapPanel.jsx';
 import FleetPanel from './components/FleetPanel.jsx';
 import GraphPanel from './components/GraphPanel.jsx';
+import SecurityPanel from './components/SecurityPanel.jsx';
 
 function useData() {
   const [data, setData] = useState({ loading: true });
   const load = async () => {
     try {
-      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph] =
+      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph, security] =
         await Promise.all([
           api.meta(), api.state(), api.events(),
           api.hotspots(), api.health(), api.coChange(), api.ownership(),
@@ -29,9 +30,10 @@ function useData() {
           api.brief().catch(() => null),
           api.map().catch(() => null),
           api.fleet().catch(() => null),
-          api.graph().catch(() => null)
+          api.graph().catch(() => null),
+          api.security().catch(() => null)
         ]);
-      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph, loading: false });
+      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph, security, loading: false });
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -155,6 +157,10 @@ export default function App() {
               <h2>What's running right now?</h2>
               <div className="sheet">
                 <Board workstreams={workstreams} conflictsByTask={conflictsByTask} runnersInfo={d.runnersInfo} onChanged={d.reload} />
+              </div>
+              <h2>What here is actually exploitable?</h2>
+              <div className="sheet">
+                <SecurityPanel security={d.security} />
               </div>
               <h2>What's tangled?</h2>
               <div className="sheet">

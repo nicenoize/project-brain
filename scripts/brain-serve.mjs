@@ -2574,7 +2574,10 @@ export function createHandler(ctx) {
         codeDirs,
         reason: codeDirs.length
           ? 'top-level code directories no .project-brain/modules/*.md record names — the brain has no authored intent for them'
-          : 'every top-level code directory is named by at least one module record'
+          : 'every top-level code directory is named by at least one module record',
+        // No gap without a next command: brain-draft turns the structure into
+        // a status:draft record whose "why" section is deliberately unwritten.
+        action: codeDirs.length ? `project-brain x draft module ${codeDirs[0]}` : null
       },
       counts: {
         decisions: decisions.length,
