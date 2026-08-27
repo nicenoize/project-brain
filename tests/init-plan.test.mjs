@@ -262,18 +262,53 @@ test('setup-package --yes: applies scripts, deps, .gitignore, templates; preserv
   }
 });
 
-test('setup-package with no flags in a non-TTY context: applies all, never prompts/hangs', () => {
+test('setup-package with no flags in a non-TTY context: refuses, never prompts/hangs', () => {
   const dir = makeHost({ gitignore: '' });
   try {
-    // stdin is a pipe (not a TTY) — the hook/CI case. Must behave like --yes.
+    // stdin is a pipe (not a TTY) — the hook/CI/agent case. This used to be
+    // defined as "behave like --yes", which meant every non-interactive caller
+    // silently rewrote package.json, .gitignore and the templates. It has to
+    // stay non-hanging; it does not have to stay consenting on your behalf.
+    const before = snapshot(dir);
     const r = spawnSync(process.execPath, [SETUP_SCRIPT], {
       cwd: dir, encoding: 'utf8', env: childEnv(dir), timeout: 30000, input: ''
     });
-    assert.equal(r.status, 0, `non-TTY run failed: ${r.stderr}`);
+    assert.equal(r.status, 1, 'a non-TTY run without --yes must fail, not apply');
     assert.ok(!r.stdout.includes('[Y/n]'), 'non-TTY run printed a prompt');
-    const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-    assert.ok(pkg.scripts['brain:init']?.includes('skills/project-brain/'), 'package.json not created/merged');
-    assert.equal(pkg.private, true);
+    assert.match(r.stderr, /--yes/, 'the refusal must name the flag that fixes it');
+    assert.deepEqual(snapshot(dir), before, 'a refused run must leave the host untouched');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('setup-package --help: prints usage and writes nothing', () => {
+  const dir = makeHost({ gitignore: '' });
+  try {
+    // --help is the flag people type BECAUSE they do not want anything to
+    // happen yet. It used to fall through every check and run a full install.
+    const before = snapshot(dir);
+    const r = spawnSync(process.execPath, [SETUP_SCRIPT, '--help'], {
+      cwd: dir, encoding: 'utf8', env: childEnv(dir), timeout: 30000, input: ''
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Usage: node scripts\/setup-package\.mjs/);
+    assert.deepEqual(snapshot(dir), before, '--help wrote to the host');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('setup-package: an unknown flag is rejected, not ignored', () => {
+  const dir = makeHost({ gitignore: '' });
+  try {
+    const before = snapshot(dir);
+    const r = spawnSync(process.execPath, [SETUP_SCRIPT, '--force'], {
+      cwd: dir, encoding: 'utf8', env: childEnv(dir), timeout: 30000, input: ''
+    });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /unknown argument\(s\): --force/);
+    assert.deepEqual(snapshot(dir), before, 'a rejected flag wrote to the host');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
