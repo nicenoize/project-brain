@@ -38,6 +38,20 @@
  *                          script itself is never imported)
  *   /api/records?type=decision|grill|finding   record files + frontmatter title
  *   /api/meta              version, root, index-provider availability
+ *   /api/changed           staged/unstaged file lists + current branch
+ *                          (spawnSync git diff; not-a-repo → empty arrays)
+ *   /api/risk?files=a,b    riskScore factors over cachedCommits (leases from
+ *                          active-state read-only, blast radius only when the
+ *                          repo has TS sources) + calibrateRisk cached per
+ *                          HEAD; default change-set staged ∪ unstaged, empty →
+ *                          {score:null, reason:'no-changes'}
+ *   /api/next              brain:route's exported PURE rule engine over
+ *                          minimal read-only sensed signals — ranked next
+ *                          actions (≤5, each tagged auto|human)
+ *   /api/brief?files=a,b   brain-brief's exported pure core (leases +
+ *                          governing ADRs) + a ~1200-token brain:pack
+ *                          for-agent preview (provider 'none' or any throw →
+ *                          packPreview null + packWarning, never a 500)
  *   /api/runners           supervised runner records (listRunners; the
  *                          record's workPackageId is exposed as `task`) +
  *                          runnerCmdConfigured
@@ -75,9 +89,13 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ROOT, PACKAGE_DIR, ensureDir, takeFlag, takeOption } from './common.mjs';
+import { ROOT, PACKAGE_DIR, ensureDir, listIndexableFiles, takeFlag, takeOption } from './common.mjs';
 import { ACTIVE_STATE, activeStateJson } from './active-state.mjs';
-import { gitLogArgs, parseLog, hotspots, coChange, ownership } from './git-intel.mjs';
+import { gitLogArgs, parseLog, hotspots, coChange, ownership, riskScore, calibrateRisk } from './git-intel.mjs';
+// Both imports are verified side-effect-free: brain-route's isMain guard is
+// asserted by tests/brain-route.test.mjs, brain-brief exports its pure core.
+import { applyRules, scoreChange } from './brain-route.mjs';
+import { buildBrief } from './brain-brief.mjs';
 import { getIndexProvider } from './index-provider.mjs';
 import { startRunner, listRunners, stopRunner, tailLog } from './runner-supervisor.mjs';
 
@@ -349,14 +367,107 @@ function runGitLog(root, { limit }) {
 // threaded daemon on a fresh synchronous `git log` (1-5s on large repos).
 const intelCache = { key: null, commits: null };
 
-function cachedCommits(root, { limit }) {
+function gitHead(root) {
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
-  const key = `${(head.stdout || '').trim() || 'no-head'}|${limit}`;
+  return (head.stdout || '').trim() || 'no-head';
+}
+
+function cachedCommits(root, { limit }) {
+  const key = `${gitHead(root)}|${limit}`;
   if (intelCache.key !== key) {
     intelCache.commits = parseLog(runGitLog(root, { limit }));
     intelCache.key = key;
   }
   return intelCache.commits;
+}
+
+/** One git list command (diff --name-only etc.); not-a-repo/failure → null. */
+function gitList(root, args) {
+  const r = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  if (r.error || r.status !== 0) return null;
+  return (r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+/** Staged/unstaged/branch snapshot; degrades to empty arrays outside a repo. */
+function changedSnapshot(root) {
+  const staged = gitList(root, ['diff', '--cached', '--name-only']);
+  const unstaged = gitList(root, ['diff', '--name-only']);
+  const branchOut = gitList(root, ['branch', '--show-current']);
+  return {
+    staged: staged || [],
+    unstaged: unstaged || [],
+    // `--show-current` prints nothing on a detached HEAD → null, like not-a-repo.
+    branch: branchOut && branchOut.length ? branchOut[0] : null
+  };
+}
+
+// Calibration cache — calibrateRisk replays history commit-by-commit (each one
+// rebuilds hotspots/co-change from its strict prefix), which makes it the
+// expensive part of /api/risk. Cached per HEAD like intelCache; the window is
+// bounded so a huge repo cannot stall the single-threaded daemon. `computes`
+// is the exported test hook proving a second request never re-runs it.
+export const CALIBRATION_WINDOW = 200;
+const calibrationCache = { key: null, value: null, computes: 0 };
+
+/** Test hook: observe the calibration cache without reaching into internals. */
+export function riskCalibrationStats() {
+  return { key: calibrationCache.key, computes: calibrationCache.computes };
+}
+
+function cachedCalibration(root, commits) {
+  const key = `${gitHead(root)}|${CALIBRATION_WINDOW}`;
+  if (calibrationCache.key !== key) {
+    const r = calibrateRisk(commits, { window: CALIBRATION_WINDOW });
+    calibrationCache.value = {
+      auc: r.auc,
+      commits: r.evaluated,
+      quartiles: r.quantiles.map((q) => ({ q: q.quantile, defectRate: q.defectRate })),
+      verdictLine: r.verdict,
+      note: 'in-repo self-calibration, not a cross-repo benchmark'
+    };
+    calibrationCache.key = key;
+    calibrationCache.computes += 1;
+  }
+  return calibrationCache.value;
+}
+
+// TS import-graph for the blast-radius factor, cached per HEAD (graph builds
+// can take seconds on large TS repos; working-tree-only edits stay invisible
+// until committed — acceptable staleness for a read-only dashboard). Mirrors
+// brain-intel.mjs#blastRadiusFor: null (factor omitted) for non-TS repos,
+// a missing optional `typescript` dep, or any failure. Never throws.
+const tsGraphCache = { key: null, ctx: null, indexable: null };
+
+async function blastRadiusFor(root, files) {
+  if (process.env.BRAIN_TS_GRAPH === '0') return null;
+  try {
+    const key = gitHead(root);
+    if (tsGraphCache.key !== key) {
+      const indexable = await listIndexableFiles();
+      let ctx = null;
+      // Cheap guard first: without TS sources the loose program is empty
+      // anyway, and loading the optional `typescript` package costs time.
+      if (indexable.some((f) => /\.(ts|tsx)$/.test(f))) {
+        const { loadTsSemanticContext } = await import('./ts-graph.mjs');
+        ctx = (await loadTsSemanticContext(root, new Set(indexable))) || null;
+      }
+      tsGraphCache.ctx = ctx;
+      tsGraphCache.indexable = indexable;
+      tsGraphCache.key = key;
+    }
+    if (!tsGraphCache.ctx) return null;
+    const touched = new Set(files);
+    const dependents = [];
+    for (const rel of tsGraphCache.indexable) {
+      if (touched.has(rel)) continue;
+      const info = tsGraphCache.ctx.get(rel);
+      if (info?.resolvedImports?.some((imp) => touched.has(imp))) dependents.push(rel);
+    }
+    dependents.sort();
+    return { dependents, source: 'ts-graph' };
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -580,13 +691,17 @@ export function createHandler(ctx) {
   }
 
   let providerPromise = null;
-  async function apiMeta(res) {
+  function providerInfo() {
     if (!providerPromise) {
       providerPromise = getIndexProvider()
         .then((p) => ({ name: p.name, model: p.modelName || null, available: p.name !== 'none' }))
         .catch((error) => ({ name: 'unavailable', model: null, available: false, error: String(error.message || error) }));
     }
-    const provider = await providerPromise;
+    return providerPromise;
+  }
+
+  async function apiMeta(res) {
+    const provider = await providerInfo();
     let version = '0.0.0';
     try {
       version = JSON.parse(fs.readFileSync(path.join(PACKAGE_DIR, 'package.json'), 'utf8')).version || version;
@@ -599,6 +714,266 @@ export function createHandler(ctx) {
       port: ctx.port ?? null,
       provider,
       ...freshness(ACTIVE_STATE)
+    });
+  }
+
+  // --- answer endpoints (read-only intelligence the CLI already computes) ---
+
+  /** Live-computed responses report age 0 by construction (like apiIntel). */
+  function liveMeta() {
+    return { state_age: 0, stale_warning: null, generated_at: new Date().toISOString() };
+  }
+
+  // Cost cap on ?files= — beyond this the request is malformed, not degraded.
+  const MAX_FILES_PARAM = 500;
+
+  /** ?files=a,b,c → cleaned array; param absent → null (caller senses git). */
+  function filesParam(url) {
+    const raw = url.searchParams.get('files');
+    if (raw === null) return null;
+    return raw.split(',').map((s) => s.trim().replace(/^\.\//, '')).filter(Boolean);
+  }
+
+  /** Explicit ?files= when present, else staged ∪ unstaged (deduped, sorted). */
+  function targetFiles(url) {
+    const explicit = filesParam(url);
+    if (explicit !== null) return [...new Set(explicit)].sort();
+    const snapshot = changedSnapshot(root);
+    return [...new Set([...snapshot.staged, ...snapshot.unstaged])].sort();
+  }
+
+  /** Active (non-expired) leases, read-only — mirrors brain-intel#readLeasesSafe. */
+  function readLeasesSafe(nowMs) {
+    try {
+      if (!fs.existsSync(ACTIVE_STATE)) return null;
+      return activeStateJson().leases.filter((l) => {
+        if (!l.target) return false;
+        const until = Date.parse(l.until);
+        return !(Number.isFinite(until) && until < nowMs);
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  function apiChanged(res) {
+    sendJson(res, 200, { ...changedSnapshot(root), ...liveMeta() });
+  }
+
+  async function apiRisk(res, url) {
+    const explicit = filesParam(url);
+    if (explicit && explicit.length > MAX_FILES_PARAM) {
+      return sendJson(res, 400, { error: `too many files (max ${MAX_FILES_PARAM})` });
+    }
+    const files = targetFiles(url);
+    if (!files.length) {
+      // Empty-state friendliness: an empty change-set is a 200, not an error.
+      return sendJson(res, 200, { score: null, reason: 'no-changes', files: [], factors: [], calibration: null, ...liveMeta() });
+    }
+    let commits;
+    try {
+      commits = cachedCommits(root, { limit: DEFAULT_COMMIT_WINDOW });
+    } catch (error) {
+      return sendJson(res, 200, {
+        score: null,
+        reason: `git history unavailable: ${error.message || error}`,
+        files, factors: [], calibration: null, ...liveMeta()
+      });
+    }
+    // Wired exactly like brain-intel's --score path: hotspots + co-change from
+    // the shared commit window, leases read-only from active-state, blast
+    // radius only when the repo makes it cheap/possible (TS sources present).
+    const now = Date.now();
+    const hs = hotspots(commits, { now });
+    const cc = coChange(commits);
+    const leases = readLeasesSafe(now);
+    const blastRadius = await blastRadiusFor(root, files);
+    const scored = riskScore(files, {
+      hotspots: hs,
+      coChange: cc,
+      ...(blastRadius ? { blastRadius } : {}),
+      ...(leases ? { leases } : {})
+    });
+    sendJson(res, 200, {
+      files: scored.files,
+      score: scored.score,
+      ...(scored.reason ? { reason: scored.reason } : {}),
+      // `data` (full partner/conflict/dependent lists) is dropped to bound the
+      // payload — the evidence string already summarizes each factor.
+      factors: scored.factors.map(({ data, ...f }) => f),
+      provenance: { basis: scored.basis, source: scored.source, window: scored.window },
+      calibration: cachedCalibration(root, commits),
+      ...liveMeta()
+    });
+  }
+
+  /**
+   * Minimal read-only sensing for the exported brain-route rule engine.
+   * brain-route's own senseState() is not exported (and opens the index /
+   * calls gh), so only the cheap, highest-value signals are sensed here:
+   * dirty tree + change band, index presence, backlog counts, lease
+   * conflicts. Unsensed signals stay null/0 — applyRules treats them as quiet.
+   */
+  async function senseSignals() {
+    const snapshot = changedSnapshot(root);
+    const changedFiles = [...new Set([...snapshot.staged, ...snapshot.unstaged])];
+    const branch = snapshot.branch || '';
+    const brainInitialized = fs.existsSync(brainDir) && fs.existsSync(path.join(brainDir, 'context_index.md'));
+    const indexed = fs.existsSync(path.join(brainDir, 'search_index.json')) ||
+      fs.existsSync(path.join(brainDir, 'index_manifest.json'));
+    const { band, riskKeyword, recommendedPackages } = scoreChange(changedFiles, branch);
+    let backlog = { open: 0, planned: 0, plans: 0 };
+    let ungrilledPlanned = 0;
+    try {
+      const { loadFindings, loadPlans, loadGrills } = await import('./findings.mjs');
+      const findings = loadFindings();
+      backlog = {
+        open: findings.filter((f) => f.status === 'open').length,
+        planned: findings.filter((f) => f.status === 'planned').length,
+        plans: loadPlans().length
+      };
+      const proceeded = new Set(loadGrills().filter((g) => g.verdict === 'proceed').map((g) => g.target));
+      ungrilledPlanned = findings.filter((f) => f.status === 'planned' && !proceeded.has(f.slug)).length;
+    } catch { /* soft — no findings dirs yet */ }
+    let leaseConflicts = 0;
+    try {
+      if (changedFiles.length && fs.existsSync(ACTIVE_STATE)) {
+        const state = activeStateJson();
+        leaseConflicts = buildBrief({
+          files: changedFiles,
+          leases: state.leases || [],
+          workstreams: state.workstreams || [],
+          actor: process.env.BRAIN_ACTOR || ''
+        }).conflicts.length;
+      }
+    } catch { /* soft */ }
+    return {
+      branch,
+      detachedHead: !branch,
+      brainInitialized,
+      indexed,
+      changedFiles: changedFiles.length,
+      stagedFiles: snapshot.staged.length,
+      changeBand: band,
+      riskKeyword,
+      recommendedPackages,
+      backlog,
+      ungrilledPlanned,
+      leaseConflicts,
+      // Deliberately unsensed (needs the index / gh — too costly per request):
+      commitsAhead: 0, commitsAheadNoPr: false, base: '',
+      indexStale: null, gaps: null
+    };
+  }
+
+  async function apiNext(res) {
+    const signals = await senseSignals();
+    const result = applyRules(signals, { top: 5 });
+    const actions = result.recommendations.slice(0, 5).map((r) => ({
+      command: `${r.command}${r.args && r.args.length ? ` ${r.args.join(' ')}` : ''}`,
+      reason: r.reason,
+      boundary: r.boundary
+    }));
+    sendJson(res, 200, {
+      actions,
+      provenance: { basis: 'sensed', source: 'brain-route rule engine over read-only signals', signals },
+      ...liveMeta()
+    });
+  }
+
+  /**
+   * Governing ADRs for buildBrief — the loader inside brain-brief.mjs is not
+   * exported, so this is the minimal read-only re-implementation: id/module/
+   * title/body from frontmatter, body capped to bound cost. Fails soft to [].
+   */
+  function loadDecisionsSafe() {
+    const dir = path.join(brainDir, 'decisions');
+    let entries;
+    try { entries = fs.readdirSync(dir); } catch { return []; }
+    const out = [];
+    for (const name of entries) {
+      if (!name.endsWith('.md')) continue;
+      let text = '';
+      try { text = fs.readFileSync(path.join(dir, name), 'utf8').slice(0, 64 * 1024); } catch { continue; }
+      if (!text) continue;
+      const fm = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+      let module = '';
+      let body = text;
+      if (fm) {
+        body = fm[2] || '';
+        const m = fm[1].match(/^module:\s*(.*)$/m);
+        if (m) module = m[1].trim();
+      }
+      out.push({
+        id: name.replace(/\.md$/, ''),
+        module,
+        title: frontmatterTitle(text),
+        body,
+        file: `.project-brain/decisions/${name}`
+      });
+    }
+    return out;
+  }
+
+  const PACK_PREVIEW_TOKENS = 1200;
+
+  /**
+   * The copy-to-agent payload: brain:pack in for-agent mode over the target
+   * files, ~1200-token budget. Guarded end to end — provider 'none' or any
+   * throw degrades to packPreview null + packWarning, never a 500.
+   */
+  async function packPreviewFor(files) {
+    try {
+      const provider = await providerInfo();
+      if (!provider.available) {
+        return { packPreview: null, packWarning: `no index provider (${provider.name}) — pack preview skipped` };
+      }
+      const { packPrompt } = await import('./brain-pack.mjs');
+      const packed = await packPrompt(files.join(' ') || 'project overview', {
+        maxTokens: PACK_PREVIEW_TOKENS,
+        mode: 'for-agent',
+        forAgent: 'control-room'
+      });
+      return { packPreview: packed.prompt, ...(packed.warning ? { packWarning: packed.warning } : {}) };
+    } catch (error) {
+      return { packPreview: null, packWarning: `pack preview unavailable: ${error.message || error}` };
+    }
+  }
+
+  async function apiBrief(res, url) {
+    const explicit = filesParam(url);
+    if (explicit && explicit.length > MAX_FILES_PARAM) {
+      return sendJson(res, 400, { error: `too many files (max ${MAX_FILES_PARAM})` });
+    }
+    const files = targetFiles(url);
+    let advisories = [];
+    let briefWarning;
+    try {
+      const state = fs.existsSync(ACTIVE_STATE)
+        ? activeStateJson()
+        : { leases: [], workstreams: [] }; // read-only guard: never create it
+      const brief = buildBrief({
+        files,
+        leases: state.leases || [],
+        workstreams: state.workstreams || [],
+        decisions: loadDecisionsSafe(),
+        actor: process.env.BRAIN_ACTOR || ''
+      });
+      advisories = brief.advisories.map((a) => {
+        const target = (a.files && a.files[0]) || a.decision || a.downstream || a.session;
+        return { severity: a.severity, kind: a.kind, message: a.message, ...(target ? { target } : {}) };
+      });
+    } catch (error) {
+      briefWarning = `advisories unavailable: ${error.message || error}`;
+    }
+    const { packPreview, packWarning } = await packPreviewFor(files);
+    sendJson(res, 200, {
+      files,
+      advisories,
+      ...(briefWarning ? { briefWarning } : {}),
+      packPreview,
+      ...(packWarning ? { packWarning } : {}),
+      ...liveMeta()
     });
   }
 
@@ -796,6 +1171,10 @@ export function createHandler(ctx) {
         if (url.pathname === '/api/intel/co-change') return apiIntel(res, url, 'co-change');
         if (url.pathname === '/api/intel/ownership') return apiIntel(res, url, 'ownership');
         if (url.pathname === '/api/records') return apiRecords(res, url);
+        if (url.pathname === '/api/changed') return apiChanged(res);
+        if (url.pathname === '/api/risk') return await apiRisk(res, url);
+        if (url.pathname === '/api/next') return await apiNext(res);
+        if (url.pathname === '/api/brief') return await apiBrief(res, url);
         if (url.pathname === '/api/meta') return apiMeta(res);
         if (url.pathname === '/api/runners') return apiRunners(res);
         if (url.pathname === '/api/runners/log') return apiRunnerLog(res, url);

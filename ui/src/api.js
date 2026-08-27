@@ -48,8 +48,18 @@ export const api = {
   startRunner: (task, acknowledged) => post('/api/runners/start', { task, acknowledged }),
   stopRunner: (id) => post('/api/runners/stop', { id }),
   runnerLog: (id, lines = 120) =>
-    get(`/api/runners/log?id=${encodeURIComponent(id)}&lines=${lines}`)
+    get(`/api/runners/log?id=${encodeURIComponent(id)}&lines=${lines}`),
+  changed: () => get('/api/changed'),
+  risk: (files) => get(files?.length ? `/api/risk?files=${encodeURIComponent(files.join(','))}` : '/api/risk'),
+  next: () => get('/api/next'),
+  brief: (files) => get(files?.length ? `/api/brief?files=${encodeURIComponent(files.join(','))}` : '/api/brief')
 };
+
+/** Copy text to the clipboard; resolves true on success. */
+export async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch { return false; }
+}
 
 /** Subscribe to daemon SSE; onChange fires debounced on state-changed.
     `?shot=1` disables the stream so headless screenshot runs can settle. */

@@ -32,6 +32,12 @@ process.env.BRAIN_ROOT = FIXTURE;
 // The runner tests manage BRAIN_RUNNER_CMD themselves — an ambient value from
 // the invoking shell must not leak into the "unconfigured" assertions.
 delete process.env.BRAIN_RUNNER_CMD;
+// Answer-endpoint determinism: /api/brief's lease advisory must not become a
+// self-held warn because of an ambient actor, and the pack preview must take
+// the deterministic degraded path (provider 'none' → packPreview null +
+// packWarning) instead of probing/loading an embedding stack mid-test.
+delete process.env.BRAIN_ACTOR;
+process.env.BRAIN_INDEX_PROVIDER = 'none';
 
 const BRAIN = path.join(FIXTURE, '.project-brain');
 fs.mkdirSync(path.join(BRAIN, 'decisions'), { recursive: true });
@@ -401,6 +407,140 @@ test('frontmatterTitle: frontmatter wins, heading fallback, quotes stripped', ()
   assert.equal(serve.frontmatterTitle('---\ntitle: "Quoted Title"\n---\n# Other'), 'Quoted Title');
   assert.equal(serve.frontmatterTitle('# Heading Only\n\nbody'), 'Heading Only');
   assert.equal(serve.frontmatterTitle(''), '');
+});
+
+// ---------------------------------------------------------------------------
+// answer endpoints (/api/changed, /api/risk, /api/next, /api/brief) — these
+// run BEFORE the runner section because they assert against the ORIGINAL
+// seeded active_state.md (scripts/** leased by claude-a), which the runner
+// tests reseed.
+// ---------------------------------------------------------------------------
+
+test('answer endpoints: all four are token-gated (401 without)', async () => {
+  for (const p of ['/api/changed', '/api/risk', '/api/next', '/api/brief']) {
+    const r = await request(p);
+    assert.equal(r.status, 401, `${p} must require the session token`);
+  }
+});
+
+test('/api/changed reflects staged + unstaged files and the branch', async () => {
+  fs.writeFileSync(path.join(FIXTURE, 'staged.mjs'), 'export const s = 1;\n');
+  execSync('git add staged.mjs', { cwd: FIXTURE });
+  fs.appendFileSync(path.join(FIXTURE, 'lib.mjs'), '// dirty\n');
+  try {
+    const r = await request('/api/changed', { headers: bearer });
+    assert.equal(r.status, 200);
+    const body = JSON.parse(r.body);
+    assert.ok(Array.isArray(body.staged) && body.staged.includes('staged.mjs'), 'staged file listed');
+    assert.ok(Array.isArray(body.unstaged) && body.unstaged.includes('lib.mjs'), 'unstaged file listed');
+    assert.equal(typeof body.branch, 'string');
+    assert.ok(body.branch.length > 0, 'current branch resolved');
+    assert.equal(body.state_age, 0, 'live-computed → age 0');
+    assert.equal(body.stale_warning, null);
+  } finally {
+    execSync('git reset -q -- staged.mjs', { cwd: FIXTURE });
+    fs.rmSync(path.join(FIXTURE, 'staged.mjs'), { force: true });
+    execSync('git checkout -q -- lib.mjs', { cwd: FIXTURE });
+  }
+});
+
+test('/api/risk with explicit files returns score + factors + calibration shape', async () => {
+  const r = await request('/api/risk?files=app.mjs,lib.mjs', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.deepEqual(body.files, ['app.mjs', 'lib.mjs']);
+  assert.equal(typeof body.score, 'number');
+  assert.ok(body.score >= 0 && body.score <= 10);
+  assert.ok(Array.isArray(body.factors) && body.factors.length >= 2, 'weighted factors present');
+  for (const f of body.factors) {
+    assert.equal(typeof f.name, 'string');
+    assert.equal(typeof f.weight, 'number');
+    assert.equal(typeof f.raw, 'number');
+    assert.equal(typeof f.contribution, 'number');
+    assert.equal(typeof f.evidence, 'string');
+  }
+  // Leases exist in the fixture → the lease-conflicts factor must be wired.
+  assert.ok(body.factors.some((f) => f.name === 'lease-conflicts'), 'lease factor wired from active-state');
+  assert.equal(body.provenance.basis, 'measured');
+  assert.equal(body.provenance.source, 'git-log');
+  assert.equal(typeof body.provenance.window.commits, 'number');
+  // Calibration: the fixture has 2 young commits → likely all censored, so
+  // assert the SHAPE and the honesty note, never a value (per the plan).
+  assert.ok(body.calibration, 'calibration block present');
+  assert.ok(body.calibration.auc === null || typeof body.calibration.auc === 'number');
+  assert.equal(typeof body.calibration.commits, 'number');
+  assert.ok(Array.isArray(body.calibration.quartiles));
+  for (const q of body.calibration.quartiles) {
+    assert.equal(typeof q.q, 'string');
+    assert.equal(typeof q.defectRate, 'number');
+  }
+  assert.equal(typeof body.calibration.verdictLine, 'string');
+  assert.equal(body.calibration.note, 'in-repo self-calibration, not a cross-repo benchmark');
+  assert.equal(body.state_age, 0);
+});
+
+test('/api/risk caches calibration per HEAD (second call never re-runs calibrateRisk)', async () => {
+  await request('/api/risk?files=app.mjs', { headers: bearer });
+  const first = serve.riskCalibrationStats();
+  assert.ok(first.computes >= 1, 'calibration ran at least once');
+  await request('/api/risk?files=lib.mjs', { headers: bearer });
+  const second = serve.riskCalibrationStats();
+  assert.equal(second.computes, first.computes, 'same HEAD → cached, not recomputed');
+  assert.equal(second.key, first.key);
+});
+
+test('/api/risk with no changes and no files → degraded 200, never an error', async () => {
+  const r = await request('/api/risk', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.equal(body.score, null);
+  assert.equal(body.reason, 'no-changes');
+  assert.deepEqual(body.files, []);
+});
+
+test('/api/next returns ≤5 ranked actions, each with an auto|human boundary', async () => {
+  const r = await request('/api/next', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.ok(Array.isArray(body.actions));
+  assert.ok(body.actions.length >= 1 && body.actions.length <= 5, `1..5 actions, got ${body.actions.length}`);
+  for (const a of body.actions) {
+    assert.equal(typeof a.command, 'string');
+    assert.match(a.command, /^brain:/);
+    assert.equal(typeof a.reason, 'string');
+    assert.ok(['auto', 'human'].includes(a.boundary), `boundary auto|human, got ${a.boundary}`);
+  }
+  assert.ok(body.provenance, 'provenance present');
+  assert.equal(typeof body.provenance.signals, 'object', 'sensed signals exposed for transparency');
+  assert.equal(body.state_age, 0);
+});
+
+test('/api/brief surfaces the fixture lease advisory and a safe pack preview', async () => {
+  const r = await request('/api/brief?files=scripts/serve-work.mjs', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.deepEqual(body.files, ['scripts/serve-work.mjs']);
+  assert.ok(Array.isArray(body.advisories));
+  const lease = body.advisories.find((a) => a.kind === 'lease');
+  assert.ok(lease, 'the scripts/** lease covers the target file');
+  assert.equal(lease.severity, 'conflict', 'foreign lease → conflict severity');
+  assert.match(lease.message, /leased by claude-a/);
+  assert.equal(lease.target, 'scripts/serve-work.mjs');
+  // packPreview: null-or-string, NEVER a 500. With BRAIN_INDEX_PROVIDER=none
+  // the deterministic degraded path is null + a warning.
+  assert.ok(body.packPreview === null || typeof body.packPreview === 'string');
+  if (body.packPreview === null) {
+    assert.equal(typeof body.packWarning, 'string', 'a null preview always explains itself');
+  }
+  assert.equal(body.state_age, 0);
+});
+
+test('/api/brief with no target files → empty advisories, still 200', async () => {
+  const r = await request('/api/brief', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.deepEqual(body.files, []);
+  assert.deepEqual(body.advisories, []);
 });
 
 // ---------------------------------------------------------------------------
