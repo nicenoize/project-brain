@@ -432,3 +432,16 @@
 /* module map lives in the wide column: keep the name column from starving */
 .sheet .map-name { width: 46%; }
 .compact .factor-evidence { display: none; }
+
+/* why drawer */
+.why-drawer {
+  margin-top: 10px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 8px;
+}
+.why-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.why-head .path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.why-line { display: flex; gap: 10px; margin: 0 0 6px; font-size: 12.5px; }
+.why-decision { margin: 0 0 8px; }
+.why-title { margin: 0; font-size: 12.5px; font-weight: 700; }
+.why-history { margin-top: 8px; }

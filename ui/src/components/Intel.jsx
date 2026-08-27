@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import Treemap from './Treemap.jsx';
+import WhyDrawer from './WhyDrawer.jsx';
 
 function Provenance({ data }) {
   const w = data?.window;
@@ -15,6 +17,7 @@ function Provenance({ data }) {
     (empty-state rule) and shares its space with the lease board — a leased
     treemap cell scrolls to the lease row (map = list raise). */
 export default function Intel({ hotspots, health, coChange, ownership, leases }) {
+  const [whyFile, setWhyFile] = useState('');
   const files = hotspots?.files || [];
   const pairs = coChange?.pairs || [];
   const prefixes = ownership?.prefixes || [];
@@ -40,7 +43,11 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
                       </span>
                       {f.lowConfidence ? <span className="low-conf" title="fewer than 3 commits — treat as a hint, not a score">*</span> : null}
                     </td>
-                    <td className="path">{f.file}</td>
+                    <td>
+                      <button className="linklike path" onClick={() => setWhyFile(whyFile === f.file ? '' : f.file)}>
+                        {f.file}
+                      </button>
+                    </td>
                     <td className="factor-evidence">{top?.evidence || ''}</td>
                   </tr>
                 );
@@ -53,6 +60,7 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
               fix history — {cal.note}.
             </p>
           )}
+          {whyFile && <WhyDrawer file={whyFile} onClose={() => setWhyFile('')} />}
           <div className="action-line">
             before touching the top file, score the change:{' '}
             <code>project-brain x intel risk --files {dangerous[0]?.file}</code>
