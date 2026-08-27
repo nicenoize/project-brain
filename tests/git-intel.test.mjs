@@ -764,8 +764,15 @@ test('calibrateRisk: labels from later fixes, AUC beats random on the known stru
   assert.equal(result.auc, 0.875);
   assert.ok(result.auc > 0.5);
   assert.match(result.verdict, /AUC 0\.88 over 9 commits/);
-  assert.match(result.verdict, /better than random/);
-  assert.match(result.verdict, /gate \(0\.6\) met/);
+  // The ranking is right (AUC 0.875 above); the verdict must still refuse to
+  // open the --score gate on 4 commits in the smaller class. This fixture used
+  // to assert "gate met" — the same overclaim calibrateFileHealth made in the
+  // field on a single fixed file.
+  assert.equal(result.sufficientEvidence, false);
+  assert.equal(result.minorityClass, 4);
+  assert.match(result.verdict, /only 4 clean commit\(s\)/);
+  assert.match(result.verdict, /do NOT enable --score on it/);
+  assert.doesNotMatch(result.verdict, /gate \(0\.6\) met/);
   // honest methodology: the output itself says what this is and is not
   assert.match(result.method, /self-calibration/);
   assert.match(result.method, /NOT a cross-repo benchmark/);

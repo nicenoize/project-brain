@@ -1042,10 +1042,25 @@ export function calibrateRisk(commits, {
     });
   }
 
+  // Same two-sided power rule as calibrateFileHealth: AUC's precision comes
+  // from the smaller class, and this gate decides whether --score goes on by
+  // default. A gate that opens on three defective commits is not a gate.
+  const minorityClass = auc === null ? 0 : Math.min(defects, rows.length - defects);
+  const underpowered = auc !== null && minorityClass < MIN_CALIBRATION_POSITIVES;
+  const sufficientEvidence = auc !== null && !underpowered;
+
   let verdict;
   if (auc === null) {
     verdict = `AUC undefined over ${rows.length} commits (need both defective and clean commits ` +
       'in the window) — do NOT enable --score by default.';
+  } else if (underpowered) {
+    const scarce = defects <= rows.length - defects
+      ? `only ${defects} defective commit(s)`
+      : `only ${rows.length - defects} clean commit(s)`;
+    verdict = `AUC ${auc.toFixed(2)} over ${rows.length} commits, but ${scarce} — below the ` +
+      `${MIN_CALIBRATION_POSITIVES} needed for the gate to mean anything. One commit changing ` +
+      `sides would move this AUC by up to ${(1 / Math.max(minorityClass, 1)).toFixed(2)}, more ` +
+      'than the whole 0.5→0.6 gate. Measured, not established: do NOT enable --score on it.';
   } else {
     const vsRandom = auc > 0.5 ? 'better than random' : 'not better than random';
     const gate = auc >= 0.6
@@ -1068,6 +1083,9 @@ export function calibrateRisk(commits, {
     },
     evaluated: rows.length,
     defective: defects,
+    sufficientEvidence,
+    minorityClass,
+    minPositives: MIN_CALIBRATION_POSITIVES,
     censored,
     skipped: { merge: skippedMerge, bulk: skippedBulk },
     quantiles,
