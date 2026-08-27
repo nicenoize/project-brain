@@ -82,6 +82,7 @@
     "bin/",
     "scripts/",
     "templates/",
+    "ui/dist/",
     "references/",
     "SKILL.md",
     "LICENSE"
