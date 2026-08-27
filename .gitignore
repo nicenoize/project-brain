@@ -19,7 +19,11 @@ node_modules/
 project-brain
 .project-brain/runners/
 ui/node_modules/
-ui/dist/
+# ui/dist is COMMITTED on purpose: it is how the Control Room reaches a
+# consuming repo. The skill is distributed as a git checkout, there is no build
+# step on the consumer side, and without the bundle `brain:serve` serves only
+# the "UI is not built yet" fallback — which is exactly what club-ops got.
+# tests/ui-bundle.test.mjs fails when the committed bundle is older than ui/src.
 .impeccable/review/
 .obsidian/
 .impeccable/questions/
