@@ -543,3 +543,34 @@
 /* "your call" outranks "safe to run" in weight, not in hue */
 .chip.idle.human { color: var(--ink); font-weight: 700; }
 .k.spaced { margin-top: 12px; }
+
+/* an empty slot waiting for a card — the rail without its T-card */
+.rail-row.empty-rail { opacity: 0.55; }
+.tcard.placeholder {
+  height: 34px;
+  background: repeating-linear-gradient(
+    -45deg, transparent, transparent 5px,
+    color-mix(in srgb, var(--hairline) 40%, transparent) 5px,
+    color-mix(in srgb, var(--hairline) 40%, transparent) 6px);
+  box-shadow: none;
+  border-style: dashed;
+}
+.compact .tcard.placeholder { height: 20px; }
+
+/* R2: long paths must wrap inside their card, not past its edge */
+.risk-files .path, .tcard .task, .next-head code { overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .risk-files .path { white-space: normal; }
+  /* Score-first tables stack on a phone: a 3-column grid at 390px starves all
+     three. Score and subject share a line, evidence gets the next one. */
+  .sheet table.score-first thead { display: none; }
+  .sheet table.score-first, .sheet table.score-first tbody,
+  .sheet table.score-first tr, .sheet table.score-first td { display: block; width: auto; }
+  .sheet table.score-first tr {
+    padding: 6px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--hairline) 45%, transparent);
+  }
+  .sheet table.score-first td { border: 0; padding: 0; }
+  .sheet table.score-first td:first-child { display: inline-block; margin-right: 8px; }
+  .sheet table.score-first td:nth-child(2) { display: inline; }
+}
