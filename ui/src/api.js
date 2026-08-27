@@ -43,6 +43,7 @@ export const api = {
   hotspots: (limit = 40) => get(`/api/intel/hotspots?limit=${limit}`),
   health: (limit = 10) => get(`/api/intel/health?limit=${limit}&structure=1`),
   graph: () => get('/api/graph'),
+  security: () => get('/api/security'),
   coChange: (limit = 15) => get(`/api/intel/co-change?limit=${limit}`),
   ownership: (limit = 15) => get(`/api/intel/ownership?limit=${limit}`),
   records: (type) => get(`/api/records?type=${type}`),

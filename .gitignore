@@ -21,3 +21,5 @@ project-brain
 ui/node_modules/
 ui/dist/
 .impeccable/review/
+.obsidian/
+.impeccable/questions/

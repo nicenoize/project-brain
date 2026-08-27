@@ -448,7 +448,15 @@
 
 /* fleet */
 .reason-list { list-style: none; margin: 0; padding: 0; }
-.reason-list li { padding: 1px 0; }
+/* One row grammar for every reason list (fleet, graph, security): tag, then
+   subject, then evidence — laid out, never butted together by inline flow. */
+.reason-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  align-items: baseline;
+  padding: 2px 0;
+}
 .basis-tag.stop { color: var(--lamp-stop); }
 .chip.here { margin-left: 6px; }
 .quiet-ok { color: var(--lamp-run); }
@@ -479,3 +487,7 @@
 .plan-list { list-style: none; margin: 6px 0 0; padding: 0; }
 .plan-list li { display: flex; gap: 7px; align-items: baseline; padding: 2px 0; font-size: 12.5px; color: var(--ink-2); }
 .compact .plan-list { display: none; }
+
+/* security */
+.sec-secrets { margin-top: 14px; padding-top: 10px; border-top: 1px solid color-mix(in srgb, var(--hairline) 45%, transparent); }
+.not-scanned { color: var(--lamp-attn-ink); }
