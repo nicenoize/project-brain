@@ -1,9 +1,20 @@
+import { useState } from 'react';
+import { copyText } from '../api.js';
+
 /** "What landed today, and who is working where?" — read out of git, so it is
     never empty and asks nobody to adopt anything. Leases record intent; this
     records fact. A quiet day says which day was not quiet rather than going
     blank, and two people in one area is reported plainly: that is the warning
     the lease board would have given in advance. */
 export default function ActivityPanel({ activity }) {
+  const [copied, setCopied] = useState('');
+  const copy = async (key, text) => {
+    if (await copyText(text)) {
+      setCopied(key);
+      setTimeout(() => setCopied(''), 1400);
+    }
+  };
+
   if (!activity) return <p className="loading">reading the log…</p>;
   if (activity.degraded) {
     return <p className="empty">{activity.reason || 'no git history readable here.'}</p>;
@@ -88,6 +99,17 @@ export default function ActivityPanel({ activity }) {
                 <span className="factor-evidence">
                   {c.authors.map((a) => `${a.author} (${a.commits})`).join(' · ')}
                 </span>
+                {/* The one control that turns this panel from a readout into a
+                    step: shared ground found in the PAST, converted into a
+                    claim about the NEXT edit. The command is copied rather than
+                    run, because claiming needs to be done by a named person and
+                    the panel has no business guessing which one you are. */}
+                <button
+                  className="btn quiet"
+                  onClick={() => copy(c.area, leaseCommand(c.area))}
+                >
+                  {copied === c.area ? 'copied — fill in --task and --actor' : 'claim this area'}
+                </button>
               </li>
             ))}
           </ul>
@@ -104,4 +126,9 @@ export default function ActivityPanel({ activity }) {
       </div>
     </div>
   );
+}
+
+/** The exact `brain:lease add` for an area, quoted so the glob survives the shell. */
+function leaseCommand(area) {
+  return `npm run brain:lease -- add "${area}/**" --task <slug> --actor <you>`;
 }
