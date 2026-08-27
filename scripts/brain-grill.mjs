@@ -23,7 +23,7 @@
  *
  * Subcommands:
  *   scaffold <finding|plan|decision-slug | --title "proposal">
- *            [--category c] [--context] [--max-symbols N] [--json]
+ *            [--category c] [--lens a,b|all] [--context] [--max-symbols N] [--json]
  *   save     [--target <slug>] [--title "..."] [--target-type t] [--category c]
  *            [--module m] [--verdict open|proceed|revise|block]
  *            [--sources a.mjs,b/c.md] [--actor X]
@@ -96,6 +96,164 @@ const CATEGORY_CHALLENGES = {
   ]
 };
 
+/**
+ * STAKEHOLDER LENSES — the second axis of the grill.
+ *
+ * The category bank above asks how the CODE fails: correctness, security,
+ * performance. This bank asks whose INTERESTS the plan trades against, which is
+ * a different question and finds different things. A change can be correct,
+ * fast, tested, and still be the wrong change because it quietly moves cost
+ * onto the person who has to run it at 3am, or onto whoever inherits it.
+ *
+ * The payoff is NOT the union of the questions. Eleven lenses times seven
+ * questions is seventy-seven questions nobody answers honestly, and a grill
+ * where every lens says "proceed" has told you nothing. The payoff is
+ * DISAGREEMENT: each lens returns its own verdict, and a plan the maintainer
+ * blocks while the product side proceeds is exactly the conversation that has
+ * to happen before the code exists. `lensConflict()` below is the output.
+ *
+ * Kept deliberately small and non-overlapping — a lens that duplicates a
+ * category bank earns nothing and costs the reader attention. `stake` names
+ * what this person loses when the plan is wrong; it is printed with the
+ * questions so the answerer argues against a real interest, not a job title.
+ */
+export const STAKEHOLDER_LENSES = Object.freeze({
+  user: {
+    who: 'The person the software is for',
+    stake: 'their task gets slower, or stops working the way they learned it',
+    questions: [
+      'Whose task gets HARDER because of this — and did you weigh that against whose gets easier?',
+      'If this ships and nobody notices, was it worth building? Name the user-visible difference in one sentence.'
+    ]
+  },
+  'on-call': {
+    who: 'Whoever is woken at 3am when this breaks',
+    stake: 'a failure they cannot diagnose from the outside',
+    questions: [
+      'When this fails at 3am, what exactly is in the logs — and is it enough to act on without reading the source?',
+      'Does this add a new way to fail silently: a swallowed error, a retry that hides a real fault, a default that masks a missing value?'
+    ]
+  },
+  maintainer: {
+    who: 'Whoever owns this file in a year (probably you, having forgotten)',
+    stake: 'the ability to change it safely without archaeology',
+    questions: [
+      'What will be impossible to change later because of a decision you are making now — a schema, a public name, a wire format?',
+      'Is the REASON for this written where the next reader will look, or only in the diff and this conversation?'
+    ]
+  },
+  newcomer: {
+    who: 'The next agent or engineer arriving with zero context',
+    stake: 'hours spent inferring what a sentence could have told them',
+    questions: [
+      'Could someone with no context tell from the code alone what this is for and what it must never do?',
+      'How many files must they read before they can safely change this one? If the answer is more than three, say why that is acceptable.'
+    ]
+  },
+  integrator: {
+    who: 'Whoever consumes this from outside — another repo, service, or client',
+    stake: 'their build breaking on a change they never saw',
+    questions: [
+      'What in this change is now part of a contract someone else depends on — and did you mean to promise it?',
+      'If a downstream consumer is on the old shape, do they break loudly, break quietly, or keep working? Only one of those is acceptable.'
+    ]
+  },
+  support: {
+    who: 'Whoever has to explain to a user why it did that',
+    stake: 'behaviour they cannot account for',
+    questions: [
+      'When a user asks "why did it do that", can the answer be reconstructed from what this records — or only guessed?',
+      'Does this add behaviour that is correct but surprising? Surprising costs support time forever; correct only costs it once.'
+    ]
+  },
+  payer: {
+    who: 'Whoever funds the time — you, on a bootstrap',
+    stake: 'the weeks this costs and the thing not built instead',
+    questions: [
+      'What are you NOT building this week because of this? Is that trade the one you would make deliberately?',
+      'What is the cheapest experiment that would tell you this is worth building at all — and why are you skipping it?'
+    ]
+  }
+});
+
+/** PURE. Lens ids in a stable, documented order. */
+export const LENS_IDS = Object.freeze(Object.keys(STAKEHOLDER_LENSES));
+
+/**
+ * PURE. Resolve a --lens value into lens ids.
+ * '' → [] (opt-in: the grill stays exactly as it was). 'all' → every lens.
+ * Unknown names are RETURNED as `unknown`, never silently dropped — a typo that
+ * quietly removes a perspective is the failure mode this whole feature exists
+ * to prevent.
+ * @returns {{ids: string[], unknown: string[]}}
+ */
+export function resolveLenses(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { ids: [], unknown: [] };
+  if (raw.toLowerCase() === 'all') return { ids: [...LENS_IDS], unknown: [] };
+  const ids = [];
+  const unknown = [];
+  for (const part of raw.split(',').map((p) => p.trim()).filter(Boolean)) {
+    const key = part.toLowerCase();
+    if (STAKEHOLDER_LENSES[key]) { if (!ids.includes(key)) ids.push(key); }
+    else if (!unknown.includes(part)) unknown.push(part);
+  }
+  // Stable order: the declared order, not the order they were typed.
+  return { ids: LENS_IDS.filter((id) => ids.includes(id)), unknown };
+}
+
+/**
+ * PURE. Read the per-lens verdict lines back out of an answered grill body.
+ * Tolerant of case and surrounding prose; a lens the answerer left blank comes
+ * back as null rather than being assumed to agree.
+ * @returns {Record<string, string|null>} lens id → proceed|revise|block|null
+ */
+export function parseLensVerdicts(body, ids = LENS_IDS) {
+  const text = String(body || '');
+  const out = {};
+  for (const id of ids) {
+    const re = new RegExp(`^\\s*-?\\s*\\*{0,2}${id.replace(/[-]/g, '\\-')}\\*{0,2}\\s*(?:verdict)?\\s*[:\u2014-]\\s*\\*{0,2}(proceed|revise|block)\\*{0,2}`, 'im');
+    const m = text.match(re);
+    out[id] = m ? m[1].toLowerCase() : null;
+  }
+  return out;
+}
+
+const VERDICT_RANK = Object.freeze({ proceed: 0, revise: 1, block: 2 });
+
+/**
+ * PURE. Where do the lenses disagree, and what does that mean?
+ *
+ * `conflict` is true when two lenses reach different verdicts — that is the
+ * signal worth a human's attention, and it is the reason to run more than one
+ * lens at all. `worst` drives the overall recommendation: one lens blocking is
+ * enough to stop, because the whole point of asking is to let a single
+ * neglected interest veto.
+ *
+ * @returns {{answered: number, missing: string[], conflict: boolean,
+ *            worst: string|null, split: Record<string, string[]>}}
+ */
+export function lensConflict(verdicts = {}) {
+  const entries = Object.entries(verdicts);
+  const split = { proceed: [], revise: [], block: [] };
+  const missing = [];
+  for (const [id, v] of entries) {
+    if (v && split[v]) split[v].push(id);
+    else missing.push(id);
+  }
+  const present = Object.keys(split).filter((k) => split[k].length);
+  const worst = present.length
+    ? present.reduce((a, b) => (VERDICT_RANK[b] > VERDICT_RANK[a] ? b : a))
+    : null;
+  return {
+    answered: entries.length - missing.length,
+    missing,
+    conflict: present.length > 1,
+    worst,
+    split
+  };
+}
+
 // Always-asked, idea-agnostic challenges (Pocock's "flush out issues" core).
 const GENERIC_CHALLENGES = [
   'What is the simplest version that could possibly work — and why are you not shipping THAT first?',
@@ -117,6 +275,8 @@ const GENERIC_CHALLENGES = [
  * @param {Array<{symbol,callerFiles:string[],testFiles:string[],crossInbound:Array<{from,kind}>}>} [input.blast]
  * @param {Array<{decision,title}>} [input.adrs]            governing ADRs
  * @param {Array<{slug,title,status}>} [input.relatedFindings]  same-module open/planned findings
+ * @param {string[]} [input.lenses]     STAKEHOLDER_LENSES ids to also ask as
+ *                                      (opt-in; see resolveLenses)
  * @returns {Array<{section,question}>}
  */
 export function generateChallenges(input = {}) {
@@ -156,7 +316,15 @@ export function generateChallenges(input = {}) {
   const cat = String(input.category || '').toLowerCase();
   for (const q of CATEGORY_CHALLENGES[cat] || []) push(capitalize(cat), q);
 
-  // 5. Generic, always-asked challenges.
+  // 5. Stakeholder lenses (opt-in via --lens). Placed BEFORE the generic bank
+  //    so an answerer working top-down meets the people before the platitudes.
+  for (const id of input.lenses || []) {
+    const lens = STAKEHOLDER_LENSES[id];
+    if (!lens) continue;
+    for (const q of lens.questions) push(`Lens: ${id}`, q);
+  }
+
+  // 6. Generic, always-asked challenges.
   for (const q of GENERIC_CHALLENGES) push('Fundamentals', q);
 
   return out;
@@ -205,8 +373,28 @@ export function renderInterview(meta, challenges) {
     }
     lines.push('');
   }
+  const lenses = (meta.lenses || []).filter((id) => STAKEHOLDER_LENSES[id]);
+  if (lenses.length) {
+    lines.push('## Verdict per lens');
+    lines.push('');
+    lines.push('One line each. Answer AS that person, not about them — and do not');
+    lines.push('harmonise them. Where two lenses disagree is the finding; a grill in');
+    lines.push('which every lens says proceed has told you nothing.');
+    lines.push('');
+    for (const id of lenses) {
+      const l = STAKEHOLDER_LENSES[id];
+      lines.push(`- **${id}** — ${l.who}; loses: ${l.stake}`);
+      lines.push(`  - ${id}: proceed|revise|block — _why, in one sentence_`);
+    }
+    lines.push('');
+  }
   lines.push('## Verdict');
   lines.push('_proceed_ (defended — build it) · _revise_ (issues found — change the plan first) · _block_ (do not build it)');
+  if (lenses.length) {
+    lines.push('');
+    lines.push('One lens blocking is enough to stop: the reason to ask several is to let');
+    lines.push('a single neglected interest veto.');
+  }
   return lines.join('\n').replace(/\n+$/, '\n') + '\n';
 }
 
@@ -360,6 +548,17 @@ async function cmdScaffold(args) {
   const category = (takeOption(args, '--category') || '').trim();
   const title = takeOption(args, '--title').trim();
   const moduleOpt = takeOption(args, '--module').trim();
+  const lensOpt = (takeOption(args, '--lens') || '').trim();
+  const { ids: lenses, unknown: unknownLenses } = resolveLenses(lensOpt);
+  if (unknownLenses.length) {
+    // A typo must never silently remove a perspective — that is the exact
+    // failure this feature exists to prevent.
+    process.stderr.write(
+      `[brain:grill] unknown lens(es): ${unknownLenses.join(', ')}\n` +
+      `Known: ${LENS_IDS.join(', ')} (or --lens all)\n`
+    );
+    process.exit(2);
+  }
   const id = args.find(a => !a.startsWith('-')) || '';
 
   const meta = resolveTarget(id, { title, category, module: moduleOpt });
@@ -381,9 +580,10 @@ async function cmdScaffold(args) {
     }
   }
 
+  meta.lenses = lenses;
   const challenges = generateChallenges({
     targetType: meta.targetType, category: meta.category, title: meta.title,
-    module: meta.module, blast, adrs, relatedFindings
+    module: meta.module, blast, adrs, relatedFindings, lenses
   });
 
   if (json) {
@@ -470,6 +670,36 @@ function cmdSave(args) {
   ensureDir(GRILL_DIR);
   write(dest, serializeGrill({ title, target, targetType, category, verdict, created, updated: now, actor, module, sources, body }));
   process.stdout.write(`${path.relative(ROOT, dest)}\n`);
+
+  // Stakeholder lenses: the disagreement is the product. Reading it back out of
+  // the answered body (rather than asking for it again on the command line)
+  // keeps one source of truth — the interview the answerer actually filled in.
+  const lensVerdicts = parseLensVerdicts(body);
+  const answered = Object.fromEntries(Object.entries(lensVerdicts).filter(([, v]) => v));
+  if (Object.keys(answered).length) {
+    const c = lensConflict(answered);
+    const parts = ['proceed', 'revise', 'block']
+      .filter((v) => c.split[v].length)
+      .map((v) => `${v}: ${c.split[v].join(', ')}`);
+    process.stdout.write(`\nLenses (${c.answered} answered) — ${parts.join(' · ')}\n`);
+    if (c.conflict) {
+      process.stdout.write(
+        `CONFLICT: the lenses do not agree. That disagreement is the finding — resolve it in the\n` +
+        `plan before building, not by averaging the verdicts.\n`
+      );
+    } else {
+      process.stdout.write('No disagreement between the lenses answered — which is only informative if you answered them independently.\n');
+    }
+    if (c.worst === 'block' && verdict === 'proceed') {
+      // Never silently outrank a lens: one neglected interest gets a veto, and
+      // an overall `proceed` recorded over a blocking lens is the exact thing
+      // this axis exists to catch.
+      process.stdout.write(
+        `\nWARNING: overall verdict is \`proceed\` while ${c.split.block.join(', ')} said \`block\`.\n` +
+        `Either answer that objection in the body or change the verdict — the record now shows both.\n`
+      );
+    }
+  }
 }
 
 function cmdCheck(args) {
@@ -516,7 +746,8 @@ function cmdList(args) {
 function usage() {
   return [
     'Usage:',
-    '  npm run brain:grill -- scaffold <finding|plan|decision-slug> [--category c] [--context] [--max-symbols N] [--json]',
+    '  npm run brain:grill -- scaffold <finding|plan|decision-slug> [--category c] [--lens a,b|all] [--context] [--max-symbols N] [--json]',
+    `     --lens: also grill AS a stakeholder — ${LENS_IDS.join(', ')} (or all). Each returns its own verdict; where they disagree is the finding.`,
     '  npm run brain:grill -- scaffold --title "free-form proposal" [--category c] [--module m]',
     '  npm run brain:grill -- save [--target <id>] [--title "..."] [--target-type t] [--category c] [--module m]',
     '         [--verdict open|proceed|revise|block] [--sources a.mjs,b/c.md] [--actor X] [--body "..." | --body-file <path>]',
