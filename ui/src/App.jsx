@@ -106,10 +106,10 @@ function sectionState(id, d, { workstreams, leases, conflictsByTask }) {
     case 'graph':
       return (d.graph?.cycles || []).length ? 'attn' : 'quiet';
     case 'danger': {
-      const files = d.health?.files || [];
-      if (!files.length) return 'quiet';
-      // A ranking always exists; only a file in the top band asks for someone.
-      return files[0]?.score >= 6.5 ? 'attn' : 'run';
+      // A standing inventory never lamps: it is the same ranking today as
+      // yesterday, and a lamp promises "this wants you NOW". The section that
+      // speaks about YOUR current change (risk) is the one that earns it.
+      return (d.health?.files || []).length ? 'run' : 'quiet';
     }
     case 'map':
       return (d.map?.orphans?.codeDirs || []).length ? 'attn' : 'quiet';

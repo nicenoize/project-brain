@@ -119,7 +119,7 @@ export default function LeaseBoard({ leases, conflictTargets, onChanged }) {
                 >
                   <td className="path">{l.target}</td>
                   <td>{l.lockedBy || 'unowned'}</td>
-                  <td><span className={`ttl ${ttl.cls}`}>{ttl.label}</span></td>
+                  <td data-label="ttl"><span className={`ttl ${ttl.cls}`}>{ttl.label}</span></td>
                   <td>
                     <button
                       className="btn quiet"

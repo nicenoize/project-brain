@@ -99,6 +99,17 @@
   }
   .sheet tr:last-child { border-bottom: 0; }
   .sheet td { border: 0; padding: 1px 0; }
+  /* thead is hidden when rows stack, so any cell that falls to its own line
+     would read as an orphan integer ("1", "2"). Cells carrying a bare number
+     declare their own label. */
+  .sheet td[data-label]::before {
+    content: attr(data-label) ' ';
+    font: 10.5px var(--font-data);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-right: 4px;
+  }
   /* The first two cells share the opening line: score+subject, or
      subject+its one number. Everything after that gets its own line. */
   .sheet td:first-child { display: inline-block; margin-right: 8px; }
