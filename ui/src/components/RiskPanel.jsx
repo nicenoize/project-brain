@@ -4,7 +4,7 @@ import { copyText } from '../api.js';
 /** "Is this change dangerous?" — deterministic risk over the working-tree
     change set, with the calibration receipt (validated claim) and two
     copy-to-agent bridges: the grill prompt and the packed context. */
-export default function RiskPanel({ changed, risk, brief }) {
+export default function RiskPanel({ changed, risk, brief, briefLoading }) {
   const [copied, setCopied] = useState('');
   const files = [...(changed?.staged || []), ...(changed?.unstaged || [])];
 
@@ -77,11 +77,16 @@ export default function RiskPanel({ changed, risk, brief }) {
         <button className="btn" onClick={() => copy('grill', grillPrompt)}>
           {copied === 'grill' ? 'copied — paste to your agent' : 'copy grill prompt'}
         </button>
-        {brief?.packPreview && (
+        {brief?.packPreview ? (
           <button className="btn quiet" onClick={() => copy('pack', brief.packPreview)}>
             {copied === 'pack' ? 'copied' : 'copy agent context'}
           </button>
-        )}
+        ) : briefLoading ? (
+          /* The brief opens the index and loads the embedding model — seconds,
+             where the rest of this panel is milliseconds. Saying it is on its
+             way is the difference between "still working" and "not available". */
+          <span className="factor-evidence">packing agent context…</span>
+        ) : null}
       </div>
     </div>
   );

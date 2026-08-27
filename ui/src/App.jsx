@@ -14,28 +14,72 @@ import ActivityPanel from './components/ActivityPanel.jsx';
 import GraphPanel from './components/GraphPanel.jsx';
 import SecurityPanel from './components/SecurityPanel.jsx';
 
+/**
+ * Resolve an object of promises by KEY, never by position.
+ *
+ * This replaced a 19-element `Promise.all` destructured positionally, which is
+ * a trap that sprang the first time a panel was inserted in the middle: the
+ * call went in after `fleet`, the name was appended at the end, and from then
+ * on the graph panel rendered activity data, security rendered the graph, and
+ * activity rendered security. Nothing threw, nothing logged — three panels just
+ * quietly showed each other's numbers. A key cannot slip.
+ *
+ * Each entry settles on its own: one failing endpoint yields null for that
+ * panel instead of blanking the whole board.
+ */
+async function resolveByKey(spec) {
+  const keys = Object.keys(spec);
+  const settled = await Promise.allSettled(keys.map((k) => spec[k]()));
+  const out = {};
+  keys.forEach((k, i) => {
+    out[k] = settled[i].status === 'fulfilled' ? settled[i].value : null;
+  });
+  return out;
+}
+
+/* /api/brief costs ~4s on a real repo because it opens the index and loads the
+   embedding model; every other endpoint answers in under 100ms. Awaiting it
+   with the rest made the ENTIRE board wait four seconds for one panel's
+   secondary content. It now arrives in a second pass, and RiskPanel already
+   renders its deterministic half — score, factors, calibration receipt —
+   without it. */
+const FAST_PANELS = {
+  meta: () => api.meta(),
+  state: () => api.state(),
+  events: () => api.events(),
+  hotspots: () => api.hotspots(),
+  health: () => api.health(),
+  coChange: () => api.coChange(),
+  ownership: () => api.ownership(),
+  records: () => api.records('decision'),
+  runnersInfo: () => api.runners(),
+  changed: () => api.changed(),
+  next: () => api.next(),
+  risk: () => api.risk(),
+  blast: () => api.blast(),
+  map: () => api.map(),
+  fleet: () => api.fleet(),
+  activity: () => api.activity(),
+  graph: () => api.graph(),
+  security: () => api.security()
+};
+
 function useData() {
   const [data, setData] = useState({ loading: true });
   const load = async () => {
     try {
-      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph, security, activity] =
-        await Promise.all([
-          api.meta(), api.state(), api.events(),
-          api.hotspots(), api.health(), api.coChange(), api.ownership(),
-          api.records('decision').catch(() => ({ records: [] })),
-          api.runners().catch(() => ({ runners: [], runnerCmdConfigured: false })),
-          api.changed().catch(() => null),
-          api.next().catch(() => null),
-          api.risk().catch(() => null),
-          api.blast().catch(() => null),
-          api.brief().catch(() => null),
-          api.map().catch(() => null),
-          api.fleet().catch(() => null),
-          api.activity().catch(() => null),
-          api.graph().catch(() => null),
-          api.security().catch(() => null)
-        ]);
-      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph, security, activity, loading: false });
+      const fast = await resolveByKey(FAST_PANELS);
+      setData((prev) => ({
+        ...prev, ...fast,
+        records: fast.records || { records: [] },
+        runnersInfo: fast.runnersInfo || { runners: [], runnerCmdConfigured: false },
+        loading: false,
+        briefLoading: true
+      }));
+      // Second pass: the slow one, folded in when it lands. A reload that
+      // overtakes it simply sets briefLoading again.
+      const brief = await api.brief().catch(() => null);
+      setData((prev) => ({ ...prev, brief, briefLoading: false }));
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -206,7 +250,7 @@ export default function App() {
       ? [describe('fleet', 'Which repo needs attention?', <FleetPanel fleet={d.fleet} />)] : []),
     describe('next', 'What should happen next?', <NextPanel next={d.next} />),
     describe('risk', 'Is this change dangerous?',
-      <RiskPanel changed={d.changed} risk={d.risk} brief={d.brief} />),
+      <RiskPanel changed={d.changed} risk={d.risk} brief={d.brief} briefLoading={d.briefLoading} />),
     describe('blast', 'What breaks if I change this?', <BlastPanel blast={d.blast} />),
     describe('security', 'What here is exploitable?', <SecurityPanel security={d.security} />),
     describe('board', 'What is running right now?',
