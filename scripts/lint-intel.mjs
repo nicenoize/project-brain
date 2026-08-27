@@ -1448,6 +1448,28 @@ export function rankingSignals({
     notes.push('git log failed — churn and fix-density factors omitted');
   }
 
+  // A saturated window is not a full history. `--commits 500` on a repo that
+  // moves fast covers weeks, not the life of the code, so churn ranks are
+  // computed over a slice the reader never chose — and the tool used to say
+  // nothing about it. Found in the field: a team ranked 476 ESLint findings,
+  // got a thin ranking, and only discovered why by trying --commits 3000.
+  // Saying which SPAN was covered is the honest form: "500 commits" means
+  // nothing without knowing whether that is a month or a decade.
+  if (commits.length >= limit && commits.length > 1) {
+    const stamps = commits
+      .map((c) => Date.parse(c.dateIso))
+      .filter((n) => Number.isFinite(n));
+    if (stamps.length > 1) {
+      const days = Math.max(1, Math.round((Math.max(...stamps) - Math.min(...stamps)) / 86_400_000));
+      notes.push(
+        `history window SATURATED: ranked over the newest ${limit} commit(s), which cover ` +
+        `only the last ~${days} day(s) of this repo. Files older than that carry no churn ` +
+        'or fix-density signal. Widen with --commits <n> (or BRAIN_LINT_COMMITS) if the ' +
+        'ranking looks thin.'
+      );
+    }
+  }
+
   let hs = null;
   let health = null;
   if (commits.length) {
