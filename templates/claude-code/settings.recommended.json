@@ -69,6 +69,10 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-lint-conventions.mjs\""
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-answer-hook.mjs\" || true"
           }
         ]
       },
