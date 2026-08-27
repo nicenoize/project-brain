@@ -7,6 +7,7 @@
  * inside brain markdown (--check-brain-refs).
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +15,7 @@ import { ROOT, BRAIN_DIR, exists, read, JSON_INDEX, USAGE_LOG, staleIndexFromRec
 import { parseUsageLog, summarizeUsage, commandUniverseFromPackageScripts } from './usage.mjs';
 import {
   measureFile,
+  measureInstructionChain,
   measureHook,
   measureAnswerHook,
   footprintWarnings,
@@ -53,13 +55,24 @@ function contextFootprintReport() {
     if (probe) hooks.push(measureAnswerHook(answerScript, probe, ROOT));
   }
 
+  // The neighbours in the same context window: CLAUDE.md and what it imports,
+  // at project and user level. Reported, never gated — they are not ours.
+  const chains = [];
+  for (const [label, file] of [
+    ['project CLAUDE.md', path.join(ROOT, 'CLAUDE.md')],
+    ['user ~/.claude/CLAUDE.md', path.join(os.homedir(), '.claude', 'CLAUDE.md')]
+  ]) {
+    const chain = measureInstructionChain(file);
+    if (chain.root) chains.push({ label, ...chain });
+  }
+
   const packDefaults = {
     BRAIN_PACK_MAX_TOKENS: Number(process.env.BRAIN_PACK_MAX_TOKENS) || PACK_MAX_TOKENS_DEFAULT
   };
 
   // budgets: the HARD CI numbers (tests/footprint-budget.test.mjs) — passing
   // them makes footprintWarnings also flag hard-budget breaches here.
-  const fp = { skills, activeState, hooks, packDefaults, thresholds: FOOTPRINT_THRESHOLDS, budgets: BUDGETS };
+  const fp = { skills, activeState, hooks, chains, packDefaults, thresholds: FOOTPRINT_THRESHOLDS, budgets: BUDGETS };
   fp.warnings = footprintWarnings(fp, FOOTPRINT_THRESHOLDS);
   return fp;
 }
@@ -304,6 +317,20 @@ if (!jsonOut) {
   for (const h of footprint.hooks) fpParts.push(`hook:${h.event} ${h.bytes}B≈${h.tokens}tok`);
   fpParts.push(`pack≤${footprint.packDefaults.BRAIN_PACK_MAX_TOKENS}tok`);
   console.log(`Context footprint (per-session injection, ~len/4 tokens): ${fpParts.join('; ')}`);
+  // The neighbours. Without them the brain's own number has no scale — and a
+  // 427-byte digest once took the blame for a 12,957-token problem because
+  // nobody had measured what sat beside it.
+  for (const c of footprint.chains || []) {
+    const ours = footprint.skills.reduce((n, s2) => n + s2.tokens, 0)
+      + (footprint.activeState.exists ? footprint.activeState.tokens : 0)
+      + footprint.hooks.reduce((n, h) => n + h.tokens, 0);
+    const parts = [c.root, ...c.imports].map((f) => `${path.basename(f.file)} ≈${f.tokens}tok`);
+    console.log(
+      `Also in this context — ${c.label}: ≈${c.totalTokens} tok across ${1 + c.imports.length} file(s)` +
+      `${ours > 0 ? ` (${(c.totalTokens / ours).toFixed(1)}× the brain's ≈${ours})` : ''}` +
+      ` — not ours, reported not gated: ${parts.join(', ')}`
+    );
+  }
   for (const w of footprint.warnings) console.warn(`Project Brain context footprint: ${w}`);
 }
 

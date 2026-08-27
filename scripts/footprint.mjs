@@ -14,6 +14,8 @@
  * active_state FILE (the raw-cat cost) as well as the route hook's own stdout.
  */
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 // Warn thresholds. File limits are in estimated tokens; the hook limit is in
@@ -176,6 +178,47 @@ export function measureAnswerHook(hookScript, filePath, cwd) {
  * Evaluate a footprint against thresholds → human-readable warnings. PURE.
  * @param {object} fp  { skills:[measureFile], activeState:measureFile, hooks:[measureHook] }
  */
+/**
+ * Measure the instruction chain that shares the session context with us:
+ * CLAUDE.md and every file it pulls in with an `@import` line.
+ *
+ * WHY THIS BELONGS IN OUR AUDIT. The footprint report answers "how many tokens
+ * does the brain inject", and it answered it correctly — and left the reader
+ * with no way to judge the number. On this machine the brain measured ≈2,890
+ * tokens a session while the CLAUDE.md chain beside it measured ≈23,900:
+ * eight times as much, in the same context window, invisible to the tool whose
+ * whole job is context discipline. Worse, a 427-byte digest was blamed for a
+ * 12,957-token problem because nobody had measured the neighbours.
+ *
+ * REPORTED, NEVER GATED. These files are not ours — they belong to the user or
+ * to another framework, and failing a build over someone else's instructions
+ * would be arrogant. The number is shown so a person can decide.
+ *
+ * @param {string} claudeMd  absolute path to a CLAUDE.md
+ * @returns {{root: object|null, imports: object[], totalBytes: number, totalTokens: number}}
+ */
+export function measureInstructionChain(claudeMd) {
+  const rel = (abs) => path.basename(abs);
+  const root = measureFile(claudeMd, rel(claudeMd));
+  if (!root.exists) return { root: null, imports: [], totalBytes: 0, totalTokens: 0 };
+  const dir = path.dirname(claudeMd);
+  let text = '';
+  try { text = fs.readFileSync(claudeMd, 'utf8'); } catch { text = ''; }
+  const seen = new Set([path.resolve(claudeMd)]);
+  const imports = [];
+  // `@FILE.md` on its own line is the import form; anything else is prose.
+  for (const m of text.matchAll(/^@([A-Za-z0-9._/-]+\.md)\s*$/gm)) {
+    const abs = path.resolve(dir, m[1]);
+    if (seen.has(abs)) continue;          // an import cycle must not double-count
+    seen.add(abs);
+    const f = measureFile(abs, m[1]);
+    if (f.exists) imports.push(f);
+  }
+  const all = [root, ...imports];
+  const totalBytes = all.reduce((n, f) => n + (f.bytes || 0), 0);
+  return { root, imports, totalBytes, totalTokens: estimateTokens(totalBytes) };
+}
+
 export function footprintWarnings(fp = {}, thresholds = FOOTPRINT_THRESHOLDS) {
   const warnings = [];
   for (const s of fp.skills || []) {

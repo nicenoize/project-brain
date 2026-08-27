@@ -275,3 +275,67 @@ test('BUDGETS: documents the agreed hard budgets (docs cite these numbers)', () 
   assert.equal(estimateTokens(BUDGETS.skillBytes), 3000);
   assert.equal(estimateTokens(BUDGETS.stateDigestBytes), 2000);
 });
+
+/* The neighbours in the same context window.
+   The footprint report answered "how many tokens does the brain inject"
+   correctly and left the reader no way to judge the number: on a real machine
+   the brain measured ≈2,890 tokens while the CLAUDE.md chain beside it measured
+   ≈23,900 — eight times as much, invisible to the tool whose job is context
+   discipline. A 427-byte digest took the blame for a 12,957-token problem
+   because nobody had measured what sat next to it. */
+test('measureInstructionChain: follows @imports and totals the chain', async () => {
+  const { measureInstructionChain } = await import('../scripts/footprint.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-chain-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '# Entry\n\n@A.md\n@B.md\n@missing.md\n');
+    fs.writeFileSync(path.join(dir, 'A.md'), 'a'.repeat(400));
+    fs.writeFileSync(path.join(dir, 'B.md'), 'b'.repeat(800));
+
+    const chain = measureInstructionChain(path.join(dir, 'CLAUDE.md'));
+    assert.ok(chain.root.exists);
+    // A missing import is skipped, not counted as zero and not thrown over.
+    assert.deepEqual(chain.imports.map((f) => f.file), ['A.md', 'B.md']);
+    const rootBytes = fs.statSync(path.join(dir, 'CLAUDE.md')).size;
+    assert.equal(chain.totalBytes, rootBytes + 400 + 800);
+    assert.equal(chain.totalTokens, Math.round((rootBytes + 1200) / 4));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('measureInstructionChain: a cycle is counted once, a missing entry is empty', async () => {
+  const { measureInstructionChain } = await import('../scripts/footprint.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-chain-cycle-'));
+  try {
+    // Self-import: double-counting it would inflate every report that has one.
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '@CLAUDE.md\n@A.md\n');
+    fs.writeFileSync(path.join(dir, 'A.md'), 'x'.repeat(100));
+    const chain = measureInstructionChain(path.join(dir, 'CLAUDE.md'));
+    assert.deepEqual(chain.imports.map((f) => f.file), ['A.md']);
+
+    // No CLAUDE.md at all is the common case and must be silent, not an error.
+    const none = measureInstructionChain(path.join(dir, 'nope', 'CLAUDE.md'));
+    assert.equal(none.root, null);
+    assert.equal(none.totalTokens, 0);
+    assert.deepEqual(none.imports, []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('measureInstructionChain: only a bare @file.md line is an import', async () => {
+  const { measureInstructionChain } = await import('../scripts/footprint.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-chain-prose-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), [
+      'Mail me at a@B.md if this breaks.',      // prose, not an import
+      'See `@A.md` for detail.',                 // quoted, not an import
+      '@A.md'                                    // the real one
+    ].join('\n'));
+    fs.writeFileSync(path.join(dir, 'A.md'), 'a'.repeat(40));
+    const chain = measureInstructionChain(path.join(dir, 'CLAUDE.md'));
+    assert.deepEqual(chain.imports.map((f) => f.file), ['A.md']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
