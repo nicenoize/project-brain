@@ -8,12 +8,13 @@ import Records from './components/Records.jsx';
 import NextPanel from './components/NextPanel.jsx';
 import RiskPanel from './components/RiskPanel.jsx';
 import BlastPanel from './components/BlastPanel.jsx';
+import MapPanel from './components/MapPanel.jsx';
 
 function useData() {
   const [data, setData] = useState({ loading: true });
   const load = async () => {
     try {
-      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief] =
+      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map] =
         await Promise.all([
           api.meta(), api.state(), api.events(),
           api.hotspots(), api.health(), api.coChange(), api.ownership(),
@@ -23,9 +24,10 @@ function useData() {
           api.next().catch(() => null),
           api.risk().catch(() => null),
           api.blast().catch(() => null),
-          api.brief().catch(() => null)
+          api.brief().catch(() => null),
+          api.map().catch(() => null)
         ]);
-      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, loading: false });
+      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, loading: false });
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -142,6 +144,10 @@ export default function App() {
               <div className="sheet">
                 <Board workstreams={workstreams} conflictsByTask={conflictsByTask} runnersInfo={d.runnersInfo} onChanged={d.reload} />
               </div>
+              <h2>Why is it built this way?</h2>
+              <div className="sheet">
+                <MapPanel map={d.map} records={d.records} />
+              </div>
               <h2>Which files are actually dangerous?</h2>
               <Intel hotspots={d.hotspots} health={d.health} coChange={d.coChange} ownership={d.ownership} leases={leases} />
             </>
@@ -158,7 +164,7 @@ export default function App() {
             <div className="sheet">
               <AuditFeed events={d.events?.events || []} />
             </div>
-            <h2>Why is it built this way?</h2>
+            <h2>Decisions on record</h2>
             <div className="sheet">
               <Records records={d.records?.records || []} />
             </div>

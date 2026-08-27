@@ -70,15 +70,24 @@ fs.writeFileSync(path.join(BRAIN, 'events.jsonl'),
   '{"type":"workstream-started","task":"T-42"}\n' +
   'not-json-should-be-skipped\n');
 
+// `module: demo` links this ADR to the modules/demo.md record below — that is
+// exactly how the real records carry the relation (/api/map, /api/why).
 fs.writeFileSync(path.join(BRAIN, 'decisions', '0001-test-decision.md'), `---
 title: Bind the daemon to loopback only
 status: canonical
 layer: decision
+module: demo
 ---
 
 # Bind the daemon to loopback only
 
-Body.
+## Context
+
+A daemon on 0.0.0.0 is reachable from the LAN.
+
+## Decision
+
+Bind strictly to 127.0.0.1 and gate every API call on a per-session token.
 `);
 
 // Tiny git repo so the intel endpoints have history.
@@ -92,6 +101,66 @@ execSync('git -c commit.gpgsign=false commit -q -m "feat: seed"', { cwd: FIXTURE
 fs.appendFileSync(path.join(FIXTURE, 'app.mjs'), 'export const z = 3;\n');
 execSync('git add .', { cwd: FIXTURE });
 execSync('git -c commit.gpgsign=false commit -q -m "fix: touch app"', { cwd: FIXTURE });
+
+// --- Doc-Navigator fixture (additive: no existing assertion depends on it) ---
+// One COMMITTED module record that claims app.mjs/lib.mjs, plus a later commit
+// touching app.mjs → the record provably lags the code (the /api/map staleness
+// signal). Explicit commit dates because git's ISO dates have 1s resolution and
+// same-second commits would tie. Two UNCOMMITTED records isolate the age path:
+// with no commit of their own, the record's date falls back to its mtime.
+fs.mkdirSync(path.join(BRAIN, 'modules'), { recursive: true });
+fs.mkdirSync(path.join(FIXTURE, 'ui'), { recursive: true });
+fs.writeFileSync(path.join(FIXTURE, 'ui', 'panel.jsx'), 'export const Panel = () => null;\n');
+fs.writeFileSync(path.join(BRAIN, 'modules', 'demo.md'), `---
+title: Demo module
+status: canonical
+layer: architecture
+module: demo
+date: 2026-01-01
+---
+
+# Demo module
+
+The demo module owns \`app.mjs\` and \`lib.mjs\`; see [[0001-test-decision]].
+
+Prose mentioning brain-work must not be mistaken for a path.
+`);
+const commitAt = (iso, msg) => execSync(`git -c commit.gpgsign=false commit -q -m "${msg}"`, {
+  cwd: FIXTURE,
+  env: { ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso }
+});
+execSync('git add .project-brain/modules ui', { cwd: FIXTURE });
+commitAt('2026-01-01T00:00:00+00:00', 'docs: seed the demo module record');
+fs.appendFileSync(path.join(FIXTURE, 'app.mjs'), 'export const drift = 4;\n');
+execSync('git add app.mjs', { cwd: FIXTURE });
+commitAt('2026-06-01T00:00:00+00:00', 'feat: drift app.mjs after the doc was written');
+
+// Uncommitted: mtime IS the record date. `globs:` frontmatter wins over the
+// body-derived paths and points at nothing in this repo → no code signal, so
+// only the age threshold can flip these.
+fs.writeFileSync(path.join(BRAIN, 'modules', 'fresh.md'), `---
+title: Fresh module
+module: fresh
+globs: docs/**
+---
+
+# Fresh module
+
+Written just now.
+`);
+fs.writeFileSync(path.join(BRAIN, 'modules', 'aged.md'), `---
+title: Aged module
+module: aged
+globs: vendor/**
+---
+
+# Aged module
+
+Nobody has touched this in a long time.
+`);
+const AGED_DAYS = 200;
+const agedAt = new Date(Date.now() - AGED_DAYS * 86_400_000);
+fs.utimesSync(path.join(BRAIN, 'modules', 'aged.md'), agedAt, agedAt);
 
 // Import AFTER the env override so ROOT/ACTIVE_STATE resolve into the fixture.
 const serve = await import('../scripts/brain-serve.mjs');
@@ -659,6 +728,229 @@ test('/api/blast caches adjacency per HEAD (a second query never rebuilds it)', 
   const second = serve.blastStats();
   assert.equal(second.computes, first.computes, 'same HEAD → cached, not recomputed');
   assert.equal(second.key, first.key);
+});
+
+// ---------------------------------------------------------------------------
+// Doc-Navigator (/api/map, /api/doc, /api/why) — the intent-first answer to
+// auto-generated wikis: nothing here invents documentation from code. These
+// assertions therefore check three things: that authored records become
+// navigable, that the ONE derived signal (staleness) is measured from git, and
+// that the doc reader can never be walked outside .project-brain.
+// ---------------------------------------------------------------------------
+
+test('doc-navigator: /api/map, /api/doc and /api/why are all token-gated', async () => {
+  for (const p of ['/api/map', '/api/doc?file=.project-brain/modules/demo.md', '/api/why?file=app.mjs']) {
+    const r = await request(p);
+    assert.equal(r.status, 401, `${p} must require the session token`);
+  }
+});
+
+test('/api/map returns modules with derived globs, link counts, counts and orphans', async () => {
+  const r = await request('/api/map', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+
+  const demo = body.modules.find((m) => m.name === 'demo');
+  assert.ok(demo, 'the seeded module record is on the map');
+  assert.equal(demo.file, '.project-brain/modules/demo.md');
+  assert.equal(demo.module, 'demo');
+  assert.equal(demo.title, 'Demo module');
+  assert.match(demo.summary, /demo module owns/);
+  // fileGlobs come from what the AUTHOR wrote, not from scanning the code.
+  assert.ok(demo.fileGlobs.includes('app.mjs'), 'backticked path becomes a glob');
+  assert.ok(demo.fileGlobs.includes('lib.mjs'));
+  assert.ok(!demo.fileGlobs.includes('brain-work'), 'prose identifiers are not paths');
+  // The ADR carries `module: demo` — that is the whole linking mechanism.
+  assert.equal(demo.decisionCount, 1);
+  assert.equal(demo.featureCount, 0);
+  assert.equal(demo.findingCount, 0);
+  assert.equal(typeof demo.ageDays, 'number');
+
+  assert.deepEqual(body.counts, {
+    decisions: 1, modules: 3, features: 0, findings: 0, insights: 0
+  });
+
+  // The honest gap: ui/ holds code and no module record names it.
+  assert.ok(Array.isArray(body.orphans.codeDirs));
+  assert.ok(body.orphans.codeDirs.includes('ui'), 'unclaimed code area is reported, not papered over');
+  assert.equal(typeof body.orphans.reason, 'string');
+
+  assert.equal(body.provenance.basis, 'measured');
+  assert.match(body.provenance.source, /git log/);
+  assert.equal(body.provenance.staleDocDays, 60);
+  assert.equal(typeof body.provenance.window.commits, 'number');
+  assert.ok('state_age' in body && 'stale_warning' in body, 'freshness on every answer');
+});
+
+test('/api/map staleness is MEASURED: code newer than the doc, and the age threshold flips', async () => {
+  const body = JSON.parse((await request('/api/map', { headers: bearer })).body);
+  const byName = Object.fromEntries(body.modules.map((m) => [m.name, m]));
+
+  // demo.md was committed 2026-01-01; app.mjs was committed after it.
+  assert.equal(byName.demo.stale, true);
+  assert.equal(byName.demo.staleReason, 'code-newer-than-doc');
+  assert.ok(Date.parse(byName.demo.lastCodeChange) > Date.parse(byName.demo.lastDocChange),
+    'the drift is proven from commit dates, not guessed');
+
+  // fresh.md was written seconds ago and its globs match no commit.
+  assert.equal(byName.fresh.stale, false);
+  assert.equal(byName.fresh.staleReason, null);
+  assert.equal(byName.fresh.lastCodeChange, null, 'no commit touches docs/** → no code signal');
+  assert.deepEqual(byName.fresh.fileGlobs, ['docs/**'], 'frontmatter globs win over the body');
+
+  // aged.md is 200 days old with no code signal → only the threshold applies.
+  assert.equal(byName.aged.stale, true);
+  assert.equal(byName.aged.staleReason, 'older-than-60d');
+  assert.ok(byName.aged.ageDays > 60);
+
+  // Flip BRAIN_STALE_DOC_DAYS and the age-only record stops being stale, while
+  // the measured code-drift record stays stale — two different signals.
+  process.env.BRAIN_STALE_DOC_DAYS = '365';
+  try {
+    const relaxed = JSON.parse((await request('/api/map', { headers: bearer })).body);
+    const byName2 = Object.fromEntries(relaxed.modules.map((m) => [m.name, m]));
+    assert.equal(relaxed.provenance.staleDocDays, 365);
+    assert.equal(byName2.aged.stale, false, 'age threshold is configurable per process');
+    assert.equal(byName2.demo.stale, true, 'code-drift does not depend on the threshold');
+  } finally {
+    delete process.env.BRAIN_STALE_DOC_DAYS;
+  }
+});
+
+test('/api/doc returns frontmatter, body and outgoing links for a seeded record', async () => {
+  const r = await request('/api/doc?file=.project-brain/modules/demo.md', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.equal(body.file, '.project-brain/modules/demo.md');
+  assert.equal(body.title, 'Demo module');
+  assert.equal(body.frontmatter.module, 'demo');
+  assert.equal(body.frontmatter.status, 'canonical');
+  assert.match(body.body, /# Demo module/);
+  assert.equal(body.truncated, false);
+  assert.deepEqual(body.links.decisions.map((d) => d.id), ['0001-test-decision'],
+    'the [[wiki-link]] resolves to the real ADR record');
+  assert.equal(body.links.decisions[0].file, '.project-brain/decisions/0001-test-decision.md');
+  assert.equal(body.links.decisions[0].title, 'Bind the daemon to loopback only');
+  assert.deepEqual(body.links.modules.map((m) => m.name), ['demo'], 'frontmatter module: links back');
+  assert.ok(body.links.files.includes('app.mjs'), 'files the record names are navigable');
+  assert.ok('state_age' in body);
+
+  // The `.project-brain/` prefix is optional — records are addressed both ways.
+  const short = await request('/api/doc?file=modules/demo.md', { headers: bearer });
+  assert.equal(short.status, 200);
+  assert.equal(JSON.parse(short.body).file, '.project-brain/modules/demo.md');
+
+  const missing = await request('/api/doc?file=modules/nope.md', { headers: bearer });
+  assert.equal(missing.status, 404, 'absent record is a 404, never a traversal hint');
+});
+
+test('/api/doc rejects traversal, absolute paths and non-.md — and never reads outside', async () => {
+  const outside = path.join(FIXTURE, 'secret.md');
+  fs.writeFileSync(outside, 'TOP_SECRET_FIXTURE_STRING\n');
+  try {
+    const attempts = [
+      '../../etc/passwd',
+      '../secret.md',
+      '../../../../etc/hosts.md',
+      '.project-brain/../secret.md',
+      'modules/../../secret.md',
+      '/etc/passwd',
+      '/etc/hosts.md',
+      'C:\\Windows\\system.md',
+      'modules/demo.txt',
+      'modules/demo',
+      ''
+    ];
+    for (const attempt of attempts) {
+      const r = await request(`/api/doc?file=${encodeURIComponent(attempt)}`, { headers: bearer });
+      assert.equal(r.status, 400, `"${attempt}" must be rejected with 400`);
+      assert.equal(JSON.parse(r.body).error, 'bad-request');
+      assert.ok(!r.body.includes('TOP_SECRET_FIXTURE_STRING'), 'nothing outside .project-brain is ever read');
+      assert.ok(!r.body.includes('root:'), 'no /etc/passwd content leaks');
+    }
+    // Missing param behaves the same as an empty one.
+    const bare = await request('/api/doc', { headers: bearer });
+    assert.equal(bare.status, 400);
+
+    // The pure resolver is the single choke point — assert it directly too.
+    assert.equal(serve.resolveBrainDoc(FIXTURE, '../secret.md'), null);
+    assert.equal(serve.resolveBrainDoc(FIXTURE, '/etc/passwd.md'), null);
+    assert.equal(serve.resolveBrainDoc(FIXTURE, 'modules/demo.txt'), null);
+    assert.equal(serve.resolveBrainDoc(FIXTURE, 'modules/de\0mo.md'), null);
+    assert.equal(
+      serve.resolveBrainDoc(FIXTURE, 'modules/demo.md'),
+      path.join(BRAIN, 'modules', 'demo.md'),
+      'a legitimate record still resolves'
+    );
+  } finally {
+    fs.rmSync(outside, { force: true });
+  }
+});
+
+test('/api/why answers "why is this file like this": module, ADRs, findings, history', async () => {
+  const r = await request('/api/why?file=app.mjs', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.equal(body.file, 'app.mjs');
+  // The module record claims app.mjs through its authored glob.
+  assert.equal(body.module, 'demo');
+  assert.equal(body.moduleRecord, '.project-brain/modules/demo.md');
+  assert.equal(body.provenance.matchedBy, 'module-record-glob');
+
+  assert.equal(body.decisions.length, 1, 'the governing ADR is found via module:');
+  const [adr] = body.decisions;
+  assert.equal(adr.file, '.project-brain/decisions/0001-test-decision.md');
+  assert.equal(adr.title, 'Bind the daemon to loopback only');
+  assert.match(adr.excerpt, /127\.0\.0\.1/, 'the excerpt is the Decision section, i.e. the answer');
+
+  assert.deepEqual(body.findings, [], 'no findings in the fixture');
+
+  assert.ok(body.history.length >= 2, `last commits touching the file, got ${body.history.length}`);
+  assert.ok(body.history.length <= 5, 'history is capped at 5');
+  for (const h of body.history) {
+    assert.match(h.hash, /^[0-9a-f]{7,40}$/);
+    assert.equal(typeof h.subject, 'string');
+    assert.ok(h.subject.length > 0);
+    assert.ok(!Number.isNaN(Date.parse(h.dateIso)), 'each commit carries a parseable date');
+  }
+  assert.ok(body.history.some((h) => h.subject.includes('drift app.mjs')), 'the drift commit is in the history');
+  assert.equal(body.state_age, 0, 'live-computed → age 0');
+});
+
+test('/api/why is honest when no record covers the file', async () => {
+  const r = await request('/api/why?file=ui/panel.jsx', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.equal(body.moduleRecord, null);
+  assert.deepEqual(body.decisions, []);
+  assert.equal(body.provenance.matchedBy, 'path-heuristic');
+  assert.match(body.reason, /no module record|no authored intent/i);
+
+  const bad = await request('/api/why', { headers: bearer });
+  assert.equal(bad.status, 400, 'a missing ?file= is a 400, not an empty answer');
+});
+
+test('doc-navigator pure helpers: path extraction, globs and module inference', () => {
+  const paths = serve.extractPaths('owns `app.mjs`, `scripts/**` and `scripts/x.mjs`; not `record.symbols`, `topK` or `scripts/`');
+  assert.deepEqual(paths, ['app.mjs', 'scripts/**', 'scripts/x.mjs']);
+
+  assert.deepEqual(serve.moduleGlobs({ globs: 'a/**, b.mjs' }, 'ignored `c.mjs`'), ['a/**', 'b.mjs'],
+    'explicit frontmatter wins over the body');
+  assert.deepEqual(serve.moduleGlobs({}, 'derives `c.mjs`'), ['c.mjs']);
+
+  assert.equal(serve.globMatchesFile('scripts/**', 'scripts/deep/x.mjs'), true);
+  assert.equal(serve.globMatchesFile('scripts/**', 'lib/x.mjs'), false);
+  assert.equal(serve.globMatchesFile('app.mjs', 'app.mjs'), true);
+
+  assert.equal(serve.inferModuleFromPath('src/api/handler.ts'), 'src/api');
+  assert.equal(serve.inferModuleFromPath('scripts/common.mjs'), 'scripts');
+  assert.equal(serve.inferModuleFromPath('README.md'), '');
+
+  assert.equal(serve.decisionExcerpt('# T\n\n## Context\n\nc\n\n## Decision\n\nUse loopback.\n\n## Consequences\n\nx'),
+    'Use loopback.', 'the Decision section is preferred over Context');
+  assert.equal(serve.decisionExcerpt('# T\n\nJust a body.\n'), 'Just a body.');
+
+  assert.deepEqual(serve.wikiLinks('see [[0001-x]] and [[mod|alias]] and [[0001-x]]'), ['0001-x', 'mod']);
 });
 
 // ---------------------------------------------------------------------------
