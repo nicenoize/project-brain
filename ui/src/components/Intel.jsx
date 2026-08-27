@@ -105,7 +105,7 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
                 <tr key={`${p.a}|${p.b}`}>
                   <td className="path">{p.a} → {p.b}</td>
                   <td className="num">{Math.round(p.confidence * 100)}%</td>
-                  <td className="num">{p.together}</td>
+                  <td className="num" data-label="together">{p.together}</td>
                 </tr>
               ))}
             </tbody>
@@ -129,7 +129,7 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
                 <tr key={p.path}>
                   <td className="path">{p.path}</td>
                   <td>{p.topAuthors?.[0]?.author || '—'} <span className="num">({Math.round((p.topAuthors?.[0]?.share || 0) * 100)}%)</span></td>
-                  <td className="num">{p.busFactor}</td>
+                  <td className="num" data-label="bus factor">{p.busFactor}</td>
                 </tr>
               ))}
             </tbody>

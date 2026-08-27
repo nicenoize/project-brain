@@ -82,7 +82,7 @@ export default function BlastPanel({ blast }) {
                       : `changes together ${Math.round((e?.confidence ?? 0) * 100)}% of the time`}
                   </span>
                 </td>
-                <td className="num">{n.depth}</td>
+                <td className="num" data-label="depth">{n.depth}</td>
               </tr>
             );
           })}
