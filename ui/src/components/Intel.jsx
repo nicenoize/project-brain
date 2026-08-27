@@ -48,7 +48,19 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
                         {f.file}
                       </button>
                     </td>
-                    <td className="factor-evidence">{top?.evidence || ''}</td>
+                    <td className="factor-evidence">
+                      {top?.evidence || ''}
+                      {(f.plans || []).length > 0 && (
+                        <ul className="plan-list">
+                          {f.plans.slice(0, 3).map((p) => (
+                            <li key={p.move}>
+                              <span className="basis-tag inferred">{p.move.replace(/-/g, ' ')}</span>
+                              <span>{p.why}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

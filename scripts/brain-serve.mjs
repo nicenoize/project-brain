@@ -168,6 +168,7 @@ import { fileURLToPath } from 'node:url';
 import { ROOT, PACKAGE_DIR, ensureDir, takeFlag, takeOption } from './common.mjs';
 import { ACTIVE_STATE, activeStateJson, addLease, releaseLeases } from './active-state.mjs';
 import { gitLogArgs, parseLog, hotspots, coChange, ownership, riskScore, calibrateRisk, fileHealth, calibrateFileHealth } from './git-intel.mjs';
+import { measureFiles, refactorPlan } from './code-structure.mjs';
 // Both imports are verified side-effect-free: brain-route's isMain guard is
 // asserted by tests/brain-route.test.mjs, brain-brief exports its pure core.
 import { applyRules, scoreChange } from './brain-route.mjs';
@@ -683,6 +684,10 @@ function runGitLog(root, { limit }) {
 // threaded daemon on a fresh synchronous `git log` (1-5s on large repos).
 const intelCache = { key: null, commits: null };
 const healthCalCache = { key: null, value: null };
+// Shape metrics are opt-in (?structure=1): the calibration does not yet
+// establish that they add signal (decisions: see git-intel's caveat), and the
+// scan costs a full read of every source file. Cached per HEAD like the rest.
+const structureCache = { key: null, value: null };
 
 function gitHead(root) {
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
@@ -1691,7 +1696,44 @@ export function createHandler(ctx) {
     sendJson(res, 200, { events: parsed.slice(-limit), ...freshness(file) });
   }
 
-  function apiIntel(res, url, kind) {
+  /** Top author's share of the window — gates the vacuous add-owner move. */
+  function topAuthorShare(commits) {
+    const counts = new Map();
+    let total = 0;
+    for (const c of commits || []) {
+      const a = (c && c.author || '').trim();
+      if (!a) continue;
+      counts.set(a, (counts.get(a) || 0) + 1);
+      total += 1;
+    }
+    return total ? Math.max(...counts.values()) / total : null;
+  }
+
+  /** Shape metrics for every scanned file, cached per HEAD. Null on failure. */
+  async function structureFor() {
+    const entry = await importGraphFor(root);
+    const key = `${intelCache.key || 'no-head'}|structure`;
+    if (structureCache.key === key) return structureCache.value;
+    let value = null;
+    try {
+      const files = entry?.files || (entry?.graph?.nodes || []).map((n) => n.file);
+      if (files && files.length) {
+        const readFile = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+        const measured = measureFiles({ files, readFile });
+        value = {
+          measured,
+          byFile: new Map(measured.files.map((m) => [m.file, m])),
+          graph: entry?.graph || null,
+          degreeByFile: new Map(((entry?.graph?.nodes) || []).map((n) => [n.file, { fanIn: n.importedBy, fanOut: n.imports }]))
+        };
+      }
+    } catch { value = null; }
+    structureCache.key = key;
+    structureCache.value = value;
+    return value;
+  }
+
+  async function apiIntel(res, url, kind) {
     const rawCommits = Number(url.searchParams.get('commits') || DEFAULT_COMMIT_WINDOW);
     const commitsCap = Math.min(Math.max(Number.isFinite(rawCommits) ? Math.floor(rawCommits) : DEFAULT_COMMIT_WINDOW, 1), MAX_COMMIT_WINDOW);
     const rawLimit = Number(url.searchParams.get('limit') || DEFAULT_ROW_LIMIT);
@@ -1708,6 +1750,10 @@ export function createHandler(ctx) {
     }
     if (kind === 'health') {
       // Per-file danger score + its per-HEAD-cached calibration receipt.
+      // ?structure=1 additionally folds in shape metrics and returns the
+      // concrete refactor moves — opt-in, because the structural weights are
+      // not yet shown to add signal (see git-intel's calibration caveat).
+      const wantStructure = url.searchParams.get('structure') === '1';
       const r = fileHealth(commits, { now: Date.now() });
       let calibration = null;
       try {
@@ -1727,7 +1773,54 @@ export function createHandler(ctx) {
         }
         calibration = healthCalCache.value;
       } catch { calibration = null; }
-      return sendJson(res, 200, { ...r, files: r.files.slice(0, limit), calibration, ...live });
+      if (!wantStructure) {
+        return sendJson(res, 200, { ...r, files: r.files.slice(0, limit), calibration, structure: null, ...live });
+      }
+      // Structure-augmented: rescore with shape+graph, attach the concrete moves.
+      const st = await structureFor();
+      if (!st) {
+        return sendJson(res, 200, {
+          ...r, files: r.files.slice(0, limit), calibration, structure: null,
+          structureWarning: 'no scannable sources — shape metrics unavailable', ...live
+        });
+      }
+      const scored = fileHealth(commits, {
+        now: Date.now(),
+        structure: st.measured,
+        graph: st.graph
+      });
+      const share = topAuthorShare(commits);
+      const files = scored.files.slice(0, limit).map((f) => {
+        const degree = st.degreeByFile.get(f.file) || null;
+        const cyclesFor = (st.graph && Array.isArray(st.graph.cycles)) ? st.graph.cycles : [];
+        const plans = refactorPlan(
+          st.byFile.get(f.file) || null,
+          { ...(degree || {}), cycles: cyclesFor },
+          f.factors,
+          { topAuthorShare: share }
+        );
+        const shape = st.byFile.get(f.file) || null;
+        return {
+          ...f,
+          plans,
+          shape: shape ? {
+            codeLines: shape.codeLines,
+            maxNestingDepth: shape.maxNestingDepth,
+            functionCount: shape.functionCount,
+            fanIn: degree?.fanIn ?? null,
+            fanOut: degree?.fanOut ?? null
+          } : null
+        };
+      });
+      return sendJson(res, 200, {
+        ...scored, files, calibration,
+        structure: {
+          filesMeasured: st.measured?.files?.length ?? 0,
+          note: st.measured?.note || 'shape metrics, not semantics — no parser, no AST',
+          caveat: 'structural weights are uncalibrated defaults — validate with: project-brain x intel health-calibrate --structure'
+        },
+        ...live
+      });
     }
     if (kind === 'hotspots') {
       const r = hotspots(commits, { now: Date.now() }); // `now` is required by the pure core
@@ -2813,10 +2906,10 @@ export function createHandler(ctx) {
         }
         if (url.pathname === '/api/state') return apiState(res);
         if (url.pathname === '/api/events') return apiEvents(res, url);
-        if (url.pathname === '/api/intel/health') return apiIntel(res, url, 'health');
-        if (url.pathname === '/api/intel/hotspots') return apiIntel(res, url, 'hotspots');
-        if (url.pathname === '/api/intel/co-change') return apiIntel(res, url, 'co-change');
-        if (url.pathname === '/api/intel/ownership') return apiIntel(res, url, 'ownership');
+        if (url.pathname === '/api/intel/health') return await apiIntel(res, url, 'health');
+        if (url.pathname === '/api/intel/hotspots') return await apiIntel(res, url, 'hotspots');
+        if (url.pathname === '/api/intel/co-change') return await apiIntel(res, url, 'co-change');
+        if (url.pathname === '/api/intel/ownership') return await apiIntel(res, url, 'ownership');
         if (url.pathname === '/api/records') return apiRecords(res, url);
         if (url.pathname === '/api/changed') return apiChanged(res);
         if (url.pathname === '/api/risk') return await apiRisk(res, url);

@@ -10,12 +10,13 @@ import RiskPanel from './components/RiskPanel.jsx';
 import BlastPanel from './components/BlastPanel.jsx';
 import MapPanel from './components/MapPanel.jsx';
 import FleetPanel from './components/FleetPanel.jsx';
+import GraphPanel from './components/GraphPanel.jsx';
 
 function useData() {
   const [data, setData] = useState({ loading: true });
   const load = async () => {
     try {
-      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet] =
+      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph] =
         await Promise.all([
           api.meta(), api.state(), api.events(),
           api.hotspots(), api.health(), api.coChange(), api.ownership(),
@@ -27,9 +28,10 @@ function useData() {
           api.blast().catch(() => null),
           api.brief().catch(() => null),
           api.map().catch(() => null),
-          api.fleet().catch(() => null)
+          api.fleet().catch(() => null),
+          api.graph().catch(() => null)
         ]);
-      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, loading: false });
+      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, blast, brief, map, fleet, graph, loading: false });
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -153,6 +155,10 @@ export default function App() {
               <h2>What's running right now?</h2>
               <div className="sheet">
                 <Board workstreams={workstreams} conflictsByTask={conflictsByTask} runnersInfo={d.runnersInfo} onChanged={d.reload} />
+              </div>
+              <h2>What's tangled?</h2>
+              <div className="sheet">
+                <GraphPanel graph={d.graph} />
               </div>
               <h2>Why is it built this way?</h2>
               <div className="sheet">
