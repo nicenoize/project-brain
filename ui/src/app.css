@@ -391,3 +391,10 @@
 .factor-evidence { font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
 .advisories { border-top: 1px solid color-mix(in srgb, var(--hairline) 45%, transparent); padding-top: 6px; }
 .risk-head + .gate-actions, .factor-list + .gate-actions, .advisories + .gate-actions { margin-top: 12px; }
+
+/* danger ranking */
+.danger-score { font-weight: 700; }
+.danger-score[data-band="high"] { color: var(--lamp-stop); }
+.danger-score[data-band="mid"] { color: var(--lamp-attn-ink); }
+.danger-score[data-band="low"] { color: var(--lamp-run); }
+.low-conf { color: var(--ink-3); margin-left: 2px; }

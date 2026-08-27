@@ -20,6 +20,12 @@
  *   - calibrateRisk(...)   → retrospective in-repo validation of the score
  *                            against the repo's own fix/revert history
  *                            (leakage-free prefix scoring + rank AUC).
+ *   - fileHealth(commits)  → per-FILE 0-10 health/danger score (churn
+ *                            percentile × co-change scatter × bus factor ×
+ *                            fix density; FILE_HEALTH_WEIGHTS are reviewable
+ *                            defaults — validate with calibrateFileHealth).
+ *   - calibrateFileHealth  → leakage-free validation that today's file scores
+ *                            predict near-future fixes (cut-point replay).
  *
  * Every result object is confidence-stamped with provenance
  * ({basis:'measured', source:'git-log', window:{commits,since,until}}) per the
@@ -552,6 +558,175 @@ export function riskScore(files, {
 }
 
 // ---------------------------------------------------------------------------
+// file health — per-file 0-10 danger score (our answer to "code health")
+// ---------------------------------------------------------------------------
+
+/**
+ * REVIEWABLE DEFAULT weights for fileHealth() — not calibrated truth (same
+ * discipline as RISK_WEIGHTS: "Kalibrierung statt Konstanten"). Validate them
+ * against near-future fixes with calibrateFileHealth() before trusting the
+ * ranking; pass `weights` to override. Rationale: churn is the strongest
+ * single defect predictor, fix density is direct evidence of past breakage,
+ * scatter (tangled coupling) and bus factor are structural amplifiers.
+ */
+export const FILE_HEALTH_WEIGHTS = Object.freeze({
+  churnPercentile: 0.35,
+  coChangeScatter: 0.2,
+  busFactor: 0.2,
+  fixDensity: 0.25
+});
+
+/** Saturation: distinct co-change partners at which scatter maxes out at 1.0. */
+export const FILE_HEALTH_SATURATION = Object.freeze({
+  scatterPartners: 8
+});
+
+/** A pair must have co-changed at least this often to count as a scatter partner. */
+export const DEFAULT_SCATTER_SUPPORT = 2;
+/** Below this many commits a file's score is flagged lowConfidence, not trusted. */
+export const DEFAULT_MIN_HEALTH_COMMITS = 3;
+
+/**
+ * PURE. Per-file 0-10 health/danger score (10 = most dangerous), aggregated
+ * from four git-history factors — every factor carries its raw value and a
+ * human-readable evidence string (no bare numbers):
+ *   - churn-percentile: the file's percentile in the hotspots() decay ranking
+ *     (rank 1 of N → 1.0) — recent churn concentration.
+ *   - co-change-scatter: distinct partner files it co-changes with (pairs with
+ *     support ≥ DEFAULT_SCATTER_SUPPORT, bulk commits excluded), saturating at
+ *     FILE_HEALTH_SATURATION.scatterPartners — tangled coupling.
+ *   - bus-factor: 1 / busFactor of the file's ownership() — busFactor 1
+ *     (single effective owner) → raw 1.0.
+ *   - fix-density: share of the file's commits whose subject matches
+ *     DEFECT_FIX_REGEX (bulk commits excluded from both counts, mirroring the
+ *     coChange sweep-exclusion) — a file that keeps getting fixed keeps
+ *     breaking.
+ *
+ * score = 10 × Σ(weight_i × raw_i) / Σ(weight_i), one decimal. Total function:
+ * files with fewer than DEFAULT_MIN_HEALTH_COMMITS commits still get a score
+ * but are flagged lowConfidence: true with reason 'insufficient history' —
+ * honest flagging instead of fake precision. Deterministic: `now` is required
+ * (never Date.now()), ordering is byte-stable (score desc, then byString).
+ *
+ * @param {Array<{hash, author, dateIso, subject, files}>} commits parseLog() output
+ * @returns {{basis, source, window, params, files: Array<{file, score, commits,
+ *   lastCommit, lowConfidence?, reason?, factors: Array<{name, weight, raw,
+ *   contribution, evidence}>}>}}
+ */
+export function fileHealth(commits, {
+  now,
+  weights,
+  halfLifeDays = DEFAULT_HALF_LIFE_DAYS,
+  maxFilesPerCommit = DEFAULT_MAX_FILES_PER_COMMIT
+} = {}) {
+  const nowMs = requireNow(now, 'fileHealth()');
+  const w = { ...FILE_HEALTH_WEIGHTS, ...(weights || {}) };
+  const totalWeight = w.churnPercentile + w.coChangeScatter + w.busFactor + w.fixDensity;
+
+  const hs = hotspots(commits, { now: nowMs, halfLifeDays });
+  const own = ownership(commits);
+  const cc = coChange(commits, {
+    minSupport: DEFAULT_SCATTER_SUPPORT,
+    minConfidence: 0,
+    maxFilesPerCommit
+  });
+
+  const ownByFile = new Map(own.files.map((f) => [f.path, f]));
+  // Directed pairs are emitted both ways, so partners of f = all b with a === f.
+  const partnersByFile = new Map();
+  for (const p of cc.pairs) {
+    const list = partnersByFile.get(p.a) || [];
+    list.push(p.b);
+    partnersByFile.set(p.a, list);
+  }
+  // Fix density excludes bulk commits from BOTH counts (same sweep-exclusion
+  // rationale as coChange: a "fix: format everything" touching 40 files says
+  // nothing about any single one of them).
+  const fixCounts = new Map(); // file → {fixes, total}
+  for (const c of commits) {
+    const files = uniqueFiles(c.files);
+    if (!files.length || files.length > maxFilesPerCommit) continue;
+    const isFix = DEFECT_FIX_REGEX.test(c.subject || '');
+    for (const f of files) {
+      const entry = fixCounts.get(f) || { fixes: 0, total: 0 };
+      entry.total += 1;
+      if (isFix) entry.fixes += 1;
+      fixCounts.set(f, entry);
+    }
+  }
+
+  const ranked = hs.files;
+  const files = ranked.map((hot, idx) => {
+    const file = hot.file;
+    const factors = [];
+    const pushFactor = (name, weight, raw, evidence) => {
+      factors.push({ name, weight, raw: round(raw, 4), contribution: round(weight * raw, 4), evidence });
+    };
+
+    // 1. churn-percentile: rank in the decay ranking.
+    const rank = idx + 1;
+    const churnRaw = ranked.length ? (ranked.length - rank + 1) / ranked.length : 0;
+    pushFactor('churn-percentile', w.churnPercentile, churnRaw,
+      `churn rank #${rank} of ${ranked.length} (percentile ${round(churnRaw, 2)})`);
+
+    // 2. co-change-scatter: distinct recurring partners, saturating.
+    const partners = [...(partnersByFile.get(file) || [])].sort(byString);
+    const scatterRaw = Math.min(1, partners.length / FILE_HEALTH_SATURATION.scatterPartners);
+    pushFactor('co-change-scatter', w.coChangeScatter, scatterRaw,
+      partners.length
+        ? `co-changes with ${partners.length} distinct partner(s) (≥${DEFAULT_SCATTER_SUPPORT}×): ` +
+          partners.slice(0, 3).join(', ') + (partners.length > 3 ? ', …' : '')
+        : 'no recurring co-change partners');
+
+    // 3. bus-factor: 1/busFactor — single effective owner saturates at 1.0.
+    const o = ownByFile.get(file);
+    const bf = o ? o.busFactor : 0;
+    const busRaw = bf > 0 ? 1 / bf : 0;
+    const topAuthor = o && o.topAuthors[0];
+    pushFactor('bus-factor', w.busFactor, busRaw,
+      topAuthor
+        ? `bus factor ${bf} — ${topAuthor.author} owns ${Math.round(topAuthor.share * 100)}% of ${o.commits} commits`
+        : 'no ownership history');
+
+    // 4. fix-density: how often does touching this file mean repairing it?
+    const fc = fixCounts.get(file);
+    const fixRaw = fc && fc.total ? fc.fixes / fc.total : 0;
+    pushFactor('fix-density', w.fixDensity, fixRaw,
+      fc && fc.total
+        ? (fc.fixes
+          ? `${fc.fixes} of ${fc.total} commits are fix/revert commits (${Math.round(fixRaw * 100)}%)`
+          : `no fix-pattern commits in ${fc.total} commits`)
+        : 'only bulk commits — fix density unknown');
+
+    const weighted = factors.reduce((s, f) => s + f.weight * f.raw, 0);
+    const score = totalWeight > 0 ? Number((10 * (weighted / totalWeight)).toFixed(1)) : 0;
+    const entry = { file, score, commits: hot.commits, lastCommit: hot.lastCommit, factors };
+    if (hot.commits < DEFAULT_MIN_HEALTH_COMMITS) {
+      entry.lowConfidence = true;
+      entry.reason = 'insufficient history';
+    }
+    return entry;
+  });
+
+  files.sort((a, b) => b.score - a.score || byString(a.file, b.file));
+
+  return {
+    ...provenanceOf(commits),
+    params: {
+      weights: w,
+      saturation: { ...FILE_HEALTH_SATURATION },
+      scatterSupport: DEFAULT_SCATTER_SUPPORT,
+      minCommits: DEFAULT_MIN_HEALTH_COMMITS,
+      halfLifeDays,
+      maxFilesPerCommit,
+      fixPattern: String(DEFECT_FIX_REGEX),
+      now: new Date(nowMs).toISOString()
+    },
+    files
+  };
+}
+
+// ---------------------------------------------------------------------------
 // calibration — retrospective validation against the repo's own history
 // ---------------------------------------------------------------------------
 
@@ -733,5 +908,128 @@ export function calibrateRisk(commits, {
     auc,
     verdict,
     commits: rows
+  };
+}
+
+/**
+ * PURE. Leakage-free validation of fileHealth(): do TODAY's scores predict
+ * NEAR-FUTURE fixes? METHOD (and its honest limits):
+ *   - Cut point T = `horizonDays` before the newest commit in the log.
+ *   - Every file is scored by fileHealth() from commits ≤ T ONLY, evaluated
+ *     at `now` = T (zero leakage, zero clocks). `window` > 0 limits that
+ *     prefix to its most recent `window` commits (cost bound).
+ *   - Label: a file is "defective" iff a commit AFTER T (i.e. within the
+ *     horizon, by construction of the cut) whose subject matches `fixRegex`
+ *     touches it.
+ *   - No leakage by construction: a file first committed after T has no
+ *     prefix history and is never scored.
+ *   - Output: score-quartile vs fixed-rate table + rank-based ROC-AUC.
+ *
+ * This is IN-REPO SELF-CALIBRATION, not a cross-repo benchmark: the fix
+ * heuristic is a proxy label, and a repo validates the weights only against
+ * its own past. Treat AUC ≥ 0.6 as the minimum bar before trusting the
+ * health ranking.
+ *
+ * @param {Array<{hash, author, dateIso, subject, files}>} commits parseLog() output
+ */
+export function calibrateFileHealth(commits, {
+  window = 0,
+  horizonDays = 30,
+  weights,
+  halfLifeDays = DEFAULT_HALF_LIFE_DAYS,
+  maxFilesPerCommit = DEFAULT_MAX_FILES_PER_COMMIT,
+  fixRegex = DEFECT_FIX_REGEX
+} = {}) {
+  // Chronological order by epoch ms (not ISO strings — offsets vary), hash tiebreak.
+  const chrono = commits
+    .filter((c) => Number.isFinite(Date.parse(c.dateIso)))
+    .sort((a, b) => Date.parse(a.dateIso) - Date.parse(b.dateIso) || byString(a.hash, b.hash));
+  const lastMs = chrono.length ? Date.parse(chrono[chrono.length - 1].dateIso) : 0;
+  const cutMs = lastMs - horizonDays * MS_PER_DAY;
+
+  const prefixAll = chrono.filter((c) => Date.parse(c.dateIso) <= cutMs);
+  const prefix = window > 0 ? prefixAll.slice(-window) : prefixAll;
+  const future = chrono.filter((c) => Date.parse(c.dateIso) > cutMs);
+
+  const health = chrono.length
+    ? fileHealth(prefix, { now: cutMs, weights, halfLifeDays, maxFilesPerCommit })
+    : { files: [] };
+
+  // First fix commit after the cut per file (chrono order → earliest wins).
+  const fixedBy = new Map();
+  let futureFixCommits = 0;
+  for (const c of future) {
+    if (!fixRegex.test(c.subject || '')) continue;
+    futureFixCommits += 1;
+    for (const f of uniqueFiles(c.files)) {
+      if (!fixedBy.has(f)) fixedBy.set(f, c.hash);
+    }
+  }
+
+  const rows = health.files.map((f) => {
+    const row = { file: f.file, score: f.score, commits: f.commits };
+    if (f.lowConfidence) row.lowConfidence = true;
+    row.defective = fixedBy.has(f.file);
+    row.fixedBy = fixedBy.get(f.file) || null;
+    return row;
+  });
+
+  const auc = rankAuc(rows.map((r) => r.score), rows.map((r) => r.defective));
+  const defects = rows.filter((r) => r.defective).length;
+
+  // Score-quartile vs fixed-rate table (quartiles by score rank).
+  const bins = 4;
+  const sortedRows = [...rows].sort((a, b) => a.score - b.score || byString(a.file, b.file));
+  const quantiles = [];
+  for (let b = 0; b < bins; b++) {
+    const start = Math.floor((b * sortedRows.length) / bins);
+    const end = Math.floor(((b + 1) * sortedRows.length) / bins);
+    const slice = sortedRows.slice(start, end);
+    if (!slice.length) continue;
+    const defective = slice.filter((r) => r.defective).length;
+    quantiles.push({
+      quantile: `Q${b + 1}`,
+      scoreMin: slice[0].score,
+      scoreMax: slice[slice.length - 1].score,
+      files: slice.length,
+      defective,
+      defectRate: round(defective / slice.length, 4)
+    });
+  }
+
+  let verdict;
+  if (auc === null) {
+    verdict = `AUC undefined over ${rows.length} files (need both fixed and clean files after ` +
+      'the cut) — do NOT trust the health ranking yet.';
+  } else {
+    const vsRandom = auc > 0.5 ? 'better than random' : 'not better than random';
+    const gate = auc >= 0.6
+      ? 'calibration gate (0.6) met — the health ranking is defensible on this repo'
+      : 'do NOT trust the health ranking below 0.6';
+    verdict = `AUC ${auc.toFixed(2)} over ${rows.length} files — health score ${vsRandom} at ` +
+      `predicting near-future fixes; ${gate}.`;
+  }
+
+  return {
+    ...provenanceOf(commits),
+    method: 'in-repo self-calibration: do today\'s file-health scores predict near-future ' +
+      'fixes in this repo\'s own history — a proxy label, NOT a cross-repo benchmark',
+    params: {
+      window,
+      horizonDays,
+      halfLifeDays,
+      maxFilesPerCommit,
+      fixPattern: String(fixRegex),
+      weights: { ...FILE_HEALTH_WEIGHTS, ...(weights || {}) },
+      cut: chrono.length ? new Date(cutMs).toISOString() : null
+    },
+    evaluated: rows.length,
+    defective: defects,
+    futureCommits: future.length,
+    futureFixCommits,
+    quantiles,
+    auc,
+    verdict,
+    files: rows
   };
 }

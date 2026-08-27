@@ -12,10 +12,10 @@ function useData() {
   const [data, setData] = useState({ loading: true });
   const load = async () => {
     try {
-      const [meta, state, events, hotspots, coChange, ownership, records, runnersInfo, changed, next, risk, brief] =
+      const [meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, brief] =
         await Promise.all([
           api.meta(), api.state(), api.events(),
-          api.hotspots(), api.coChange(), api.ownership(),
+          api.hotspots(), api.health(), api.coChange(), api.ownership(),
           api.records('decision').catch(() => ({ records: [] })),
           api.runners().catch(() => ({ runners: [], runnerCmdConfigured: false })),
           api.changed().catch(() => null),
@@ -23,7 +23,7 @@ function useData() {
           api.risk().catch(() => null),
           api.brief().catch(() => null)
         ]);
-      setData({ meta, state, events, hotspots, coChange, ownership, records, runnersInfo, changed, next, risk, brief, loading: false });
+      setData({ meta, state, events, hotspots, health, coChange, ownership, records, runnersInfo, changed, next, risk, brief, loading: false });
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -137,7 +137,7 @@ export default function App() {
                 <Board workstreams={workstreams} conflictsByTask={conflictsByTask} runnersInfo={d.runnersInfo} onChanged={d.reload} />
               </div>
               <h2>Which files are actually dangerous?</h2>
-              <Intel hotspots={d.hotspots} coChange={d.coChange} ownership={d.ownership} leases={leases} />
+              <Intel hotspots={d.hotspots} health={d.health} coChange={d.coChange} ownership={d.ownership} leases={leases} />
             </>
           )}
         </section>
