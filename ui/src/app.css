@@ -86,12 +86,23 @@
   .masthead .repo { display: none; }
   .density { margin-left: auto; }
   .sheet table { table-layout: fixed; }
-  /* Path-first tables want the width; score-first ones (danger, fleet) lead
-     with a 2-3 character number and must not spend 58% of the row on it. */
-  .sheet table:not(.score-first) th:first-child,
-  .sheet table:not(.score-first) td:first-child { width: 58%; }
-  .sheet table.score-first th:first-child,
-  .sheet table.score-first td:first-child { width: 3.2em; }
+  /* No column-width guessing at phone width. Every table here is "a subject
+     plus its facts", and at 390px three columns starve each other whatever
+     the allocation — the previous 58%/3.2em rules were two wrong answers to
+     the same question. Stack them all: subject on the first line, its facts
+     beneath. */
+  .sheet table, .sheet tbody, .sheet tr, .sheet td { display: block; width: auto; }
+  .sheet thead { display: none; }
+  .sheet tr {
+    padding: 6px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--hairline) 45%, transparent);
+  }
+  .sheet tr:last-child { border-bottom: 0; }
+  .sheet td { border: 0; padding: 1px 0; }
+  /* The first two cells share the opening line: score+subject, or
+     subject+its one number. Everything after that gets its own line. */
+  .sheet td:first-child { display: inline-block; margin-right: 8px; }
+  .sheet td:nth-child(2) { display: inline; }
   .sheet .path { font-size: 11px; }
 }
 
@@ -561,16 +572,5 @@
 .risk-files .path, .tcard .task, .next-head code { overflow-wrap: anywhere; }
 @media (max-width: 720px) {
   .risk-files .path { white-space: normal; }
-  /* Score-first tables stack on a phone: a 3-column grid at 390px starves all
-     three. Score and subject share a line, evidence gets the next one. */
-  .sheet table.score-first thead { display: none; }
-  .sheet table.score-first, .sheet table.score-first tbody,
-  .sheet table.score-first tr, .sheet table.score-first td { display: block; width: auto; }
-  .sheet table.score-first tr {
-    padding: 6px 0;
-    border-bottom: 1px solid color-mix(in srgb, var(--hairline) 45%, transparent);
-  }
-  .sheet table.score-first td { border: 0; padding: 0; }
-  .sheet table.score-first td:first-child { display: inline-block; margin-right: 8px; }
-  .sheet table.score-first td:nth-child(2) { display: inline; }
+  /* (score-first needs no special case any more — every table stacks) */
 }
