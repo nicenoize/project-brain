@@ -850,8 +850,16 @@ test('calibrateFileHealth: the repeatedly-fixed file wins the ranking → AUC be
   assert.equal(result.auc, 1);
   assert.ok(result.auc > 0.5);
   assert.match(result.verdict, /AUC 1\.00 over 3 files/);
-  assert.match(result.verdict, /better than random/);
-  assert.match(result.verdict, /gate \(0\.6\) met/);
+  // The RANKING is right (AUC 1 above) and the verdict must still refuse to
+  // endorse it: one positive cannot establish anything. This fixture used to
+  // assert "gate met" — the same overclaim a colleague's repo produced in the
+  // field, where a single fixed file yielded "the health ranking is defensible
+  // on this repo". Correct number, false sentence.
+  assert.equal(result.sufficientEvidence, false);
+  assert.equal(result.minPositives, 10);
+  assert.match(result.verdict, /only 1 fixed file\(s\)/);
+  assert.match(result.verdict, /do NOT cite this number/);
+  assert.doesNotMatch(result.verdict, /gate \(0\.6\) met/);
   // honest methodology in the output itself
   assert.match(result.method, /self-calibration/);
   assert.match(result.method, /NOT a cross-repo benchmark/);
@@ -1342,4 +1350,100 @@ test('brain-intel.mjs --help documents the structural flags', () => {
   assert.match(help.stdout, /--structure/);
   assert.match(help.stdout, /--plans/);
   assert.match(help.stdout, /Implies --structure/);
+});
+
+/* ---------------------------------------------------------------------------
+ * Calibration power + the short-history diagnosis.
+ *
+ * Both defects were found by running health-calibrate across a colleague's
+ * workspace of 23 unrelated repos. Small repos are the common case out there,
+ * and both failures were confident, well-formatted, and wrong.
+ * ------------------------------------------------------------------------ */
+
+/** 12 files fixed after the cut, 12 clean — enough positives for the gate. */
+function poweredFixture() {
+  const log = [];
+  for (let i = 0; i < 12; i++) {
+    // churned + repeatedly fixed before the cut → high score
+    log.push(hCal(`d${i}a`, 0 + i % 5, `feat: dirty ${i}`, [`dirty${i}.js`]));
+    log.push(hCal(`d${i}b`, 2 + i % 5, `fix: dirty ${i}`, [`dirty${i}.js`]));
+    log.push(hCal(`d${i}c`, 4 + i % 5, `feat: dirty ${i} again`, [`dirty${i}.js`]));
+    // touched once before the cut → low score
+    log.push(hCal(`k${i}`, 6 + i % 5, `feat: kalm ${i}`, [`kalm${i}.js`]));
+    // the label: each dirty file is fixed again after the cut
+    log.push(hCal(`F${i}`, 40, `fix: dirty ${i} exploded`, [`dirty${i}.js`]));
+  }
+  log.push(hCal('Z1', 60, 'chore: close observation window', ['closer.js']));
+  return log;
+}
+
+test('calibrateFileHealth: the gate opens once there are enough fixed files', () => {
+  const r = calibrateFileHealth(poweredFixture(), { horizonDays: 30 });
+  assert.equal(r.defective, 12);
+  assert.ok(r.defective >= r.minPositives, 'fixture must clear the power bar');
+  assert.equal(r.sufficientEvidence, true);
+  assert.ok(r.auc >= 0.6, `expected a separating fixture, got AUC ${r.auc}`);
+  assert.match(r.verdict, /gate \(0\.6\) met/);
+  assert.doesNotMatch(r.verdict, /do NOT cite/);
+});
+
+test('calibrateFileHealth: a repo younger than the horizon is told the real reason', () => {
+  // Every commit inside a 10-day span, evaluated at a 30-day horizon → the cut
+  // lands before the first commit, so there is no pre-cut period to score from.
+  const log = [
+    hCal('a1', 0, 'feat: one', ['a.js']),
+    hCal('a2', 3, 'fix: two', ['a.js']),
+    hCal('b1', 6, 'feat: three', ['b.js']),
+    hCal('b2', 10, 'fix: four', ['b.js'])
+  ];
+  const r = calibrateFileHealth(log, { horizonDays: 30 });
+  assert.equal(r.evaluated, 0);
+  assert.equal(r.auc, null);
+  assert.equal(r.sufficientEvidence, false);
+  assert.equal(r.historySpanDays, 10);
+  // The remedy must be the true one. It used to say "need both fixed and clean
+  // files after the cut", sending the reader off to wait for fix commits —
+  // which would never have helped, since the problem is upstream of labelling.
+  assert.match(r.verdict, /shorter than the 30-day horizon/);
+  assert.match(r.verdict, /--horizon-days/);
+  assert.match(r.verdict, /more fix commits will NOT help/);
+
+  // Same log, a horizon that fits inside the history → the real path runs.
+  const ok = calibrateFileHealth(log, { horizonDays: 5 });
+  assert.ok(ok.evaluated > 0, 'a horizon inside the span must produce rows');
+  assert.doesNotMatch(ok.verdict, /shorter than the/);
+});
+
+test('calibrateFileHealth: an empty log still reports the label-variety reason', () => {
+  const r = calibrateFileHealth([], { horizonDays: 30 });
+  assert.equal(r.evaluated, 0);
+  assert.equal(r.historySpanDays, 0);
+  assert.match(r.verdict, /need both fixed and clean files/);
+  assert.doesNotMatch(r.verdict, /shorter than the/);
+});
+
+test('calibrateFileHealth: scarcity of CLEAN files is underpowered too', () => {
+  // The mirror image of the one-fixed-file case, taken from a repo where 34 of
+  // 43 files were fixed after the cut: plenty of positives, almost no negatives.
+  // The ranking has only a handful of clean files to be right about, so the
+  // number is exactly as fragile — the gate must refuse it from both sides.
+  const log = [];
+  for (let i = 0; i < 14; i++) {
+    log.push(hCal(`p${i}a`, i % 6, `feat: p${i}`, [`p${i}.js`]));
+    log.push(hCal(`p${i}b`, 6 + i % 6, `feat: p${i} more`, [`p${i}.js`]));
+    log.push(hCal(`F${i}`, 40, `fix: p${i} after the cut`, [`p${i}.js`]));
+  }
+  // Two lonely clean files.
+  log.push(hCal('n1', 3, 'feat: clean one', ['clean1.js']));
+  log.push(hCal('n2', 4, 'feat: clean two', ['clean2.js']));
+  log.push(hCal('Z1', 60, 'chore: close observation window', ['closer.js']));
+
+  const r = calibrateFileHealth(log, { horizonDays: 30 });
+  assert.equal(r.defective, 14, 'fixture must have plenty of positives');
+  assert.equal(r.evaluated - r.defective, 2, 'and almost no negatives');
+  assert.ok(r.defective >= r.minPositives, 'positives alone would have passed the old gate');
+  assert.equal(r.minorityClass, 2);
+  assert.equal(r.sufficientEvidence, false);
+  assert.match(r.verdict, /unfixed file\(s\) — nearly everything here was fixed/);
+  assert.doesNotMatch(r.verdict, /gate \(0\.6\) met/);
 });
