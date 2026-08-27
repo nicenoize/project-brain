@@ -17,6 +17,7 @@
   background: var(--rail);
 }
 .wordmark {
+  margin: 0;
   font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -85,12 +86,27 @@
   .masthead .repo { display: none; }
   .density { margin-left: auto; }
   .sheet table { table-layout: fixed; }
-  .sheet th:first-child, .sheet td:first-child { width: 58%; }
+  /* Path-first tables want the width; score-first ones (danger, fleet) lead
+     with a 2-3 character number and must not spend 58% of the row on it. */
+  .sheet table:not(.score-first) th:first-child,
+  .sheet table:not(.score-first) td:first-child { width: 58%; }
+  .sheet table.score-first th:first-child,
+  .sheet table.score-first td:first-child { width: 3.2em; }
   .sheet .path { font-size: 11px; }
 }
 
 .bay { min-width: 0; }
-.bay > h2 {
+.bay-section { min-width: 0; }
+/* A quiet section stays readable but stops competing: same stock, less
+   presence. Emphasis is spent on the sections that hold something. */
+.bay-section.state-quiet > h2 { color: var(--ink-3); }
+.bay-section.state-quiet .sheet { box-shadow: none; }
+.bay-section.state-stop > h2, .bay-section.state-attn > h2 { color: var(--ink); }
+.bay-section.state-stop .sheet { box-shadow: var(--shadow-lift); }
+/* h2 is not a flex row, so the lamp needs its own box to size at all. */
+.bay-section > h2 .lamp { display: inline-block; margin-right: 8px; vertical-align: 1px; }
+.bay-section > h2 .lamp:not(.run):not(.attn):not(.stop) { background: transparent; box-shadow: none; }
+.bay > h2, .bay-section > h2 {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -98,7 +114,7 @@
   color: var(--ink-2);
   margin: 22px 0 8px;
 }
-.bay > h2:first-child { margin-top: 0; }
+.bay-section:first-child > h2 { margin-top: 0; }
 
 /* rail: the slotted strip a row of cards hangs in */
 .rail-row {
@@ -156,6 +172,15 @@
 .compact .feed li { padding: 2px 0; }
 .compact .record summary { padding: 3px 0; }
 .compact .treemap { height: 150px; }
+.compact .next-list li { padding: 3px 0; }
+.compact .next-reason { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.compact .reason-list li { padding: 1px 0; }
+.compact .graph-cols { gap: 12px; }
+.compact .sec-secrets { margin-top: 8px; padding-top: 6px; }
+.compact .why-drawer, .compact .doc-view { padding-top: 5px; }
+.compact .sheet { padding: 8px 10px; margin-bottom: 10px; }
+.compact .bay > h2, .compact .bay-section > h2 { margin: 12px 0 5px; }
+.compact .receipt-note { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* ---- tables (leases, intel, audit) ---- */
 .sheet {
@@ -369,15 +394,15 @@
   flex: none;
 }
 .risk-score small { font-size: 13px; font-weight: 400; color: var(--ink-3); }
-.risk-score[data-band="high"] { color: var(--lamp-stop); }
-.risk-score[data-band="mid"] { color: var(--lamp-attn-ink); }
-.risk-score[data-band="low"] { color: var(--lamp-run); }
+.risk-score[data-band="high"] { color: var(--ink); }
+.risk-score[data-band="mid"] { color: var(--ink-2); }
+.risk-score[data-band="low"] { color: var(--ink-3); font-weight: 400; }
 .risk-files { min-width: 0; }
-.claim {
+.receipt-note {
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--ink-2);
-  border-left: 2px solid var(--signal);
+  border-left: 1px solid var(--signal);
   padding-left: 8px;
 }
 .factor-list { list-style: none; margin: 10px 0 0; padding: 0; }
@@ -391,12 +416,15 @@
 .factor-evidence { font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
 .advisories { border-top: 1px solid color-mix(in srgb, var(--hairline) 45%, transparent); padding-top: 6px; }
 .risk-head + .gate-actions, .factor-list + .gate-actions, .advisories + .gate-actions { margin-top: 12px; }
+.receipt-note { border-left: 1px solid var(--signal); }
 
 /* danger ranking */
+/* A score is a measurement: it climbs in density and weight, never in hue —
+   the lamp stays reserved for live state (see theme.css). */
 .danger-score { font-weight: 700; }
-.danger-score[data-band="high"] { color: var(--lamp-stop); }
-.danger-score[data-band="mid"] { color: var(--lamp-attn-ink); }
-.danger-score[data-band="low"] { color: var(--lamp-run); }
+.danger-score[data-band="high"] { color: var(--ink); }
+.danger-score[data-band="mid"] { color: var(--ink-2); }
+.danger-score[data-band="low"] { color: var(--ink-3); font-weight: 400; }
 .low-conf { color: var(--ink-3); margin-left: 2px; }
 
 /* per-edge provenance tag: a static import is a fact, history is a pattern */
@@ -410,9 +438,11 @@
   margin-right: 8px;
   white-space: nowrap;
 }
-.basis-tag.measured { color: var(--lamp-run); }
+.basis-tag.measured { color: var(--ink); font-weight: 700; }
 .basis-tag.inferred { color: var(--ink-3); }
-.empty.covered { color: var(--lamp-run); }
+/* A structural fact (an import cycle) is a measurement, not an alarm. */
+.basis-tag.fact { color: var(--ink); }
+.empty.covered { color: var(--ink); font-weight: 700; }
 
 /* module map */
 .linklike {
@@ -420,7 +450,7 @@
   font: inherit; color: var(--signal); cursor: pointer;
   text-align: left; text-decoration: underline; text-underline-offset: 3px;
 }
-.drift { font: 10.5px var(--font-data); color: var(--lamp-attn-ink); text-transform: uppercase; letter-spacing: 0.05em; }
+.drift { font: 10.5px var(--font-data); color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.05em; }
 .unit { font-size: 9.5px; color: var(--ink-3); }
 .doc-view { margin-top: 10px; border-top: 1px solid var(--hairline); padding-top: 8px; }
 .doc-path { font-size: 10.5px; color: var(--ink-3); margin: 0 0 6px; }
@@ -431,7 +461,14 @@
 }
 /* module map lives in the wide column: keep the name column from starving */
 .sheet .map-name { width: 46%; }
-.compact .factor-evidence { display: none; }
+/* Compact truncates evidence — it must never DELETE it: the provenance line
+   is what the product's truth commitment rests on (raise 2 + DESIGN.md). */
+.compact .factor-evidence {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 /* why drawer */
 .why-drawer {
@@ -459,7 +496,7 @@
 }
 .basis-tag.stop { color: var(--lamp-stop); }
 .chip.here { margin-left: 6px; }
-.quiet-ok { color: var(--lamp-run); }
+.quiet-ok { color: var(--ink-2); }
 
 /* lease claim form — inline control, not a modal */
 .claim { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
@@ -479,7 +516,18 @@
 /* graph panel */
 .graph-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 20px; }
 .graph-cols section { min-width: 0; }
-.graph-cols .k { margin-bottom: 6px; }
+/* Sub-heading level: BELOW the section h2 in size and contrast. It had no
+   definition at all and was inheriting 14px full ink — louder than the
+   heading above it (review finding). */
+.k {
+  display: block;
+  font: 10.5px var(--font-data);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 6px;
+}
+.k + .k, .sec-secrets .k { margin-top: 0; }
 .graph-cols .reason-list li { display: flex; gap: 7px; align-items: baseline; }
 .graph-cols .path { overflow-wrap: anywhere; font-size: 12px; }
 
@@ -490,4 +538,8 @@
 
 /* security */
 .sec-secrets { margin-top: 14px; padding-top: 10px; border-top: 1px solid color-mix(in srgb, var(--hairline) 45%, transparent); }
-.not-scanned { color: var(--lamp-attn-ink); }
+/* Unknown is neither good nor bad — it must not read as an alarm or as OK. */
+.not-scanned { color: var(--ink-2); font-style: italic; }
+/* "your call" outranks "safe to run" in weight, not in hue */
+.chip.idle.human { color: var(--ink); font-weight: 700; }
+.k.spaced { margin-top: 12px; }

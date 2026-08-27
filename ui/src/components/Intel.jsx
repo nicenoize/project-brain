@@ -28,7 +28,7 @@ export default function Intel({ hotspots, health, coChange, ownership, leases })
     <>
       {dangerous.length > 0 && (
         <div className="sheet">
-          <table>
+          <table className="score-first">
             <thead>
               <tr><th className="num">danger</th><th>File</th><th>Top factor</th></tr>
             </thead>
