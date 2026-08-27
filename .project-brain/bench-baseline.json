@@ -1,0 +1,171 @@
+{
+  "schema": "project-brain-bench/1",
+  "generatedAt": "2026-08-27T18:48:36.593Z",
+  "runs": 5,
+  "commitWindow": 300,
+  "machine": {
+    "node": "v24.4.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpus": 12,
+    "cpuModel": "Apple M4 Pro"
+  },
+  "cases": [
+    {
+      "case": "import-graph.scan",
+      "runs": 5,
+      "medianMs": 74,
+      "minMs": 71.7,
+      "maxMs": 113.4,
+      "spreadRatio": 1.53,
+      "spreadPct": 56.3,
+      "madPct": 3,
+      "stable": true,
+      "detail": "222 files → 420 edges"
+    },
+    {
+      "case": "git-log.parse",
+      "runs": 5,
+      "medianMs": 0.2,
+      "minMs": 0.2,
+      "maxMs": 0.3,
+      "spreadRatio": 1.21,
+      "spreadPct": 25,
+      "madPct": 2.6,
+      "stable": true,
+      "detail": "214 commits, 57019 B (git spawn 15.5 ms, not timed)"
+    },
+    {
+      "case": "file-health",
+      "runs": 5,
+      "medianMs": 3.7,
+      "minMs": 3.3,
+      "maxMs": 6.3,
+      "spreadRatio": 1.71,
+      "spreadPct": 80.6,
+      "madPct": 4.7,
+      "stable": true,
+      "detail": "214 commits"
+    },
+    {
+      "case": "calibrate-file-health",
+      "runs": 5,
+      "medianMs": 3.3,
+      "minMs": 3,
+      "maxMs": 4.9,
+      "spreadRatio": 1.48,
+      "spreadPct": 58.9,
+      "madPct": 10.5,
+      "stable": true,
+      "detail": "214 commits, 30d horizon"
+    },
+    {
+      "case": "api/state.cold",
+      "runs": 5,
+      "medianMs": 5.4,
+      "minMs": 4.9,
+      "maxMs": 6.4,
+      "spreadRatio": 1.19,
+      "spreadPct": 27.3,
+      "madPct": 4.1,
+      "stable": true,
+      "detail": "HTTP 200, fresh process per run files=2"
+    },
+    {
+      "case": "api/state.warm",
+      "runs": 5,
+      "medianMs": 0.6,
+      "minMs": 0.5,
+      "maxMs": 0.8,
+      "spreadRatio": 1.32,
+      "spreadPct": 53.7,
+      "madPct": 13.5,
+      "stable": true,
+      "detail": "HTTP 200, caches primed by the cold pass files=2"
+    },
+    {
+      "case": "api/risk.cold",
+      "runs": 5,
+      "medianMs": 274.4,
+      "minMs": 271.9,
+      "maxMs": 277.9,
+      "spreadRatio": 1.01,
+      "spreadPct": 2.2,
+      "madPct": 0.1,
+      "stable": true,
+      "detail": "HTTP 200, fresh process per run files=2"
+    },
+    {
+      "case": "api/risk.warm",
+      "runs": 5,
+      "medianMs": 31.9,
+      "minMs": 30.2,
+      "maxMs": 35.4,
+      "spreadRatio": 1.11,
+      "spreadPct": 16.4,
+      "madPct": 5.5,
+      "stable": true,
+      "detail": "HTTP 200, caches primed by the cold pass files=2"
+    },
+    {
+      "case": "api/blast.cold",
+      "runs": 5,
+      "medianMs": 35.7,
+      "minMs": 33.2,
+      "maxMs": 38.8,
+      "spreadRatio": 1.08,
+      "spreadPct": 15.6,
+      "madPct": 3.6,
+      "stable": true,
+      "detail": "HTTP 200, fresh process per run files=2"
+    },
+    {
+      "case": "api/blast.warm",
+      "runs": 5,
+      "medianMs": 21,
+      "minMs": 20.4,
+      "maxMs": 22.2,
+      "spreadRatio": 1.06,
+      "spreadPct": 8.7,
+      "madPct": 2.6,
+      "stable": true,
+      "detail": "HTTP 200, caches primed by the cold pass files=2"
+    },
+    {
+      "case": "api/graph.cold",
+      "runs": 5,
+      "medianMs": 13.2,
+      "minMs": 12.9,
+      "maxMs": 14.4,
+      "spreadRatio": 1.09,
+      "spreadPct": 11.6,
+      "madPct": 2.2,
+      "stable": true,
+      "detail": "HTTP 200, fresh process per run files=2"
+    },
+    {
+      "case": "api/graph.warm",
+      "runs": 5,
+      "medianMs": 12.4,
+      "minMs": 11.3,
+      "maxMs": 14.2,
+      "spreadRatio": 1.14,
+      "spreadPct": 22.7,
+      "madPct": 8.2,
+      "stable": true,
+      "detail": "HTTP 200, caches primed by the cold pass files=2"
+    },
+    {
+      "case": "answer-hook",
+      "runs": 5,
+      "medianMs": 58.8,
+      "minMs": 56.2,
+      "maxMs": 65,
+      "spreadRatio": 1.11,
+      "spreadPct": 15,
+      "madPct": 2.9,
+      "stable": true,
+      "detail": "exit 0, 404 B stdout (includes node startup)"
+    }
+  ]
+}

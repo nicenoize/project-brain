@@ -58,7 +58,15 @@
     "brain:route": "node scripts/brain-route.mjs",
     "brain:close": "node scripts/brain-close.mjs",
     "brain:reflect": "node scripts/brain-reflect.mjs",
-    "test": "node --test tests/*.test.mjs tests/**/*.test.mjs"
+    "test": "node --test tests/*.test.mjs tests/**/*.test.mjs",
+    "brain:intel": "node scripts/brain-intel.mjs",
+    "brain:security": "node scripts/brain-security.mjs",
+    "brain:lint": "node scripts/brain-lint.mjs",
+    "brain:graph-scan": "node scripts/brain-graph-scan.mjs",
+    "brain:serve": "node scripts/brain-serve.mjs",
+    "brain:draft": "node scripts/brain-draft.mjs",
+    "brain:release": "node scripts/brain-release.mjs",
+    "bench": "node scripts/bench.mjs"
   },
   "dependencies": {
     "fast-glob": "^3.3.2"
