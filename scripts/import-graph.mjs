@@ -541,12 +541,68 @@ function pickPy(base, fileSet, confidence) {
  * least two segments are attempted, common stdlib roots are excluded, and the
  * match must be unique. Confidence is therefore always 0.6.
  */
+/**
+ * PURE. The `module` path declared by a go.mod body, or ''.
+ *
+ * Go's intra-repo imports are ABSOLUTE, not relative: a file in a module
+ * declared `module acme/operator` imports its sibling package as
+ * `"acme/operator/factory"`, and nothing in that string resembles a path on
+ * disk. Without go.mod the suffix ladder below has nothing to match, so a
+ * properly package-structured Go repo resolves ZERO internal edges while a
+ * flat one resolves some — the tidier the codebase, the worse we did. Found on
+ * a 31-file Kubernetes operator: 190 specs, 190 unresolved.
+ *
+ * Deliberately not a go.mod parser: only the `module` line, ignoring `replace`
+ * directives, vendor/ trees and build tags — hence 0.8, never 1.0.
+ */
+export function parseGoModule(text) {
+  for (const line of String(text || '').split('\n')) {
+    const m = line.match(/^\s*module\s+("?)([^\s"]+)\1\s*(?:\/\/.*)?$/);
+    if (m) return m[2];
+  }
+  return '';
+}
+
+/**
+ * PURE-ish (calls the injected readFile). Every go.mod in the file list mapped
+ * to the directory it governs, longest module path first so that a nested
+ * module wins over its parent.
+ * @returns {Array<{prefix: string, dir: string}>}
+ */
+function discoverGoModules(readFile, files) {
+  const mods = [];
+  for (const f of files) {
+    if (P.basename(f) !== 'go.mod') continue;
+    let text;
+    try { text = readFile(f); } catch { continue; }
+    if (typeof text !== 'string') continue;
+    const prefix = parseGoModule(text);
+    if (!prefix) continue;
+    const dir = P.dirname(f) === '.' ? '' : P.dirname(f);
+    mods.push({ prefix, dir });
+  }
+  mods.sort((a, b) => b.prefix.length - a.prefix.length || byString(a.prefix, b.prefix));
+  return mods;
+}
+
 function resolveGo(spec, ctx) {
   const { fileSet, roots } = ctx;
   const segments = spec.split('/').filter(Boolean);
   if (segments.length < 2) return null;
   if (GO_STDLIB_ROOTS.has(segments[0])) return null;
   const dirs = ctx.dirIndex || goDirIndex(fileSet);
+  // Declared module path first: exact, and it beats the heuristic ladder.
+  for (const mod of ctx.goModules || []) {
+    if (spec !== mod.prefix && !spec.startsWith(mod.prefix + '/')) continue;
+    const rest = spec.slice(mod.prefix.length).replace(/^\//, '');
+    const cand = normalizeRel(mod.dir ? P.join(mod.dir, rest) : rest);
+    if (cand !== '' || !rest) {
+      const key = rest ? cand : mod.dir;
+      if (dirs.has(key)) return hit([...dirs.get(key)].sort(byString), 0.8, 'go-module');
+    }
+    // The prefix matched but the package is absent — a module-internal import
+    // we genuinely cannot place. Fall through to the ladder rather than lie.
+  }
   for (let k = segments.length; k >= 2; k--) {
     const suffix = segments.slice(-k).join('/');
     const matches = [];
@@ -710,7 +766,8 @@ function resolveRs(spec, ctx) {
  * @param {string} spec
  * @param {{fromFile: string, files: string[]|Set<string>, roots?: string[],
  *          aliases?: Array<{pattern: string, targets: string[]}>, lang?: string,
- *          kind?: string, dirIndex?: Map}} ctx
+ *          kind?: string, dirIndex?: Map,
+ *          goModules?: Array<{prefix: string, dir: string}>}} ctx
  * @returns {{targets: string[], confidence: number, how: string} | null}
  */
 export function resolveSpecWithConfidence(spec, ctx = {}) {
@@ -722,7 +779,10 @@ export function resolveSpecWithConfidence(spec, ctx = {}) {
   if (!family) return null;
   const fileSet = ctx.files instanceof Set ? ctx.files : new Set(ctx.files || []);
   const roots = Array.isArray(ctx.roots) && ctx.roots.length ? ctx.roots : defaultRoots(fileSet);
-  const inner = { fromFile, fileSet, roots, aliases: ctx.aliases || [], dirIndex: ctx.dirIndex };
+  const inner = {
+    fromFile, fileSet, roots, aliases: ctx.aliases || [],
+    dirIndex: ctx.dirIndex, goModules: ctx.goModules
+  };
   let found = null;
   if (family === 'js') found = resolveJs(raw, inner);
   else if (family === 'py') found = resolvePy(raw, inner);
@@ -771,6 +831,7 @@ export function buildImportGraph(input = {}) {
   const roots = Array.isArray(input.roots) && input.roots.length ? input.roots : defaultRoots(allFiles);
   const aliases = input.aliases !== undefined ? (input.aliases || []) : discoverAliases(readFile);
   const dirIndex = goDirIndex(fileSet);
+  const goModules = Array.isArray(input.goModules) ? input.goModules : discoverGoModules(readFile, allFiles);
 
   const codeFiles = allFiles.filter((f) => familyOf(langOf(f)));
   const skipped = [];
@@ -810,7 +871,7 @@ export function buildImportGraph(input = {}) {
     for (const imp of imports) {
       totalSpecs += 1;
       const found = resolveSpecWithConfidence(imp.spec, {
-        fromFile: file, files: fileSet, roots, aliases, lang, kind: imp.kind, dirIndex
+        fromFile: file, files: fileSet, roots, aliases, lang, kind: imp.kind, dirIndex, goModules
       });
       if (!found) {
         unresolvedSpecs += 1;
@@ -975,7 +1036,7 @@ export function cycles(graph, opts = {}) {
       if (found.length >= maxCycles) { truncated = true; return; }
       for (const next of fwd.get(node) || []) {
         if (next === start && path.length >= 2) {
-          const key = path.join(' ');
+          const key = path.join('\x1f');
           if (!seenKeys.has(key)) {
             seenKeys.add(key);
             found.push([...path]);
@@ -999,7 +1060,7 @@ export function cycles(graph, opts = {}) {
     walk(start);
   }
 
-  found.sort((a, b) => a.length - b.length || byString(a.join(' '), b.join(' ')));
+  found.sort((a, b) => a.length - b.length || byString(a.join('\x1f'), b.join('\x1f')));
   return { cycles: found, truncated, params: { maxLen, maxCycles } };
 }
 

@@ -45,6 +45,22 @@ const RECORD_SEP = '\x1e'; // RS — between commits
 
 const MS_PER_DAY = 86_400_000;
 
+/**
+ * Files required in the SMALLER class before a calibration AUC means anything.
+ *
+ * AUC's precision is governed by the smaller class, not the sample size. With
+ * `m` files in that class, moving one of them from the top of the ranking to
+ * the bottom shifts AUC by up to 1/m — so at m=1 the number is free to be
+ * anything, and at m<10 one file moves it further than the entire 0.5→0.6
+ * distance the gate is built on. A colleague's workspace produced "AUC 1.00 …
+ * the health ranking is defensible on this repo" from exactly one fixed file;
+ * the number was correct and the sentence was false. The same workspace held
+ * the mirror image — 34 of 43 files fixed, scarce in CLEAN files instead — so
+ * the rule is two-sided. Ten is where a single file can no longer cross the
+ * gate on its own.
+ */
+export const MIN_CALIBRATION_POSITIVES = 10;
+
 export const DEFAULT_HALF_LIFE_DAYS = 90;
 export const DEFAULT_MIN_SUPPORT = 3;
 export const DEFAULT_MIN_CONFIDENCE = 0.4;
@@ -1226,10 +1242,43 @@ export function calibrateFileHealth(commits, {
     });
   }
 
+  // How much of the repo's history exists BEFORE the cut. A repo whose entire
+  // life is shorter than the horizon has no pre-cut period at all, so there is
+  // nothing to build scores from — a different problem from "no fixes yet", and
+  // it needs a different remedy (shorter --horizon-days, or more history).
+  const firstMs = chrono.length ? Date.parse(chrono[0].dateIso) : 0;
+  const historySpanDays = chrono.length ? (lastMs - firstMs) / MS_PER_DAY : 0;
+  const noPreCutHistory = chrono.length > 0 && prefixAll.length === 0;
+
+  // AUC's precision is set by the SMALLER class, whichever it is. A repo where
+  // 34 of 43 files got fixed is as thin as one with 3 of 362 — it just runs out
+  // of clean files instead of fixed ones, and the ranking has only 9 negatives
+  // to be right about. Gating on positives alone missed that entirely.
+  const minorityClass = auc === null ? 0 : Math.min(defects, rows.length - defects);
+  const underpowered = auc !== null && minorityClass < MIN_CALIBRATION_POSITIVES;
+  const sufficientEvidence = auc !== null && !underpowered;
+
   let verdict;
   if (auc === null) {
-    verdict = `AUC undefined over ${rows.length} files (need both fixed and clean files after ` +
-      'the cut) — do NOT trust the health ranking yet.';
+    verdict = noPreCutHistory
+      ? `No calibration possible: this repo's whole history spans ${historySpanDays.toFixed(0)} ` +
+        `day(s), shorter than the ${horizonDays}-day horizon, so every commit lands after the ` +
+        'cut and there is no earlier period to score from. Retry with a smaller ' +
+        '--horizon-days, or wait for more history — more fix commits will NOT help.'
+      : `AUC undefined over ${rows.length} files (need both fixed and clean files after ` +
+        'the cut) — do NOT trust the health ranking yet.';
+  } else if (underpowered) {
+    // A single file changing sides moves AUC by up to 1/minority. Below ten in
+    // the smaller class that is >0.10 — wider than the entire distance between
+    // random (0.5) and the gate (0.6), so the gate cannot mean anything here.
+    const scarce = defects <= rows.length - defects
+      ? `only ${defects} fixed file(s)`
+      : `only ${rows.length - defects} unfixed file(s) — nearly everything here was fixed`;
+    verdict = `AUC ${auc.toFixed(2)} over ${rows.length} files, but ${scarce} — below the ` +
+      `${MIN_CALIBRATION_POSITIVES} needed for the gate to mean anything. One file changing ` +
+      `sides would move this AUC by up to ${(1 / Math.max(minorityClass, 1)).toFixed(2)}, ` +
+      'more than the whole 0.5→0.6 gate. Measured, not established: do NOT cite this ' +
+      'number or enable anything on it.';
   } else {
     const vsRandom = auc > 0.5 ? 'better than random' : 'not better than random';
     const gate = auc >= 0.6
@@ -1237,18 +1286,26 @@ export function calibrateFileHealth(commits, {
       : 'do NOT trust the health ranking below 0.6';
     verdict = `AUC ${auc.toFixed(2)} over ${rows.length} files — health score ${vsRandom} at ` +
       `predicting near-future fixes; ${gate}.`;
-    if (structureDelta !== null) {
-      const sign = structureDelta > 0 ? '+' : '';
-      const helps = structureDelta > 0.02
+  }
+  // The structure delta is a second AUC and needs its own power check: it is
+  // computed over the files carrying structure data, which is usually a small
+  // subset, and it was reading "structure ADDS discrimination" off populations
+  // with two positives in them.
+  if (auc !== null && structureDelta !== null) {
+    const sign = structureDelta > 0 ? '+' : '';
+    const structMinority = Math.min(comparison.defective, comparison.files - comparison.defective);
+    const helps = structMinority < MIN_CALIBRATION_POSITIVES
+      ? `only ${structMinority} file(s) in the smaller class of that subset — too few to ` +
+        'tell whether structure helps'
+      : (structureDelta > 0.02
         ? 'structure ADDS discrimination'
         : (structureDelta < -0.02
           ? 'structure REMOVES discrimination — keep it off'
-          : 'structure adds nothing measurable here — keep it opt-in');
-      verdict += ` On the ${comparison.files} file(s) with structure data: history-only AUC ` +
-        `${historyOnlyAuc === null ? 'n/a' : historyOnlyAuc.toFixed(2)}, with structure ` +
-        `${combinedComparableAuc === null ? 'n/a' : combinedComparableAuc.toFixed(2)} ` +
-        `(${sign}${structureDelta.toFixed(2)}) — ${helps}.`;
-    }
+          : 'structure adds nothing measurable here — keep it opt-in'));
+    verdict += ` On the ${comparison.files} file(s) with structure data: history-only AUC ` +
+      `${historyOnlyAuc === null ? 'n/a' : historyOnlyAuc.toFixed(2)}, with structure ` +
+      `${combinedComparableAuc === null ? 'n/a' : combinedComparableAuc.toFixed(2)} ` +
+      `(${sign}${structureDelta.toFixed(2)}) — ${helps}.`;
   }
 
   return {
@@ -1271,6 +1328,12 @@ export function calibrateFileHealth(commits, {
     defective: defects,
     futureCommits: future.length,
     futureFixCommits,
+    historySpanDays: round(historySpanDays, 1),
+    // Machine-readable twin of the verdict prose, so consumers (UI, brain:health,
+    // release snapshots) gate on a boolean instead of parsing English.
+    sufficientEvidence,
+    minorityClass,
+    minPositives: MIN_CALIBRATION_POSITIVES,
     quantiles,
     auc,
     perFactor,
