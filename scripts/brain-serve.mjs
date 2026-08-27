@@ -78,6 +78,22 @@
  *                          rankings (max 25 each) and the same `coverage`.
  *                          `truncated` says when a cap bit; a repo with no
  *                          scannable source is a degraded 200 with `reason`
+ *   /api/security          Dependency advisories WITH REACHABILITY + secret
+ *                          LOCATIONS (brain-security.mjs's pure core). Each
+ *                          advisory is `reachable` (some scanned file imports
+ *                          the vulnerable package), `transitive-only` (nothing
+ *                          imports it) or `unknown` (no graph) — an advisory
+ *                          nothing imports is not the same problem as one
+ *                          imported by 12 files, and the response says which.
+ *                          Every tool is optional: `provenance.tools` reports
+ *                          which ran and which were absent, and a scanner that
+ *                          did not run can never produce a clean bill of health
+ *                          (`claims.cleanBillOfHealth`). NEVER contains a secret
+ *                          VALUE — only {file, line, rule, severity}. npm audit
+ *                          is slow (seconds), so the whole report is cached per
+ *                          HEAD with a TTL and the response reports the cache
+ *                          age in `state_age` + a `cache` block. Absent tools →
+ *                          degraded 200 with reasons, never a 500
  *   /api/next              brain:route's exported PURE rule engine over
  *                          minimal read-only sensed signals — ranked next
  *                          actions (≤5, each tagged auto|human)
@@ -191,6 +207,10 @@ import {
 // Canonical glob engine (same one brain:radar/brief/lease use) — the
 // Doc-Navigator's module→file mapping must never disagree with lease overlap.
 import { targetMatchesFile, validateTarget, targetsOverlap, UnsupportedPatternError } from './lease-overlap.mjs';
+// Security report (advisories × reachability, secret LOCATIONS only). Its pure
+// core has no clocks/fs/processes and its CLI is isMain-guarded, so importing
+// it here spawns nothing — /api/security drives the I/O wrapper explicitly.
+import { securityReport as buildSecurityReport } from './brain-security.mjs';
 import { startRunner, listRunners, stopRunner, tailLog } from './runner-supervisor.mjs';
 
 export const DEFAULT_PORT = 4100;
@@ -886,6 +906,73 @@ export async function importGraphFor(root) {
   importGraphCache.value = value;
   importGraphCache.computes += 1;
   return value;
+}
+
+// ---------------------------------------------------------------------------
+// security report cache (/api/security)
+//
+// `npm audit` shells out to npm and hits the registry (1-10s), and the
+// reachability half re-scans every JS/TS source. That is far too expensive for
+// a dashboard poll, so the WHOLE report is memoized per HEAD — with a wall-
+// clock TTL on top, because advisories change when the registry learns about a
+// new CVE, not when you commit. The response reports the cache age instead of
+// pretending the answer is live (`state_age` + the `cache` block).
+// ---------------------------------------------------------------------------
+
+export const SECURITY_CACHE_TTL_MS = 15 * 60 * 1000;
+/** Age past which the cached report ships a stale_warning. */
+const SECURITY_STALE_S = 10 * 60;
+const securityCache = { key: null, value: null, at: 0, computes: 0 };
+
+/** Test hook: observe the security cache without reaching into internals. */
+export function securityStats() {
+  return { key: securityCache.key, computes: securityCache.computes };
+}
+
+/**
+ * Build (and cache) the security report for `root`. Never throws: a failure in
+ * the report itself becomes a degraded value with a reason, exactly like an
+ * absent scanner, so the endpoint stays a 200.
+ */
+async function cachedSecurityReport(root, now = Date.now()) {
+  const key = gitHead(root);
+  const fresh = securityCache.key === key &&
+    securityCache.value &&
+    now - securityCache.at < SECURITY_CACHE_TTL_MS;
+  if (!fresh) {
+    let value;
+    try {
+      value = await buildSecurityReport({ root, now });
+    } catch (error) {
+      // Defense in depth — securityReport is total, but a 500 here would be a
+      // security answer that says nothing at all.
+      value = {
+        vulnerabilities: {
+          reachable: [], transitiveOnly: [], unknown: [],
+          counts: { critical: 0, high: 0, moderate: 0, low: 0 }, total: 0,
+          degraded: true, scanned: false,
+          reason: `security scan failed: ${error.message || error}`,
+          statement: `security scan failed (${error.message || error}) — dependencies NOT scanned. This is not a clean bill of health.`,
+          reachability: { available: false, degraded: true, reason: 'scan failed', filesScanned: 0, importedPackages: 0, maxImportersListed: 0, skipped: null, note: '' }
+        },
+        secrets: {
+          findings: [], total: 0, truncated: false, degraded: true, scanned: false,
+          reason: `security scan failed: ${error.message || error}`,
+          statement: 'secrets NOT scanned. This is not a clean bill of health.',
+          note: ''
+        },
+        claims: { dependenciesScanned: false, reachabilityDetermined: false, secretsScanned: false, cleanBillOfHealth: false, caveat: '' },
+        provenance: { basis: 'measured', source: 'scan failed', tools: [], notes: {} },
+        scannedAt: new Date(now).toISOString()
+      };
+    }
+    securityCache.key = key;
+    securityCache.value = value;
+    securityCache.at = now;
+    securityCache.computes += 1;
+    return { report: value, ageMs: 0, cached: false };
+  }
+  return { report: securityCache.value, ageMs: now - securityCache.at, cached: true };
 }
 
 /**
@@ -2112,6 +2199,46 @@ export function createHandler(ctx) {
   }
 
   /**
+   * "Which of these advisories can actually reach my code?" — the one security
+   * question the import graph lets us answer honestly and for free.
+   *
+   * Read-only, GET-only, token-gated like every other endpoint, and a degraded
+   * 200 whenever a scanner is absent: the response NEVER implies a clean bill
+   * of health for a tool that did not run (`provenance.tools[].ran`,
+   * `claims.cleanBillOfHealth`, and a per-section `statement` that says
+   * "NOT scanned" in words).
+   *
+   * SECURITY: the response can never contain a secret VALUE — brain-security's
+   * normalizer builds each finding from a whitelist of {file, line, rule,
+   * severity, entropyNote}, so nothing that carries the match ever reaches the
+   * browser. That property is asserted by tests/brain-security.test.mjs.
+   *
+   * COST: npm audit + a full source re-scan, so the report is cached per HEAD
+   * with a TTL and the answer states its own age rather than pretending to be
+   * live.
+   */
+  async function apiSecurity(res) {
+    const now = Date.now();
+    const { report, ageMs, cached } = await cachedSecurityReport(root, now);
+    const ageSeconds = Math.max(0, Math.round(ageMs / 1000));
+    sendJson(res, 200, {
+      ...report,
+      cache: {
+        cached,
+        ageSeconds,
+        computedAt: report.scannedAt,
+        ttlSeconds: Math.round(SECURITY_CACHE_TTL_MS / 1000),
+        note: 'npm audit is slow, so this report is cached per commit with a TTL — the age above is real'
+      },
+      state_age: ageSeconds,
+      stale_warning: ageSeconds > SECURITY_STALE_S
+        ? `security report was computed ${Math.round(ageSeconds / 60)}m ago (cached) — advisories may have changed since`
+        : null,
+      generated_at: new Date(now).toISOString()
+    });
+  }
+
+  /**
    * Minimal read-only sensing for the exported brain-route rule engine.
    * brain-route's own senseState() is not exported (and opens the index /
    * calls gh), so only the cheap, highest-value signals are sensed here:
@@ -2915,6 +3042,7 @@ export function createHandler(ctx) {
         if (url.pathname === '/api/risk') return await apiRisk(res, url);
         if (url.pathname === '/api/blast') return await apiBlast(res, url);
         if (url.pathname === '/api/graph') return await apiGraph(res);
+        if (url.pathname === '/api/security') return await apiSecurity(res);
         if (url.pathname === '/api/next') return await apiNext(res);
         if (url.pathname === '/api/brief') return await apiBrief(res, url);
         if (url.pathname === '/api/map') return apiMap(res);
