@@ -1,10 +1,45 @@
 # Project Brain
 
-A reusable agent skill and local semantic memory system for web application development.
+The shared work-state layer for humans and parallel coding agents: who — human
+or agent — holds which files, under which decision, with what brief, and what
+happened afterwards. Plus the deterministic intelligence to decide whether a
+change is safe: no LLM anywhere in that path.
 
-This repository is the **global Project Brain package**. It owns shared scripts, templates, guardrails, GitFlow rules, code conventions, and team-memory policy. Application repositories should keep project-specific state in `.project-brain/`.
+```bash
+project-brain serve --open      # the Control Room: seven questions, seven answers
+```
 
-> **Where to look next:** [`SKILL.md`](SKILL.md) is the canonical reference for commands, retrieval tuning, multi-agent workflow, and conventions. [`docs/brain-architecture.md`](docs/brain-architecture.md) has the data-flow diagrams. [`CONTRIBUTING.md`](CONTRIBUTING.md) covers how to add a new `brain:*` script.
+**Start here:** [`docs/control-room.md`](docs/control-room.md) — the complete
+guide to the board, the MCP tools, the ambient hook, and what the product
+deliberately does *not* do.
+
+### Three surfaces, one engine
+
+| Surface | For | Entry point |
+|---|---|---|
+| **Control Room** (web) | you, in a browser | `project-brain serve` |
+| **MCP tools** | any agent host that pulls | `.mcp.json` (pre-wired) |
+| **Ambient hook** | the agent you're running, at edit time | on by default |
+
+### What it answers, with receipts
+
+*Which repo needs attention?* · *What should happen next?* · *Is this change
+dangerous?* (0–10, calibrated against your own fix history) · *What breaks if I
+change this?* (measured import edges ⊕ inferred co-change) · *What's running
+right now?* · *Why is it built this way?* (authored records + measured doc-vs-code
+drift) · *Which files are actually dangerous?* · *Who holds what — until when?* ·
+*What happened — and who acknowledged it?*
+
+Every score carries its factors and a next action. Every claim carries its
+provenance — `measured` or `inferred`, and how old the data is.
+
+---
+
+This repository is also the **global Project Brain package**: shared scripts,
+templates, guardrails, GitFlow rules, code conventions, and team-memory policy.
+Application repositories keep project-specific state in `.project-brain/`.
+
+> **Reference:** [`SKILL.md`](SKILL.md) for commands, retrieval tuning, multi-agent workflow, and conventions. [`docs/brain-architecture.md`](docs/brain-architecture.md) for data-flow diagrams. [`docs/strategy-agent-ops.md`](docs/strategy-agent-ops.md) for why this exists and where it is going. [`CONTRIBUTING.md`](CONTRIBUTING.md) for adding a `brain:*` script.
 
 ## Source-of-truth layers
 
