@@ -24,7 +24,7 @@ export default function GraphPanel({ graph }) {
             <ul className="reason-list">
               {cycles.slice(0, 6).map((c, i) => (
                 <li key={i}>
-                  <span className="basis-tag stop">cycle</span>
+                  <span className="basis-tag fact">cycle</span>
                   <span className="path">{c.files.map((f) => f.split('/').pop()).join(' → ')}</span>
                 </li>
               ))}

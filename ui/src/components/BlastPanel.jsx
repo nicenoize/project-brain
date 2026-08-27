@@ -90,10 +90,10 @@ export default function BlastPanel({ blast }) {
       </table>
 
       {blast.truncated && (
-        <p className="claim">Showing the {nodes.length} highest-ranked of a larger radius.</p>
+        <p className="receipt-note">Showing the {nodes.length} highest-ranked of a larger radius.</p>
       )}
       {!blast.graphAvailable && (
-        <p className="claim">
+        <p className="receipt-note">
           No TypeScript sources indexed here, so these are history-based edges
           only — they still hold in any language, they are patterns rather than facts.
         </p>

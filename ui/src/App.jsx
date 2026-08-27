@@ -64,6 +64,69 @@ function findConflicts(workstreams, leases) {
   return { conflictsByTask, conflictTargets };
 }
 
+/**
+ * Does this section hold something now, and does it want a human?
+ * The andon move: the board tells you WHERE to look before you read it.
+ * `state` maps onto the same three lamps the work rows use — nothing else
+ * on the board may spend those colours (see theme.css).
+ */
+function sectionState(id, d, { workstreams, leases, conflictsByTask }) {
+  switch (id) {
+    case 'fleet': {
+      const top = (d.fleet?.projects || [])[0];
+      if (d.fleet?.degraded) return 'quiet';
+      return top?.attention >= 50 ? 'stop' : top?.attention >= 20 ? 'attn' : 'run';
+    }
+    case 'next':
+      return (d.next?.actions || []).length ? 'attn' : 'quiet';
+    case 'risk': {
+      const sc = d.risk?.score;
+      if (sc == null) return 'quiet';
+      return sc >= 6.5 ? 'stop' : sc >= 3.5 ? 'attn' : 'run';
+    }
+    case 'blast':
+      return (d.blast?.nodes || []).some((n) => n.kind !== 'seed') ? 'attn' : 'quiet';
+    case 'security': {
+      const reach = d.security?.vulnerabilities?.reachable || [];
+      const secrets = d.security?.secrets?.findings || [];
+      if (secrets.length || reach.some((v) => v.severity === 'critical')) return 'stop';
+      return reach.length ? 'attn' : 'quiet';
+    }
+    case 'board':
+      if (conflictsByTask.size) return 'stop';
+      return workstreams.length ? 'run' : 'quiet';
+    case 'leases':
+      return leases.length ? 'run' : 'quiet';
+    case 'graph':
+      return (d.graph?.cycles || []).length ? 'attn' : 'quiet';
+    case 'danger':
+      return (d.health?.files || []).length ? 'attn' : 'quiet';
+    case 'map':
+      return (d.map?.orphans?.codeDirs || []).length ? 'attn' : 'quiet';
+    case 'audit':
+      return (d.events?.events || []).length ? 'run' : 'quiet';
+    default:
+      return 'quiet';
+  }
+}
+
+/** Urgency rank: a section that wants a human comes before one that does not. */
+const STATE_RANK = { stop: 0, attn: 1, run: 2, quiet: 3 };
+
+/** One section: lamped head, then its panel. A quiet section stays legible
+    but stops competing — same stock, less presence. */
+function Section({ id, heading, node, state }) {
+  return (
+    <section className={`bay-section state-${state}`} aria-labelledby={`h-${id}`}>
+      <h2 id={`h-${id}`}>
+        <span className={`lamp ${state === 'quiet' ? '' : state}`} aria-hidden="true" />
+        {heading}
+      </h2>
+      <div className="sheet">{node}</div>
+    </section>
+  );
+}
+
 export default function App() {
   const [density, setDensity] = useState('deployed'); // miura raise: one control
   const d = useData();
@@ -95,7 +158,7 @@ export default function App() {
     return (
       <div className="shell">
         <header className="masthead">
-          <div className="wordmark">Control Room<small>project brain</small></div>
+          <h1 className="wordmark">Control Room<small>project brain</small></h1>
         </header>
         <main className="floor"><div className="bay">
           <p className="error-note">
@@ -107,10 +170,42 @@ export default function App() {
     );
   }
 
+  // Sections declare themselves; the board decides order and emphasis. A lamp
+  // at the head is the andon move: you see WHERE to look before you read.
+  const ctx = { workstreams, leases, conflictsByTask };
+  const describe = (id, heading, node) => ({ id, heading, node, state: sectionState(id, d, ctx) });
+
+  const mainSections = [
+    ...(d.fleet && !d.fleet.degraded
+      ? [describe('fleet', 'Which repo needs attention?', <FleetPanel fleet={d.fleet} />)] : []),
+    describe('next', 'What should happen next?', <NextPanel next={d.next} />),
+    describe('risk', 'Is this change dangerous?',
+      <RiskPanel changed={d.changed} risk={d.risk} brief={d.brief} />),
+    describe('blast', 'What breaks if I change this?', <BlastPanel blast={d.blast} />),
+    describe('security', 'What here is exploitable?', <SecurityPanel security={d.security} />),
+    describe('board', 'What is running right now?',
+      <Board workstreams={workstreams} conflictsByTask={conflictsByTask} runnersInfo={d.runnersInfo} onChanged={d.reload} />),
+    describe('danger', 'Which files are most dangerous?',
+      <Intel hotspots={d.hotspots} health={d.health} coChange={d.coChange} ownership={d.ownership} leases={leases} />),
+    describe('graph', 'What is tangled?', <GraphPanel graph={d.graph} />),
+    describe('map', 'Why is it built this way?', <MapPanel map={d.map} records={d.records} />)
+  ].sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state]);
+
+  const sideSections = [
+    describe('leases', 'Who holds what — until when?',
+      <LeaseBoard leases={leases} conflictTargets={conflictTargets} onChanged={d.reload} />),
+    describe('audit', 'What happened — and who acknowledged it?',
+      <AuditFeed events={d.events?.events || []} />),
+    ...(d.fleet?.degraded
+      ? [describe('fleet', 'How large is the fleet?', <FleetPanel fleet={d.fleet} />)] : []),
+    describe('records', 'Which decisions are on record?',
+      <Records records={d.records?.records || []} />)
+  ].sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state]);
+
   return (
     <div className={`shell ${density === 'packet' ? 'compact' : ''}`}>
       <header className="masthead">
-        <div className="wordmark">Control Room<small>project brain</small></div>
+        <h1 className="wordmark">Control Room<small>project brain</small></h1>
         <span className="repo num">{meta.root || ''}</span>
         <span className="fresh">
           {staleAmber
@@ -132,72 +227,14 @@ export default function App() {
               <code>project-brain serve</code> still running?
             </p>
           )}
-          {!d.loading && !d.error && (
-            <>
-              {d.fleet && !d.fleet.degraded && (
-                <>
-                  <h2>Which repo needs attention?</h2>
-                  <div className="sheet">
-                    <FleetPanel fleet={d.fleet} />
-                  </div>
-                </>
-              )}
-              <h2>What should happen next?</h2>
-              <div className="sheet">
-                <NextPanel next={d.next} />
-              </div>
-              <h2>Is this change dangerous?</h2>
-              <div className="sheet">
-                <RiskPanel changed={d.changed} risk={d.risk} brief={d.brief} />
-              </div>
-              <h2>What breaks if I change this?</h2>
-              <div className="sheet">
-                <BlastPanel blast={d.blast} />
-              </div>
-              <h2>What's running right now?</h2>
-              <div className="sheet">
-                <Board workstreams={workstreams} conflictsByTask={conflictsByTask} runnersInfo={d.runnersInfo} onChanged={d.reload} />
-              </div>
-              <h2>What here is actually exploitable?</h2>
-              <div className="sheet">
-                <SecurityPanel security={d.security} />
-              </div>
-              <h2>What's tangled?</h2>
-              <div className="sheet">
-                <GraphPanel graph={d.graph} />
-              </div>
-              <h2>Why is it built this way?</h2>
-              <div className="sheet">
-                <MapPanel map={d.map} records={d.records} />
-              </div>
-              <h2>Which files are actually dangerous?</h2>
-              <Intel hotspots={d.hotspots} health={d.health} coChange={d.coChange} ownership={d.ownership} leases={leases} />
-            </>
-          )}
+          {!d.loading && !d.error && mainSections.map((sec) => (
+            <Section key={sec.id} {...sec} />
+          ))}
         </section>
 
         {!d.loading && !d.error && (
           <aside className="bay" aria-label="Leases, audit and decisions">
-            <h2>Who holds what — until when?</h2>
-            <div className="sheet">
-              <LeaseBoard leases={leases} conflictTargets={conflictTargets} onChanged={d.reload} />
-            </div>
-            <h2>What happened — and who acknowledged it?</h2>
-            <div className="sheet">
-              <AuditFeed events={d.events?.events || []} />
-            </div>
-            {d.fleet?.degraded && (
-              <>
-                <h2>Fleet</h2>
-                <div className="sheet">
-                  <FleetPanel fleet={d.fleet} />
-                </div>
-              </>
-            )}
-            <h2>Decisions on record</h2>
-            <div className="sheet">
-              <Records records={d.records?.records || []} />
-            </div>
+            {sideSections.map((sec) => <Section key={sec.id} {...sec} />)}
           </aside>
         )}
       </main>

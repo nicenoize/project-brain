@@ -42,7 +42,7 @@ export default function RiskPanel({ changed, risk, brief }) {
         <div className="risk-files">
           <span className="path">{files.slice(0, 4).join(', ')}{files.length > 4 ? ` +${files.length - 4} more` : ''}</span>
           {cal?.auc != null && (
-            <p className="claim">
+            <p className="receipt-note">
               Receipt: top risk quartile carried {Math.round((cal.quartiles?.[3]?.defectRate ?? 0) * 100)}%
               defect rate vs {Math.round((cal.quartiles?.[0]?.defectRate ?? 0) * 100)}% in the lowest —
               AUC {cal.auc.toFixed(2)} over {cal.commits} commits of this repo's own history.

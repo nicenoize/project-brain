@@ -17,6 +17,23 @@
   --ink-3: #6b6e72;
   --hairline: #c5c2b9;
 
+  /* ------------------------------------------------------------------
+     THREE COLOUR LANGUAGES. They are never mixed, and nothing new may
+     borrow from a language it does not belong to:
+
+     1. LAMPS (--lamp-*)  LIVE STATE ONLY — what is true right now and
+        wants a human: a runner's state, a lease conflict, an expiring
+        TTL, a reachable exposure. If it would still be true in a
+        printout tomorrow, it is not state.
+     2. INK LADDER (--ink / --ink-2 / --ink-3 + weight) — measured
+        magnitude, provenance and absence. A danger score is a
+        measurement, not an alarm: it climbs in density, not in hue.
+     3. SIGNAL (--signal) — interaction affordance only. Never a state,
+        never a severity, never a decorative rule.
+
+     The lamp is the loudest thing on the board precisely because it is
+     rare. Every hue spent elsewhere makes it quieter.
+     ------------------------------------------------------------------ */
   /* andon lamps — state only */
   --lamp-run: #2e7d43;
   --lamp-attn: #b97f16;

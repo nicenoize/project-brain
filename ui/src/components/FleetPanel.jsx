@@ -32,7 +32,7 @@ export default function FleetPanel({ fleet }) {
 
   return (
     <div>
-      <table>
+      <table className="score-first">
         <thead>
           <tr><th className="num">attn</th><th>Repo</th><th>Why it wants you</th></tr>
         </thead>
@@ -81,7 +81,7 @@ export default function FleetPanel({ fleet }) {
         </tbody>
       </table>
       {fleet.truncated && (
-        <p className="claim">Showing the first {projects.length} projects of the fleet.</p>
+        <p className="receipt-note">Showing the first {projects.length} projects of the fleet.</p>
       )}
       <div className="provenance">
         fleet root {fleet.fleetRoot} · {fleet.discovered} project(s) · attention weights are

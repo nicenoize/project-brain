@@ -30,7 +30,7 @@ export default function MapPanel({ map, records }) {
           <code>npm run brain:init</code> scaffolds them.
         </p>
         {(records?.records || []).length > 0 && (
-          <p className="claim">{records.records.length} decision record(s) exist without a module map.</p>
+          <p className="receipt-note">{records.records.length} decision record(s) exist without a module map.</p>
         )}
       </div>
     );
@@ -61,7 +61,7 @@ export default function MapPanel({ map, records }) {
                     {m.staleReason === 'code-newer-than-doc' ? 'code moved on' : `${Math.round(m.ageDays)}d old`}
                   </span>
                 ) : (
-                  <span className="chip run">current</span>
+                  <span className="chip idle">current</span>
                 )}
               </td>
             </tr>

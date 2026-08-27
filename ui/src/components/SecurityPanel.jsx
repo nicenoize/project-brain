@@ -12,7 +12,9 @@ export default function SecurityPanel({ security }) {
   const secrets = security.secrets || {};
   const tools = security.provenance?.tools || [];
 
-  const sev = (s) => (s === 'critical' || s === 'high' ? 'stop' : s === 'moderate' ? 'attn' : 'idle');
+  // Severity climbs in ink weight; REACHABILITY is what the lamp would be
+  // about, and that is already carried by the two groups and their order.
+  const sev = (s) => (s === 'critical' || s === 'high' ? 'measured' : 'inferred');
 
   return (
     <div>
@@ -44,7 +46,7 @@ export default function SecurityPanel({ security }) {
 
           {transitive.length > 0 && (
             <>
-              <span className="k" style={{ marginTop: 12, display: 'block' }}>
+              <span className="k spaced">
                 not imported — triage after the reachable ones
               </span>
               <ul className="reason-list">

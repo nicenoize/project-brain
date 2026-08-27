@@ -22,7 +22,7 @@ export default function NextPanel({ next }) {
         <li key={a.command}>
           <div className="next-head">
             <code className="path">{a.command}</code>
-            <span className={`chip ${a.boundary === 'auto' ? 'run' : 'idle'}`}>
+            <span className={`chip idle ${a.boundary === 'auto' ? '' : 'human'}`}>
               {a.boundary === 'auto' ? 'safe to run' : 'your call'}
             </span>
             <button className="btn quiet" onClick={() => copy(a.command)}>
