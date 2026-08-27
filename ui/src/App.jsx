@@ -222,6 +222,14 @@ export default function App() {
       <Records records={d.records?.records || []} />)
   ].sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state]);
 
+  // The side column is NOT ranked by urgency the way the answer column is.
+  // Leases are the coordination primitive and the other end of raise 3
+  // (treemap cell <-> lease row); a settled-decision archive is the least
+  // time-sensitive thing on the surface. An empty lease board still belongs
+  // first — its emptiness is the answer to its own question.
+  const SIDE_ORDER = ['leases', 'audit', 'fleet', 'records'];
+  sideSections.sort((a, b) => SIDE_ORDER.indexOf(a.id) - SIDE_ORDER.indexOf(b.id));
+
   return (
     <div className={`shell ${density === 'packet' ? 'compact' : ''}`}>
       <header className="masthead">

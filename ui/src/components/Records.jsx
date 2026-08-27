@@ -13,7 +13,7 @@ export default function Records({ records }) {
   }
   return (
     <div>
-      {records.slice(0, 12).map((r) => (
+      {records.slice(0, 5).map((r) => (
         <details key={r.file} className="record">
           <summary>
             <span>{r.title || r.file}</span>
@@ -22,6 +22,12 @@ export default function Records({ records }) {
           <div className="body">{r.excerpt || `open ${r.file} in your editor — in-place editing arrives with the write API`}</div>
         </details>
       ))}
+      {records.length > 5 && (
+        <p className="factor-evidence">
+          {records.length - 5} more on record — the module map above groups them
+          by what they govern.
+        </p>
+      )}
     </div>
   );
 }
