@@ -18,9 +18,17 @@ import {
   riskScore,
   rankAuc,
   calibrateRisk,
+  fileHealth,
+  calibrateFileHealth,
   leaseTargetMatches,
   RISK_WEIGHTS,
   RISK_SATURATION,
+  FILE_HEALTH_WEIGHTS,
+  FILE_HEALTH_SATURATION,
+  FILE_HEALTH_STRUCTURE_WEIGHTS,
+  FILE_HEALTH_STRUCTURE_SATURATION,
+  HISTORY_FACTORS,
+  STRUCTURE_FACTORS,
   DEFECT_FIX_REGEX
 } from '../scripts/git-intel.mjs';
 
@@ -325,6 +333,349 @@ test('riskScore: weights are overridable (calibration hook), defaults documented
 });
 
 // ---------------------------------------------------------------------------
+// fileHealth — per-file danger score, factor by factor on isolated fixtures
+// ---------------------------------------------------------------------------
+
+/** Commit factory with a subject (fileHealth's fix-density reads it). */
+function hcommit(hash, day, subject, files, author = 'A') {
+  return { hash, author, dateIso: daysAgoIso(day), subject, files };
+}
+
+test('fileHealth: churn-percentile isolated — rank in the decay ranking drives the score', () => {
+  // Three single-file, single-author, fix-free histories: only churn recency differs.
+  const commits = [
+    hcommit('t1', 0, 'feat: top', ['top.js']), hcommit('t2', 1, 'feat: top', ['top.js']),
+    hcommit('t3', 2, 'feat: top', ['top.js']),
+    hcommit('m1', 10, 'feat: mid', ['mid.js']), hcommit('m2', 11, 'feat: mid', ['mid.js']),
+    hcommit('m3', 12, 'feat: mid', ['mid.js']),
+    hcommit('l1', 20, 'feat: low', ['low.js']), hcommit('l2', 21, 'feat: low', ['low.js']),
+    hcommit('l3', 22, 'feat: low', ['low.js'])
+  ];
+  const result = fileHealth(commits, { now: NOW });
+  assert.deepEqual(result.files.map((f) => f.file), ['top.js', 'mid.js', 'low.js']);
+  const churnOf = (f) => f.factors.find((x) => x.name === 'churn-percentile');
+  assert.equal(churnOf(result.files[0]).raw, 1);
+  assert.equal(churnOf(result.files[1]).raw, 0.6667);
+  assert.equal(churnOf(result.files[2]).raw, 0.3333);
+  assert.match(churnOf(result.files[0]).evidence, /churn rank #1 of 3/);
+  // scatter 0 (never co-changes), bus raw 1 (single author), fix 0 for all three →
+  // scores differ ONLY through churn: 10×(0.35×pct + 0.2×1)
+  assert.deepEqual(result.files.map((f) => f.score), [5.5, 4.3, 3.2]);
+  // no file flagged: each has 3 commits (= minCommits)
+  assert.ok(result.files.every((f) => !f.lowConfidence));
+});
+
+test('fileHealth: co-change-scatter isolated — distinct partners over support 2, saturating', () => {
+  const commits = [
+    hcommit('c1', 1, 'feat: x', ['hub.js', 'p1.js']), hcommit('c2', 2, 'feat: x', ['hub.js', 'p1.js']),
+    hcommit('c3', 3, 'feat: x', ['hub.js', 'p2.js']), hcommit('c4', 4, 'feat: x', ['hub.js', 'p2.js']),
+    hcommit('c5', 5, 'feat: x', ['hub.js', 'p3.js']), hcommit('c6', 6, 'feat: x', ['hub.js', 'p3.js']),
+    hcommit('c7', 7, 'feat: x', ['hub.js', 'weak.js']) // together only 1× → below support
+  ];
+  const result = fileHealth(commits, { now: NOW });
+  const hub = result.files.find((f) => f.file === 'hub.js');
+  const scatter = hub.factors.find((x) => x.name === 'co-change-scatter');
+  // 3 recurring partners of saturation 8 → raw 0.375; weak.js does NOT count
+  assert.equal(scatter.raw, 3 / FILE_HEALTH_SATURATION.scatterPartners);
+  assert.match(scatter.evidence, /3 distinct partner/);
+  assert.match(scatter.evidence, /p1\.js/);
+  assert.ok(!scatter.evidence.includes('weak.js'));
+  // partner side: p1.js co-changes only with hub.js → raw 1/8, and its 2 commits
+  // put it below minCommits → lowConfidence, not fake precision
+  const p1 = result.files.find((f) => f.file === 'p1.js');
+  assert.equal(p1.factors.find((x) => x.name === 'co-change-scatter').raw, 0.125);
+  assert.equal(p1.lowConfidence, true);
+  assert.equal(p1.reason, 'insufficient history');
+});
+
+test('fileHealth: bus-factor isolated — raw = 1/busFactor', () => {
+  const commits = [
+    hcommit('s1', 1, 'feat: s', ['shared.js'], 'Ann'), hcommit('s2', 2, 'feat: s', ['shared.js'], 'Bob'),
+    hcommit('s3', 3, 'feat: s', ['shared.js'], 'Cid'), hcommit('s4', 4, 'feat: s', ['shared.js'], 'Dee'),
+    hcommit('o1', 5, 'feat: o', ['solo.js'], 'Ann'), hcommit('o2', 6, 'feat: o', ['solo.js'], 'Ann'),
+    hcommit('o3', 7, 'feat: o', ['solo.js'], 'Ann')
+  ];
+  const result = fileHealth(commits, { now: NOW });
+  const busOf = (name) => result.files.find((f) => f.file === name)
+    .factors.find((x) => x.name === 'bus-factor');
+  // 4 equal authors → busFactor 2 → raw 0.5
+  assert.equal(busOf('shared.js').raw, 0.5);
+  assert.match(busOf('shared.js').evidence, /bus factor 2/);
+  // single author → busFactor 1 → raw 1.0, evidence names the owner
+  assert.equal(busOf('solo.js').raw, 1);
+  assert.match(busOf('solo.js').evidence, /bus factor 1 — Ann owns 100% of 3 commits/);
+});
+
+test('fileHealth: fix-density isolated — share of fix-subject commits, bulk sweeps excluded', () => {
+  const bulk = Array.from({ length: 31 }, (_, i) => `bulk/${i}.js`);
+  bulk[0] = 'flaky.js';
+  const commits = [
+    hcommit('f1', 1, 'feat: build the thing', ['flaky.js']),
+    hcommit('f2', 2, 'fix: crash on empty input', ['flaky.js']),
+    hcommit('f3', 3, 'fixes #12 double free', ['flaky.js']),
+    hcommit('f4', 4, 'feat: extend the thing', ['flaky.js']),
+    hcommit('b1', 5, 'fix: mass sweep', bulk), // > maxFilesPerCommit → excluded from density
+    hcommit('g1', 6, 'feat: stable 1', ['stable.js']),
+    hcommit('g2', 7, 'feat: stable 2', ['stable.js']),
+    hcommit('g3', 8, 'feat: stable 3', ['stable.js'])
+  ];
+  const result = fileHealth(commits, { now: NOW });
+  const flaky = result.files.find((f) => f.file === 'flaky.js');
+  const fix = flaky.factors.find((x) => x.name === 'fix-density');
+  // 2 of 4 non-bulk commits are fixes; the 31-file "fix: mass sweep" counts nowhere
+  assert.equal(fix.raw, 0.5);
+  assert.match(fix.evidence, /2 of 4 commits are fix\/revert commits \(50%\)/);
+  // hotspot commit count still sees all 5 commits — only the density excludes bulk
+  assert.equal(flaky.commits, 5);
+  const stable = result.files.find((f) => f.file === 'stable.js');
+  assert.equal(stable.factors.find((x) => x.name === 'fix-density').raw, 0);
+  assert.match(stable.factors.find((x) => x.name === 'fix-density').evidence, /no fix-pattern commits in 3 commits/);
+});
+
+test('fileHealth: <3 commits → scored but flagged lowConfidence with reason', () => {
+  const commits = [
+    hcommit('n1', 1, 'feat: new', ['young.js']),
+    hcommit('n2', 2, 'fix: new', ['young.js'])
+  ];
+  const result = fileHealth(commits, { now: NOW });
+  const young = result.files[0];
+  assert.equal(young.lowConfidence, true);
+  assert.equal(young.reason, 'insufficient history');
+  assert.ok(Number.isFinite(young.score)); // still a real number, just not trusted
+  assert.equal(young.commits, 2);
+  assert.equal(result.params.minCommits, 3);
+});
+
+test('fileHealth: `now` required, weights overridable, defaults stamped into params', () => {
+  assert.throws(() => fileHealth([], {}), TypeError);
+  const commits = [
+    hcommit('a1', 1, 'feat: a', ['a.js']), hcommit('a2', 2, 'feat: a', ['a.js']),
+    hcommit('a3', 3, 'feat: a', ['a.js'])
+  ];
+  const tuned = fileHealth(commits, {
+    now: NOW,
+    weights: { churnPercentile: 1, coChangeScatter: 0, busFactor: 0, fixDensity: 0 }
+  });
+  assert.equal(tuned.files[0].score, 10); // only the saturated churn factor counts
+  const defaults = fileHealth(commits, { now: NOW });
+  assert.deepEqual(defaults.params.weights, { ...FILE_HEALTH_WEIGHTS });
+  assert.equal(defaults.basis, 'measured');
+  assert.equal(defaults.source, 'git-log');
+});
+
+// ---------------------------------------------------------------------------
+// fileHealth — the three OPTIONAL code-structure factors
+// ---------------------------------------------------------------------------
+
+/**
+ * Fixture with a KNOWN history shape, reused by the structure tests and by the
+ * backwards-compatibility snapshot below: core.mjs churns 3× (one fix, two
+ * authors), util.mjs rides along twice, leaf.mjs is touched once.
+ */
+function structureFixture() {
+  return [
+    hcommit('s1', 1, 'feat: core', ['scripts/core.mjs', 'scripts/util.mjs']),
+    hcommit('s2', 2, 'fix: core crash', ['scripts/core.mjs', 'scripts/util.mjs']),
+    hcommit('s3', 3, 'feat: core again', ['scripts/core.mjs'], 'B'),
+    hcommit('s4', 5, 'feat: leaf', ['scripts/leaf.mjs'])
+  ];
+}
+
+/**
+ * BYTE-IDENTITY GUARD. The three structural factors are optional by contract:
+ * a caller that passes no structure data must get exactly what it got before
+ * they existed. This is the stored expectation of the history-only output —
+ * if any of it changes, that contract broke and this test says where.
+ */
+const FILE_HEALTH_HISTORY_ONLY_SNAPSHOT = [
+  "{\"basis\":\"measured\",\"source\":\"git-log\",\"window\":{\"commits\":4,\"since\":\"2026-07-27T00:00:00.000Z\",\"until\":\"2026-07-31T00:00:00.000Z\"}",
+  ",\"params\":{\"weights\":{\"churnPercentile\":0.35,\"coChangeScatter\":0.2,\"busFactor\":0.2,\"fixDensity\":0.25}",
+  ",\"saturation\":{\"scatterPartners\":8},\"scatterSupport\":2,\"minCommits\":3,\"halfLifeDays\":90,\"maxFilesPerCommit\":30,",
+  "\"fixPattern\":\"/\\\\b(fix(es|ed)?|hotfix|revert(s|ed)?|regression)\\\\b/i\",\"now\":\"2026-08-01T00:00:00.000Z\"}",
+  ",\"files\":[{\"file\":\"scripts/core.mjs\",\"score\":6.6,\"commits\":3,\"lastCommit\":\"2026-07-31T00:00:00.000Z\",",
+  "\"factors\":[{\"name\":\"churn-percentile\",\"weight\":0.35,\"raw\":1,\"contribution\":0.35,\"evidence\":\"churn rank #1 of 3 (percentile 1)\"}",
+  ",{\"name\":\"co-change-scatter\",\"weight\":0.2,\"raw\":0.125,\"contribution\":0.025,\"evidence\":\"co-changes with 1 distinct partner(s) (≥2×): scripts/util.mjs\"}",
+  ",{\"name\":\"bus-factor\",\"weight\":0.2,\"raw\":1,\"contribution\":0.2,\"evidence\":\"bus factor 1 — A owns 67% of 3 commits\"}",
+  ",{\"name\":\"fix-density\",\"weight\":0.25,\"raw\":0.3333,\"contribution\":0.0833,\"evidence\":\"1 of 3 commits are fix/revert commits (33%)\"}",
+  "]},{\"file\":\"scripts/util.mjs\",\"score\":5.8,\"commits\":2,\"lastCommit\":\"2026-07-31T00:00:00.000Z\",\"factors\":[{\"name\":\"churn-percentile\",",
+  "\"weight\":0.35,\"raw\":0.6667,\"contribution\":0.2333,\"evidence\":\"churn rank #2 of 3 (percentile 0.67)\"},",
+  "{\"name\":\"co-change-scatter\",\"weight\":0.2,\"raw\":0.125,\"contribution\":0.025,\"evidence\":\"co-changes with 1 distinct partner(s) (≥2×): scripts/core.mjs\"}",
+  ",{\"name\":\"bus-factor\",\"weight\":0.2,\"raw\":1,\"contribution\":0.2,\"evidence\":\"bus factor 1 — A owns 100% of 2 commits\"}",
+  ",{\"name\":\"fix-density\",\"weight\":0.25,\"raw\":0.5,\"contribution\":0.125,\"evidence\":\"1 of 2 commits are fix/revert commits (50%)\"}",
+  "],\"lowConfidence\":true,\"reason\":\"insufficient history\"},{\"file\":\"scripts/leaf.mjs\",\"score\":3.2,\"commits\":1,",
+  "\"lastCommit\":\"2026-07-27T00:00:00.000Z\",\"factors\":[{\"name\":\"churn-percentile\",\"weight\":0.35,\"raw\":0.3333,",
+  "\"contribution\":0.1167,\"evidence\":\"churn rank #3 of 3 (percentile 0.33)\"},{\"name\":\"co-change-scatter\",",
+  "\"weight\":0.2,\"raw\":0,\"contribution\":0,\"evidence\":\"no recurring co-change partners\"},{\"name\":\"bus-factor\",",
+  "\"weight\":0.2,\"raw\":1,\"contribution\":0.2,\"evidence\":\"bus factor 1 — A owns 100% of 1 commits\"},{\"name\":\"fix-density\",",
+  "\"weight\":0.25,\"raw\":0,\"contribution\":0,\"evidence\":\"no fix-pattern commits in 1 commits\"}],\"lowConfidence\":true,",
+  "\"reason\":\"insufficient history\"}]}"
+].join('');
+
+test('fileHealth: WITHOUT structure data the output is byte-identical to the stored expectation', () => {
+  const result = fileHealth(structureFixture(), { now: NOW });
+  assert.equal(JSON.stringify(result), FILE_HEALTH_HISTORY_ONLY_SNAPSHOT);
+  // params must not grow a structure block when nothing structural was passed
+  assert.equal(result.params.structure, undefined);
+  assert.ok(result.files.every((f) => f.factors.length === 4));
+  // passing EMPTY structural inputs must also change nothing (no half-states)
+  assert.equal(
+    JSON.stringify(fileHealth(structureFixture(), { now: NOW, structure: {}, graph: { nodes: [] } })),
+    FILE_HEALTH_HISTORY_ONLY_SNAPSHOT);
+});
+
+test('fileHealth: size factor isolated — codeLines against the saturating threshold', () => {
+  const structure = [
+    { file: 'scripts/core.mjs', lines: 260, codeLines: 200, maxNestingDepth: 0, avgNestingDepth: 0, functionCount: 9, longestFunctionLines: 0 },
+    { file: 'scripts/util.mjs', lines: 900, codeLines: 800, maxNestingDepth: 0, avgNestingDepth: 0, functionCount: 40, longestFunctionLines: 0 }
+  ];
+  const result = fileHealth(structureFixture(), { now: NOW, structure });
+  const sizeOf = (name) => result.files.find((f) => f.file === name).factors.find((x) => x.name === 'size');
+  // 200 of a 400 saturation → 0.5; 800 saturates at 1.0 (never above)
+  assert.equal(sizeOf('scripts/core.mjs').raw, 0.5);
+  assert.equal(sizeOf('scripts/util.mjs').raw, 1);
+  assert.equal(sizeOf('scripts/core.mjs').weight, FILE_HEALTH_STRUCTURE_WEIGHTS.size);
+  assert.match(sizeOf('scripts/core.mjs').evidence, /200 code line\(s\) of 260 across 9 function\(s\)/);
+  assert.match(sizeOf('scripts/core.mjs').evidence, /saturates at 400/);
+  // leaf.mjs has NO structure entry → no structural factors at all for that row
+  const leaf = result.files.find((f) => f.file === 'scripts/leaf.mjs');
+  assert.equal(leaf.factors.length, 4);
+  assert.deepEqual(leaf.factors.map((f) => f.name), [...HISTORY_FACTORS]);
+  // params record what was supplied
+  assert.equal(result.params.structure.measuredFiles, 2);
+  assert.equal(result.params.structure.graphNodes, 0);
+  assert.deepEqual(result.params.structure.weights, { ...FILE_HEALTH_STRUCTURE_WEIGHTS });
+});
+
+test('fileHealth: nesting factor isolated — maxNestingDepth against the saturating threshold', () => {
+  const structure = new Map([
+    ['scripts/core.mjs', { file: 'scripts/core.mjs', lines: 10, codeLines: 0, maxNestingDepth: 3, avgNestingDepth: 1.5, longestFunctionLines: 40 }],
+    ['scripts/util.mjs', { file: 'scripts/util.mjs', lines: 10, codeLines: 0, maxNestingDepth: 12, avgNestingDepth: 6, longestFunctionLines: 0 }]
+  ]);
+  const result = fileHealth(structureFixture(), { now: NOW, structure });
+  const nestOf = (name) => result.files.find((f) => f.file === name).factors.find((x) => x.name === 'nesting');
+  assert.equal(nestOf('scripts/core.mjs').raw, 0.5); // 3 of a 6 saturation
+  assert.equal(nestOf('scripts/util.mjs').raw, 1); // clamped, never 2.0
+  assert.match(nestOf('scripts/core.mjs').evidence, /max nesting depth 3 \(avg 1\.5, longest function 40 lines/);
+  assert.equal(FILE_HEALTH_STRUCTURE_SATURATION.nestingDepth, 6);
+});
+
+test('fileHealth: coupling factor isolated — fanIn + fanOut from the import graph', () => {
+  const graph = {
+    nodes: [
+      { file: 'scripts/core.mjs', imports: 4, importedBy: 6 }, // degree 10 of 20 → 0.5
+      { file: 'scripts/util.mjs', imports: 0, importedBy: 40 }, // degree 40 → saturated
+      { file: 'scripts/leaf.mjs', imports: 0, importedBy: 0 } // degree 0 → 0, still reported
+    ]
+  };
+  const result = fileHealth(structureFixture(), { now: NOW, graph });
+  const coupOf = (name) => result.files.find((f) => f.file === name).factors.find((x) => x.name === 'coupling');
+  assert.equal(coupOf('scripts/core.mjs').raw, 0.5);
+  assert.equal(coupOf('scripts/util.mjs').raw, 1);
+  assert.equal(coupOf('scripts/leaf.mjs').raw, 0);
+  assert.match(coupOf('scripts/core.mjs').evidence, /6 file\(s\) import this, it imports 4 — degree 10/);
+  // the SUM is the hazard: a pure sink and a pure hub of the same degree score alike
+  assert.equal(result.params.structure.graphNodes, 3);
+  assert.equal(result.params.structure.measuredFiles, 0);
+});
+
+test('fileHealth: structural factors renormalize the score, they do not inflate it', () => {
+  const base = fileHealth(structureFixture(), { now: NOW });
+  const core = base.files.find((f) => f.file === 'scripts/core.mjs');
+  // all three structural factors at raw 0 must LOWER the score (more weight, no
+  // extra danger) — proof that the score normalizes over the factors present
+  const withZeros = fileHealth(structureFixture(), {
+    now: NOW,
+    structure: [{ file: 'scripts/core.mjs', lines: 1, codeLines: 0, maxNestingDepth: 0, avgNestingDepth: 0 }],
+    graph: { nodes: [{ file: 'scripts/core.mjs', imports: 0, importedBy: 0 }] }
+  });
+  const zeroed = withZeros.files.find((f) => f.file === 'scripts/core.mjs');
+  assert.equal(zeroed.factors.length, 7);
+  assert.ok(zeroed.score < core.score, `${zeroed.score} should be below ${core.score}`);
+  // and all three saturated must raise it
+  const withMax = fileHealth(structureFixture(), {
+    now: NOW,
+    structure: [{ file: 'scripts/core.mjs', lines: 9999, codeLines: 9999, maxNestingDepth: 99, avgNestingDepth: 9 }],
+    graph: { nodes: [{ file: 'scripts/core.mjs', imports: 99, importedBy: 99 }] }
+  });
+  assert.ok(withMax.files.find((f) => f.file === 'scripts/core.mjs').score > core.score);
+  // structure weights are overridable like every other weight
+  const tuned = fileHealth(structureFixture(), {
+    now: NOW,
+    weights: { churnPercentile: 0, coChangeScatter: 0, busFactor: 0, fixDensity: 0 },
+    structureWeights: { size: 1, nesting: 0, coupling: 0 },
+    structure: [{ file: 'scripts/core.mjs', lines: 999, codeLines: 999, maxNestingDepth: 0, avgNestingDepth: 0 }]
+  });
+  assert.equal(tuned.files.find((f) => f.file === 'scripts/core.mjs').score, 10);
+});
+
+test('fileHealth: structure input accepts a measureFiles() result, a map, and an array alike', () => {
+  const measures = [{ file: 'scripts/core.mjs', lines: 500, codeLines: 400, maxNestingDepth: 6, avgNestingDepth: 2 }];
+  const asArray = fileHealth(structureFixture(), { now: NOW, structure: measures });
+  const asWrapped = fileHealth(structureFixture(), { now: NOW, structure: { files: measures, skipped: [] } });
+  const asMap = fileHealth(structureFixture(), { now: NOW, structure: new Map([['scripts/core.mjs', measures[0]]]) });
+  const asObject = fileHealth(structureFixture(), { now: NOW, structure: { 'scripts/core.mjs': measures[0] } });
+  assert.equal(JSON.stringify(asArray), JSON.stringify(asWrapped));
+  assert.equal(JSON.stringify(asArray), JSON.stringify(asMap));
+  assert.equal(JSON.stringify(asArray), JSON.stringify(asObject));
+  // determinism with structure in play
+  assert.equal(JSON.stringify(asArray), JSON.stringify(fileHealth(structureFixture(), { now: NOW, structure: measures })));
+});
+
+// ---------------------------------------------------------------------------
+// calibrateFileHealth — per-factor discrimination
+// ---------------------------------------------------------------------------
+
+test('calibrateFileHealth: reports AUC per factor next to the combined AUC', () => {
+  // horizon 30 puts the cut at day 30: hot.js (fixed on day 40) is the only
+  // defective file, calm.js and quiet.js are the clean controls.
+  const result = calibrateFileHealth(healthCalFixture(), { horizonDays: 30 });
+  assert.deepEqual(result.perFactor.map((f) => f.name), [...HISTORY_FACTORS]);
+  assert.ok(result.perFactor.every((f) => f.kind === 'history'));
+  assert.ok(result.perFactor.every((f) => f.evaluated === result.evaluated));
+  // a factor with the same raw for every file cannot discriminate → AUC 0.5
+  const bus = result.perFactor.find((f) => f.name === 'bus-factor');
+  assert.equal(bus.auc, 0.5);
+  // churn separates the fixed file from the clean one perfectly on this fixture
+  assert.equal(result.perFactor.find((f) => f.name === 'churn-percentile').auc, 1);
+  // without structural input the comparison degenerates cleanly, no fake delta
+  assert.equal(result.historyOnlyAuc, result.auc);
+  assert.equal(result.structureOnlyAuc, null);
+  assert.equal(result.structureDelta, null);
+  assert.equal(result.structureCaveat, undefined);
+  assert.equal(result.comparison.files, result.evaluated);
+  assert.match(result.comparison.basis, /no structural factors supplied/);
+});
+
+test('calibrateFileHealth: with structure, the delta is measured on ONE population and caveated', () => {
+  const commits = healthCalFixture();
+  const structure = [
+    // hot.js is the file that gets fixed after the cut — make it the big one
+    { file: 'hot.js', lines: 900, codeLines: 800, maxNestingDepth: 9, avgNestingDepth: 3 },
+    { file: 'calm.js', lines: 60, codeLines: 40, maxNestingDepth: 1, avgNestingDepth: 0.5 }
+  ];
+  const graph = { nodes: [{ file: 'hot.js', imports: 10, importedBy: 20 }, { file: 'calm.js', imports: 0, importedBy: 1 }] };
+  const result = calibrateFileHealth(commits, { horizonDays: 30, structure, graph });
+
+  assert.deepEqual(result.perFactor.map((f) => f.name), [...HISTORY_FACTORS, ...STRUCTURE_FACTORS]);
+  assert.deepEqual(
+    result.perFactor.filter((f) => f.kind === 'structure').map((f) => f.name),
+    [...STRUCTURE_FACTORS]);
+  // structure alone ranks hot.js above calm.js here → perfect separation
+  assert.equal(result.structureOnlyAuc, 1);
+  assert.equal(typeof result.structureDelta, 'number');
+  // the comparison is restricted to files that actually carry structure factors
+  assert.equal(result.comparison.files, 2);
+  assert.match(result.comparison.basis, /same population on both sides/);
+  assert.equal(result.comparison.delta, result.structureDelta);
+  // the leakage caveat is mandatory whenever structure took part
+  assert.match(result.structureCaveat, /CURRENT working tree/);
+  assert.match(result.verdict, /structure/);
+  // determinism
+  assert.equal(JSON.stringify(result),
+    JSON.stringify(calibrateFileHealth(healthCalFixture(), { horizonDays: 30, structure, graph })));
+});
+
+// ---------------------------------------------------------------------------
 // Determinism contract: same fixture + same now ⇒ byte-identical JSON
 // ---------------------------------------------------------------------------
 
@@ -345,7 +696,8 @@ test('determinism: same inputs and same now produce byte-identical JSON', () => 
         coChange: coChange(commits),
         blastRadius: { dependents: ['x.mjs', 'y.mjs'] },
         leases: [{ target: 'scripts/**', lockedBy: 'codex-a', until: '', notes: '' }]
-      })
+      }),
+      health: fileHealth(commits, { now: NOW, halfLifeDays: 90 })
     });
   };
   // Fixtures are rebuilt from scratch on each call — only the values match.
@@ -452,6 +804,101 @@ test('calibrateRisk: no leakage — scores come only from the strict prefix', ()
 
 test('calibrateRisk: deterministic — byte-identical JSON on rebuilt fixtures', () => {
   const run = () => JSON.stringify(calibrateRisk(calibrationFixture(), { window: 9 }));
+  assert.equal(run(), run());
+});
+
+// ---------------------------------------------------------------------------
+// calibrateFileHealth — cut-point replay: do today's scores predict fixes?
+// ---------------------------------------------------------------------------
+
+function hCal(hash, day, subject, files) {
+  return { hash, author: 'Cal', dateIso: new Date(CAL_BASE + day * DAY_MS).toISOString(), subject, files };
+}
+
+/**
+ * PLANTED structure: hot.js is churned AND repeatedly fixed before the cut,
+ * then fixed AGAIN after the cut (the label); calm.js/quiet.js stay clean;
+ * born-late.js first appears after the cut (leakage probe); a late chore
+ * commit fixes the log end so cut = day 30 at horizonDays 30.
+ */
+function healthCalFixture() {
+  return [
+    hCal('h1', 0, 'feat: hot 1', ['hot.js']),
+    hCal('h2', 1, 'feat: hot 2', ['hot.js']),
+    hCal('hf1', 2, 'fix: hot 1', ['hot.js']),
+    hCal('h3', 3, 'feat: hot 3', ['hot.js']),
+    hCal('hf2', 4, 'fix: hot 2', ['hot.js']),
+    hCal('h4', 5, 'feat: hot 4', ['hot.js']),
+    hCal('h5', 6, 'feat: hot 5', ['hot.js']),
+    hCal('c1', 7, 'feat: calm 1', ['calm.js']),
+    hCal('c2', 8, 'feat: calm 2', ['calm.js']),
+    hCal('c3', 9, 'feat: calm 3', ['calm.js']),
+    hCal('q1', 10, 'feat: quiet 1', ['quiet.js']),
+    hCal('q2', 11, 'feat: quiet 2', ['quiet.js']),
+    hCal('q3', 12, 'feat: quiet 3', ['quiet.js']),
+    hCal('F1', 40, 'fix: hot exploded again', ['hot.js']),
+    hCal('L1', 45, 'feat: born after the cut', ['born-late.js']),
+    hCal('Z1', 60, 'chore: close observation window', ['closer.js'])
+  ];
+}
+
+test('calibrateFileHealth: the repeatedly-fixed file wins the ranking → AUC beats random', () => {
+  const result = calibrateFileHealth(healthCalFixture(), { horizonDays: 30 });
+  // cut = 30d before the log end (day 60) → day 30
+  assert.equal(result.params.cut, new Date(CAL_BASE + 30 * DAY_MS).toISOString());
+  // prefix files only: hot/calm/quiet; born-late.js and closer.js are post-cut
+  assert.equal(result.evaluated, 3);
+  assert.equal(result.futureCommits, 3);
+  assert.equal(result.futureFixCommits, 1);
+  const byFile = new Map(result.files.map((r) => [r.file, r]));
+  // hot.js: churn rank 1 (raw 0.35) + bus 1 (0.2) + fix density 2/7 (0.0714) → 6.2
+  assert.equal(byFile.get('hot.js').score, 6.2);
+  assert.equal(byFile.get('hot.js').defective, true);
+  assert.equal(byFile.get('hot.js').fixedBy, 'F1');
+  assert.equal(byFile.get('calm.js').defective, false);
+  assert.equal(byFile.get('quiet.js').defective, false);
+  assert.equal(result.defective, 1);
+  // the planted structure separates perfectly → AUC 1
+  assert.equal(result.auc, 1);
+  assert.ok(result.auc > 0.5);
+  assert.match(result.verdict, /AUC 1\.00 over 3 files/);
+  assert.match(result.verdict, /better than random/);
+  assert.match(result.verdict, /gate \(0\.6\) met/);
+  // honest methodology in the output itself
+  assert.match(result.method, /self-calibration/);
+  assert.match(result.method, /NOT a cross-repo benchmark/);
+  assert.equal(result.basis, 'measured');
+  assert.equal(result.quantiles.reduce((s, q) => s + q.files, 0), 3);
+});
+
+test('calibrateFileHealth: no leakage — files first committed after the cut are never scored', () => {
+  const result = calibrateFileHealth(healthCalFixture(), { horizonDays: 30 });
+  const scored = new Set(result.files.map((r) => r.file));
+  assert.ok(!scored.has('born-late.js')); // exists only after the cut
+  assert.ok(!scored.has('closer.js'));
+  // and the prefix score of hot.js uses ONLY pre-cut history: 2 of its 7
+  // pre-cut commits are fixes (the post-cut F1 fix must not inflate density)
+  const hot = fileHealth(
+    healthCalFixture().filter((c) => Date.parse(c.dateIso) <= CAL_BASE + 30 * DAY_MS),
+    { now: CAL_BASE + 30 * DAY_MS }
+  ).files.find((f) => f.file === 'hot.js');
+  assert.match(hot.factors.find((x) => x.name === 'fix-density').evidence, /2 of 7 commits/);
+});
+
+test('calibrateFileHealth: window limits the scoring prefix; one-class window → AUC undefined', () => {
+  // window 2 keeps only the last two pre-cut commits (q2, q3) → quiet.js alone,
+  // 2 commits → lowConfidence; no defective/clean split → AUC undefined.
+  const result = calibrateFileHealth(healthCalFixture(), { horizonDays: 30, window: 2 });
+  assert.equal(result.evaluated, 1);
+  assert.equal(result.files[0].file, 'quiet.js');
+  assert.equal(result.files[0].lowConfidence, true);
+  assert.equal(result.auc, null);
+  assert.match(result.verdict, /AUC undefined/);
+  assert.match(result.verdict, /do NOT trust/);
+});
+
+test('calibrateFileHealth: deterministic — byte-identical JSON on rebuilt fixtures', () => {
+  const run = () => JSON.stringify(calibrateFileHealth(healthCalFixture(), { horizonDays: 30 }));
   assert.equal(run(), run());
 });
 
@@ -638,4 +1085,271 @@ test('brain-intel.mjs calibrate: AUC beats random on the scripted defect structu
   assert.equal(human.status, 0, human.stderr);
   assert.match(human.stdout, /NOT a cross-repo benchmark/);
   assert.match(human.stdout.trim().split('\n').at(-1), /^AUC 0\.70/);
+});
+
+test('brain-intel.mjs health --json: scored files, lowConfidence flag, mandatory action', () => {
+  const cwd = makeFixtureRepo();
+  const args = ['health', '--json', '--now', '2026-03-01T00:00:00Z'];
+  const r = runIntel(cwd, args);
+  assert.equal(r.status, 0, r.stderr);
+  const parsed = JSON.parse(r.stdout);
+  assert.equal(parsed.basis, 'measured');
+  assert.equal(parsed.source, 'git-log');
+  // a.js/b.js churn ranks 1/2 (tie broken byString), c.js rank 3 with 1 commit:
+  //   a: 10×(0.35×1 + 0.2×(1/8) + 0.2×1) = 5.8
+  //   b: 10×(0.35×⅔ + 0.025 + 0.2) = 4.6
+  //   c: 10×(0.35×⅓ + 0 + 0.2) = 3.2, flagged (1 commit < 3)
+  assert.deepEqual(parsed.files.map((f) => f.file), ['a.js', 'b.js', 'c.js']);
+  assert.deepEqual(parsed.files.map((f) => f.score), [5.8, 4.6, 3.2]);
+  assert.equal(parsed.files[0].lowConfidence, undefined);
+  assert.equal(parsed.files[2].lowConfidence, true);
+  assert.equal(parsed.files[2].reason, 'insufficient history');
+  // every factor carries evidence — no bare numbers
+  for (const f of parsed.files) {
+    assert.equal(f.factors.length, 4);
+    for (const x of f.factors) assert.ok(x.evidence.length > 0, x.name);
+  }
+  // mandatory action line: top file has bus factor 1 → pair-or-document wording
+  assert.match(parsed.nextAction, /^→ highest-risk file a\.js also has bus factor 1/);
+  assert.match(parsed.nextAction, /risk --files a\.js/);
+  // read-only discipline: health must never create brain state
+  assert.equal(fs.existsSync(path.join(cwd, '.project-brain')), false);
+
+  // byte-determinism as a CLI-level contract (same repo + same --now)
+  const again = runIntel(cwd, args);
+  assert.equal(r.stdout, again.stdout);
+
+  // human output: table, lowConfidence legend, provenance, action line last
+  const human = runIntel(cwd, ['health', '--limit', '2', '--now', '2026-03-01T00:00:00Z']);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /TOP FACTOR/);
+  assert.match(human.stdout, /low confidence/);
+  assert.match(human.stdout, /uncalibrated defaults/);
+  assert.match(human.stdout, /basis: measured · source: git-log/);
+  assert.match(human.stdout.trim().split('\n').at(-1), /^→ highest-risk file a\.js/);
+  // --limit 2 → c.js not in the table (but the legend still explains the flag)
+  assert.ok(!/c\.js/.test(human.stdout.split('\n').filter((l) => /^\s+\d+\s/.test(l)).join('\n')));
+});
+
+/**
+ * Scripted repo with planted health structure: hot.js churns 4× and gets a
+ * post-cut "fix:", calm.js churns 3× and stays clean, late.js is born after
+ * the cut (leakage probe through real git).
+ */
+function makeHealthCalRepo() {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'git-intel-health-'));
+  git(cwd, ['init', '-q']);
+  git(cwd, ['config', 'user.email', 'test@example.com']);
+  git(cwd, ['config', 'user.name', 'Test User']);
+  git(cwd, ['config', 'commit.gpgsign', 'false']);
+  const commits = [
+    { day: 1, msg: 'feat: hot 1', files: ['hot.js'] },
+    { day: 2, msg: 'feat: calm 1', files: ['calm.js'] },
+    { day: 3, msg: 'feat: hot 2', files: ['hot.js'] },
+    { day: 4, msg: 'feat: calm 2', files: ['calm.js'] },
+    { day: 5, msg: 'feat: hot 3', files: ['hot.js'] },
+    { day: 6, msg: 'feat: calm 3', files: ['calm.js'] },
+    { day: 7, msg: 'feat: hot 4', files: ['hot.js'] },
+    { day: 20, msg: 'fix: hot regressed', files: ['hot.js'] },
+    { day: 22, msg: 'feat: late arrival', files: ['late.js'] }
+  ];
+  for (const c of commits) {
+    const date = new Date(Date.parse('2026-01-01T00:00:00Z') + c.day * DAY_MS).toISOString();
+    for (const f of c.files) fs.appendFileSync(path.join(cwd, f), `${c.msg}\n`);
+    git(cwd, ['add', ...c.files]);
+    git(cwd, ['commit', '-q', '-m', c.msg], { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
+  }
+  return cwd;
+}
+
+test('brain-intel.mjs health-calibrate: receipt with AUC on the planted structure', () => {
+  const cwd = makeHealthCalRepo();
+  // horizon 14d before the log end (day 22) → cut day 8: hot 4×, calm 3× scored;
+  // the day-20 fix labels hot.js defective; late.js must never be scored.
+  const args = ['health-calibrate', '--json', '--horizon-days', '14'];
+  const r = runIntel(cwd, args);
+  assert.equal(r.status, 0, r.stderr);
+  const parsed = JSON.parse(r.stdout);
+  assert.equal(parsed.evaluated, 2);
+  assert.equal(parsed.defective, 1);
+  const byFile = new Map(parsed.files.map((f) => [f.file, f]));
+  assert.equal(byFile.get('hot.js').defective, true);
+  assert.ok(byFile.get('hot.js').fixedBy); // real git hash of the fix commit
+  assert.equal(byFile.get('calm.js').defective, false);
+  assert.ok(!byFile.has('late.js')); // born after the cut → never scored
+  assert.ok(byFile.get('hot.js').score > byFile.get('calm.js').score);
+  assert.equal(parsed.auc, 1);
+  assert.match(parsed.verdict, /AUC 1\.00 over 2 files/);
+  assert.match(parsed.method, /NOT a cross-repo benchmark/);
+
+  // byte-determinism as a CLI-level contract (no clock enters health-calibrate)
+  const again = runIntel(cwd, args);
+  assert.equal(r.stdout, again.stdout);
+
+  // human output: methodology disclosure + verdict as the final line
+  const human = runIntel(cwd, ['health-calibrate', '--horizon-days', '14']);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /NOT a cross-repo benchmark/);
+  assert.match(human.stdout.trim().split('\n').at(-1), /^AUC 1\.00/);
+});
+
+/**
+ * Scripted repo with PLANTED STRUCTURE (not just history): one oversized,
+ * deeply nested file, one hub imported by 22 modules, and a two-file import
+ * cycle — so every refactorPlan rule has something real to fire on.
+ */
+function bigJsSource() {
+  const lines = ['export function giant(input) {'];
+  for (let i = 0; i < 70; i++) lines.push(`  const v${i} = input + ${i};`);
+  lines.push('  if (input) {', '    if (input > 1) {', '      if (input > 2) {',
+    '        if (input > 3) {', '          if (input > 4) {', '            return v0;',
+    '          }', '        }', '      }', '    }', '  }', '  return 0;', '}');
+  for (let i = 0; i < 15; i++) {
+    lines.push(`export function helper${i}(a) {`);
+    for (let k = 0; k < 20; k++) lines.push(`  const t${k} = a + ${k};`);
+    lines.push('  return a;', '}');
+  }
+  return lines.join('\n') + '\n';
+}
+
+function makeStructureRepo() {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'git-intel-struct-'));
+  git(cwd, ['init', '-q']);
+  git(cwd, ['config', 'user.email', 'test@example.com']);
+  git(cwd, ['config', 'user.name', 'Test User']);
+  git(cwd, ['config', 'commit.gpgsign', 'false']);
+  const write = (rel, text) => fs.writeFileSync(path.join(cwd, rel), text);
+  write('big.js', bigJsSource());
+  write('hub.js', 'export const HUB = 1;\n');
+  for (let i = 0; i < 22; i++) {
+    write(`u${i}.js`, `import { HUB } from './hub.js';\nexport const u${i} = HUB;\n`);
+  }
+  write('cycA.js', "import { b } from './cycB.js';\nexport const a = b;\n");
+  write('cycB.js', "import { a } from './cycA.js';\nexport const b = a;\n");
+  const dates = ['2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z'];
+  dates.forEach((date, i) => {
+    fs.appendFileSync(path.join(cwd, 'big.js'), `// touch ${i}\n`);
+    git(cwd, ['add', '-A']);
+    git(cwd, ['commit', '-q', '-m', `feat: structure ${i}`],
+      { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date });
+  });
+  return cwd;
+}
+
+test('brain-intel.mjs health --structure: structural columns and factors, opt-in only', () => {
+  const cwd = makeStructureRepo();
+  const nowFlag = ['--now', '2026-03-01T00:00:00Z'];
+
+  // default stays history-only: no structural factor, no structure block
+  const plain = JSON.parse(runIntel(cwd, ['health', '--json', ...nowFlag]).stdout);
+  assert.ok(plain.files.every((f) => f.factors.length === 4));
+  assert.equal(plain.params.structure, undefined);
+  assert.equal(plain.files[0].structure, undefined);
+  assert.equal(plain.structureNote, undefined);
+
+  const r = runIntel(cwd, ['health', '--structure', '--json', ...nowFlag]);
+  assert.equal(r.status, 0, r.stderr);
+  const parsed = JSON.parse(r.stdout);
+  const byFile = new Map(parsed.files.map((f) => [f.file, f]));
+  const big = byFile.get('big.js');
+  assert.deepEqual(big.factors.map((f) => f.name), [...HISTORY_FACTORS, ...STRUCTURE_FACTORS]);
+  assert.equal(big.structure.maxNestingDepth, 6);
+  assert.equal(big.structure.functionCount, 16);
+  assert.ok(big.structure.codeLines >= 400);
+  assert.equal(byFile.get('hub.js').graph.fanIn, 22);
+  assert.equal(byFile.get('u0.js').graph.fanOut, 1);
+  assert.match(parsed.structureNote, /shape metrics, not semantics/);
+  assert.equal(parsed.params.structure.weights.size, FILE_HEALTH_STRUCTURE_WEIGHTS.size);
+
+  // human table gains the structural columns
+  const human = runIntel(cwd, ['health', '--structure', '--limit', '30', ...nowFlag]);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /LINES\s+DEPTH\s+IN\/OUT/);
+  assert.match(human.stdout, /Structure: \d+ file\(s\) measured, \d+ import edge\(s\)/);
+  assert.match(human.stdout.trim().split('\n').at(-1), /^→ /);
+
+  // byte-determinism as a CLI contract, structure included
+  assert.equal(r.stdout, runIntel(cwd, ['health', '--structure', '--json', ...nowFlag]).stdout);
+  // read-only discipline holds
+  assert.equal(fs.existsSync(path.join(cwd, '.project-brain')), false);
+});
+
+test('brain-intel.mjs health --plans: named moves with the number that fired them', () => {
+  const cwd = makeStructureRepo();
+  const nowFlag = ['--now', '2026-03-01T00:00:00Z'];
+  const r = runIntel(cwd, ['health', '--plans', '--json', '--limit', '30', ...nowFlag]);
+  assert.equal(r.status, 0, r.stderr);
+  const parsed = JSON.parse(r.stdout);
+  const plansOf = (file) => parsed.files.find((f) => f.file === file).plans;
+
+  // --plans implies --structure: the measurements the moves rest on are present
+  assert.ok(parsed.files.every((f) => Array.isArray(f.plans)));
+  assert.ok(parsed.params.structure);
+
+  const bigMoves = plansOf('big.js');
+  const split = bigMoves.find((p) => p.move === 'split-file');
+  assert.match(split.why, /code lines across 16 functions — split by responsibility/);
+  assert.match(split.evidence, /codeLines \d+ ≥ 400, functions 16 ≥ 12/);
+  assert.ok(bigMoves.some((p) => p.move === 'reduce-nesting'));
+  assert.ok(bigMoves.some((p) => p.move === 'extract-function'));
+
+  const hubMoves = plansOf('hub.js');
+  const fanIn = hubMoves.find((p) => p.move === 'reduce-fan-in');
+  assert.match(fanIn.why, /^22 file\(s\) import this/);
+  assert.equal(fanIn.evidence, 'fanIn 22 ≥ 20');
+
+  const cycle = plansOf('cycA.js').find((p) => p.move === 'break-cycle');
+  assert.equal(cycle.evidence, 'cycle: cycA.js → cycB.js → cycA.js');
+
+  // silence where nothing fires: a two-line importer gets no shape advice
+  const leafMoves = plansOf('u0.js');
+  assert.equal(leafMoves.some((p) => ['split-file', 'reduce-nesting', 'extract-function', 'reduce-fan-in'].includes(p.move)), false);
+
+  // the mandatory action line becomes the MOVE, not a restatement of the score
+  assert.match(parsed.nextAction, /^→ \S+ scores \d/);
+  assert.match(parsed.nextAction, /(split-file|reduce-nesting|reduce-fan-in|break-cycle|extract-function|add-tests|add-owner):/);
+
+  const human = runIntel(cwd, ['health', '--plans', '--limit', '30', ...nowFlag]);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /Refactor plans \(top \d+ by danger/);
+  assert.match(human.stdout, /· split-file/);
+  assert.match(human.stdout, /· break-cycle/);
+  assert.equal(r.stdout, runIntel(cwd, ['health', '--plans', '--json', '--limit', '30', ...nowFlag]).stdout);
+});
+
+test('brain-intel.mjs health-calibrate: per-factor AUC table, with and without structure', () => {
+  const cwd = makeHealthCalRepo();
+
+  const plain = JSON.parse(runIntel(cwd, ['health-calibrate', '--json', '--horizon-days', '14']).stdout);
+  assert.deepEqual(plain.perFactor.map((f) => f.name), [...HISTORY_FACTORS]);
+  assert.ok(plain.perFactor.every((f) => f.kind === 'history'));
+  assert.equal(plain.structureDelta, null);
+  assert.equal(plain.structureCaveat, undefined);
+
+  const r = runIntel(cwd, ['health-calibrate', '--structure', '--json', '--horizon-days', '14']);
+  assert.equal(r.status, 0, r.stderr);
+  const parsed = JSON.parse(r.stdout);
+  assert.deepEqual(parsed.perFactor.map((f) => f.name), [...HISTORY_FACTORS, ...STRUCTURE_FACTORS]);
+  assert.ok(parsed.comparison.files > 0);
+  assert.match(parsed.comparison.basis, /same population on both sides/);
+  assert.match(parsed.structureCaveat, /upper bound/);
+
+  const human = runIntel(cwd, ['health-calibrate', '--structure', '--horizon-days', '14']);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /Per-factor discrimination \(AUC of each factor ALONE/);
+  assert.match(human.stdout, /FACTOR\s+KIND\s+WEIGHT\s+FILES\s+AUC/);
+  assert.match(human.stdout, /NOT directly comparable/);
+  assert.match(human.stdout, /Same-population comparison/);
+  assert.match(human.stdout.trim().split('\n').at(-1), /^AUC /);
+  // byte-determinism (no clock enters health-calibrate)
+  assert.equal(r.stdout, runIntel(cwd, ['health-calibrate', '--structure', '--json', '--horizon-days', '14']).stdout);
+});
+
+test('brain-intel.mjs --help documents the structural flags', () => {
+  const cwd = makeFixtureRepo();
+  const help = runIntel(cwd, ['--help']);
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /--structure/);
+  assert.match(help.stdout, /--plans/);
+  assert.match(help.stdout, /Implies --structure/);
 });

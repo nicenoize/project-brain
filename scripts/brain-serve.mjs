@@ -1,10 +1,12 @@
 /**
  * brain:serve — local Control-Room daemon (strategy doc §M2.75).
  *
- * A read-only JSON API + SSE stream over the existing brain state
+ * A JSON API + SSE stream over the existing brain state
  * (active_state.md, events.jsonl, decisions/grills/findings, git-intel),
- * plus static serving for the future `ui/dist` bundle. Node `http` only —
- * no framework (AGPL-client house rule, no new deps).
+ * the M2.75 runner write API (start/stop/tail supervised runner processes
+ * via runner-supervisor.mjs — a lib, not a command script), plus static
+ * serving for the future `ui/dist` bundle. Node `http` only — no framework
+ * (AGPL-client house rule, no new deps).
  *
  *   brain-serve.mjs [--port N] [--open]
  *
@@ -17,11 +19,18 @@
  *   (c) Origin/Host validation: a present Origin that is not
  *       http://127.0.0.1[:port] / http://localhost[:port] → 403; a Host
  *       header that is not a localhost variant → 403 (DNS-rebinding defense);
- *   (d) the API is READ-ONLY in this milestone — there is no endpoint that
- *       accepts commands or paths to execute, and non-GET methods are 405;
+ *   (d) the ONLY write endpoints are POST /api/runners/start|stop and
+ *       /api/leases/claim|release (lease targets validated against the
+ *       canonical grammar; overlapping claims gated like the brief gate), and the
+ *       runner command is NEVER read from any request — it resolves from
+ *       BRAIN_RUNNER_CMD env, else the `runnerCmd` key in
+ *       .project-brain/config.json; the API references tasks/runner ids
+ *       only. POSTs additionally require Content-Type application/json and
+ *       cap bodies at 16KB (413; malformed JSON → 400). Every other method/
+ *       path combination on /api is 405;
  *   (e) no CORS headers, ever.
  *
- * Endpoints (all GET, all token-gated except the static page):
+ * Endpoints (token-gated except the static page; GET unless noted):
  *   /api/state             workstreams+leases via activeStateJson() —
  *                          guarded read-only: never creates active_state.md
  *   /api/events?limit=N    tail of .project-brain/events.jsonl (absent → [])
@@ -31,9 +40,125 @@
  *                          script itself is never imported)
  *   /api/records?type=decision|grill|finding   record files + frontmatter title
  *   /api/meta              version, root, index-provider availability
+ *   /api/changed           staged/unstaged file lists + current branch
+ *                          (spawnSync git diff; not-a-repo → empty arrays)
+ *   /api/risk?files=a,b    riskScore factors over cachedCommits (leases from
+ *                          active-state read-only, blast radius from the
+ *                          multi-language import scan — it fires in any
+ *                          language now, not just TS) + calibrateRisk cached
+ *                          per HEAD; default change-set staged ∪ unstaged,
+ *                          empty → {score:null, reason:'no-changes'}
+ *   /api/blast?files=a,b&depth=N
+ *                          "What breaks if I change this?" — depth-limited
+ *                          blast radius (default 2, cap 3) around the change
+ *                          set. Blends TWO edge kinds and labels each one:
+ *                          'imports' edges are MEASURED (import-graph.mjs
+ *                          resolved static imports across JS/TS/Python/Go/
+ *                          Ruby/PHP/Rust, edge confidence 1.0 exact / 0.8
+ *                          inferred / 0.6 alias-or-search) and 'co-change'
+ *                          edges are INFERRED (git history, confidence =
+ *                          P(b|a)) — the UI shows provenance per edge
+ *                          (Praktiken-Katalog: measured vs inferred). Nodes
+ *                          are scored by graph proximity × edge confidence so
+ *                          the list ranks "most likely to break"; measured
+ *                          import edges outrank inferred history at equal
+ *                          depth. `coverage` reports what the scan actually
+ *                          saw (filesScanned/resolvedEdges/unresolvedSpecs/
+ *                          byLang). No scannable file, or a scan that resolved
+ *                          no edge at all → graphAvailable:false + `reason`,
+ *                          and the co-change edges are STILL returned — the
+ *                          honest degradation. Node cap 60 (→ truncated:true,
+ *                          highest-scoring kept); the graph and the adjacency
+ *                          are cached per HEAD like intelCache (blastStats()
+ *                          and graphStats() are the test hooks)
+ *   /api/graph             The graph's own answers, unanchored to any change
+ *                          set: bounded import `cycles` (max 20, length ≤ 8),
+ *                          dead-code `orphans` (CANDIDATES + caveat + the
+ *                          entry-point patterns excluded), `fanIn`/`fanOut`
+ *                          rankings (max 25 each) and the same `coverage`.
+ *                          `truncated` says when a cap bit; a repo with no
+ *                          scannable source is a degraded 200 with `reason`
+ *   /api/security          Dependency advisories WITH REACHABILITY + secret
+ *                          LOCATIONS (brain-security.mjs's pure core). Each
+ *                          advisory is `reachable` (some scanned file imports
+ *                          the vulnerable package), `transitive-only` (nothing
+ *                          imports it) or `unknown` (no graph) — an advisory
+ *                          nothing imports is not the same problem as one
+ *                          imported by 12 files, and the response says which.
+ *                          Every tool is optional: `provenance.tools` reports
+ *                          which ran and which were absent, and a scanner that
+ *                          did not run can never produce a clean bill of health
+ *                          (`claims.cleanBillOfHealth`). NEVER contains a secret
+ *                          VALUE — only {file, line, rule, severity}. npm audit
+ *                          is slow (seconds), so the whole report is cached per
+ *                          HEAD with a TTL and the response reports the cache
+ *                          age in `state_age` + a `cache` block. Absent tools →
+ *                          degraded 200 with reasons, never a 500
+ *   /api/next              brain:route's exported PURE rule engine over
+ *                          minimal read-only sensed signals — ranked next
+ *                          actions (≤5, each tagged auto|human)
+ *   /api/brief?files=a,b   brain-brief's exported pure core (leases +
+ *                          governing ADRs) + a ~1200-token brain:pack
+ *                          for-agent preview (provider 'none' or any throw →
+ *                          packPreview null + packWarning, never a 500)
+ *   /api/map               Doc-Navigator map: every .project-brain/modules/*
+ *                          record with its derived fileGlobs, linked
+ *                          decision/feature/finding counts, and a MEASURED
+ *                          staleness flag (record older than
+ *                          BRAIN_STALE_DOC_DAYS, default 60, OR older than the
+ *                          newest commit touching its globs — "the docs are
+ *                          drifting from the code", proven from git, not
+ *                          guessed) + `orphans`: top-level code areas with no
+ *                          module record at all — the honest gap. We do NOT
+ *                          generate docs from code; we make the human/agent-
+ *                          authored records navigable and connect them to files
+ *   /api/doc?file=<p>      One .project-brain record: frontmatter + body
+ *                          (capped 64KB) + outgoing links (decisions, modules,
+ *                          files). `file` is repo-relative and validated: it
+ *                          must resolve INSIDE .project-brain and end in .md —
+ *                          traversal, absolute paths and non-.md → 400, and
+ *                          nothing outside the brain dir is ever opened
+ *   /api/fleet             "Which of my repos needs attention right now?" — the
+ *                          multi-repo view for the solo agent-manager. Fleet
+ *                          discovery is projects.mjs's contract (sibling dirs
+ *                          one level under the fleet root, ≥2 → fleet mode);
+ *                          this endpoint adds per-repo WORK STATE (dirty
+ *                          counts, branch, ahead/behind, open workstreams,
+ *                          active leases, lease conflicts, last commit /
+ *                          staleness) and ranks it by an `attention` score
+ *                          0-100 whose every contributing `reason` carries a
+ *                          human message WITH the number in it. Weights are
+ *                          reviewable defaults (FLEET_ATTENTION_WEIGHTS), not
+ *                          a learned model; a quiet repo scores 0 with an
+ *                          EMPTY reasons array — we never invent urgency.
+ *                          Single repo → degraded:true + reason, active repo
+ *                          still reported. Cost: exactly two git calls per
+ *                          repo, hard cap 25 projects (truncated:true beyond),
+ *                          memoized for a short TTL (fleetStats() is the test
+ *                          hook) so a dashboard poll cannot spawn 2N git
+ *                          processes a second. A repo that fails (not a git
+ *                          repo, permission denied) yields `error` and never
+ *                          breaks the fleet
+ *   /api/why?file=<p>      "Why is this code file like this": its module, the
+ *                          governing ADRs (module/glob match, mirroring
+ *                          brain:radar's mapping), the open findings citing
+ *                          it, and the last 5 commits touching it (read from
+ *                          cachedCommits — no extra git call)
+ *   /api/runners           supervised runner records (listRunners; the
+ *                          record's workPackageId is exposed as `task`) +
+ *                          runnerCmdConfigured
+ *   POST /api/runners/start {task, acknowledged?}
+ *                          brief gate: active leases held by a DIFFERENT
+ *                          actor than the task's owner → 409 {briefGate,
+ *                          advisories} unless acknowledged; then startRunner
+ *                          + audit line runner.started → events.jsonl
+ *   POST /api/runners/stop {id}   stopRunner (idempotent) + runner.stopped
+ *   /api/runners/log?id=<id>&lines=N   bounded tailLog
  *   /api/stream            SSE: fs.watch on .project-brain/ (300ms debounce)
  *                          → {type:'state-changed', file}; heartbeat comment
- *                          every 25s
+ *                          every 25s; .project-brain/runners/ is watched
+ *                          explicitly (fs.watch recursion is platform-
+ *                          dependent) so runner record changes always emit
  *
  * Every JSON response carries `state_age`/`stale_warning` freshness metadata
  * (mtime-based; live-computed intel reports age 0) — Praktiken-Katalog:
@@ -49,34 +174,72 @@
  * router core `createHandler({root, token})` and the checkToken/checkOrigin/
  * checkHost helpers are exported for unit tests; the isMain guard keeps
  * imports side-effect-free.
+ *
+ * MODULE MAP (this file is the router; the work lives in scripts/serve/):
+ *   serve/security.mjs  token compare, Origin/Host checks, the method matrix,
+ *                       the bounded JSON body reader, sendJson
+ *   serve/records.mjs   freshness metadata + the .project-brain record/doc
+ *                       vocabulary (frontmatter, module globs, ?file= resolve)
+ *   serve/git.mjs       the per-HEAD commit cache, changed-file snapshot,
+ *                       risk calibration cache, ?files= parsing
+ *   serve/graph.mjs     the multi-language import graph + the blast blend
+ *   serve/state.mjs     /api/state|events|changed|meta|next|brief
+ *   serve/intel.mjs     /api/intel/*|risk|blast|graph|security
+ *   serve/docs.mjs      /api/map|doc|why (Doc-Navigator)
+ *   serve/runners.mjs   the write API: runners + leases (+ the audit lines)
+ *   serve/fleet.mjs     /api/fleet
+ *   serve/sse.mjs       /api/stream: fs watchers, debounce, heartbeat
+ *   serve/static.mjs    ui/dist (or the inline status page), traversal-guarded
+ * Endpoint modules receive an explicit context object (root, brainDir, the
+ * live ctx, the provider memo) rather than closing over this file's scope.
+ * Every name the old single-file module exported is re-exported below, so
+ * brain-mcp.mjs / brain-answer.mjs / the tests import exactly as before.
  */
-import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ROOT, PACKAGE_DIR, takeFlag, takeOption } from './common.mjs';
-import { ACTIVE_STATE, activeStateJson } from './active-state.mjs';
-import { gitLogArgs, parseLog, hotspots, coChange, ownership } from './git-intel.mjs';
-import { getIndexProvider } from './index-provider.mjs';
+import { checkHost, checkOrigin, checkToken, methodCheck, sendJson } from './serve/security.mjs';
+import { apiRecords } from './serve/records.mjs';
+import { apiBrief, apiChanged, apiEvents, apiMeta, apiNext, apiState, createProviderInfo } from './serve/state.mjs';
+import { apiBlast, apiGraph, apiIntel, apiRisk, apiSecurity } from './serve/intel.mjs';
+import { apiDoc, apiMap, apiWhy } from './serve/docs.mjs';
+import { apiFleet } from './serve/fleet.mjs';
+import { createSseHub } from './serve/sse.mjs';
+import { serveStatic } from './serve/static.mjs';
+import {
+  apiLeaseClaim, apiLeaseRelease, apiRunnerLog, apiRunnerStart, apiRunnerStop, apiRunners
+} from './serve/runners.mjs';
+
+// ---------------------------------------------------------------------------
+// public surface — every name the single-file version exported stays
+// importable from here (brain-mcp.mjs, brain-answer.mjs and the tests import
+// them by this path), so the split is invisible to every consumer.
+// ---------------------------------------------------------------------------
+
+export { tokenEquals, presentedToken, checkToken, checkOrigin, checkHost } from './serve/security.mjs';
+export {
+  freshness, frontmatterTitle, listRecords, DOC_DIRS, staleDocDays, normPath, parseFrontmatter,
+  extractPaths, moduleGlobs, globMatchesFile, inferModuleFromPath, moduleForFile, moduleAliases,
+  summarize, decisionExcerpt, resolveBrainDoc, wikiLinks
+} from './serve/records.mjs';
+export { CALIBRATION_WINDOW, riskCalibrationStats } from './serve/git.mjs';
+export {
+  GRAPH_MAX_CYCLES, graphStats, importGraphFor, blastStats, buildBlast,
+  BLAST_DEFAULT_DEPTH, BLAST_MAX_DEPTH, BLAST_MAX_NODES, BLAST_MAX_FANOUT,
+  BLAST_DEPTH_DECAY, BLAST_INFERRED_WEIGHT
+} from './serve/graph.mjs';
+export { SECURITY_CACHE_TTL_MS, securityStats } from './serve/intel.mjs';
+export { resolveRunnerCmd, leaseAdvisories, appendEvent } from './serve/runners.mjs';
+export {
+  FLEET_MAX_PROJECTS, fleetTtlMs, FLEET_ATTENTION_WEIGHTS, FLEET_ATTENTION_THRESHOLDS,
+  fleetAttention, parseGitStatusV2, isOpenWorkstream, fleetProjectState, fleetStats
+} from './serve/fleet.mjs';
 
 export const DEFAULT_PORT = 4100;
 const PORT_FALLBACK_ATTEMPTS = 20;
-const DEFAULT_COMMIT_WINDOW = 500;
-const MAX_COMMIT_WINDOW = 5000;
-const DEFAULT_EVENT_LIMIT = 100;
-const MAX_EVENT_LIMIT = 1000;
-const DEFAULT_ROW_LIMIT = 50;
-const SSE_DEBOUNCE_MS = 300;
-const SSE_HEARTBEAT_MS = 25_000;
-const STALE_AFTER_S = Number(process.env.BRAIN_SERVE_STALE_S || 24 * 3600);
-
-const RECORD_DIRS = Object.freeze({
-  decision: 'decisions',
-  grill: 'grills',
-  finding: 'findings'
-});
 
 function usage() {
   return [
@@ -92,478 +255,127 @@ function usage() {
 }
 
 // ---------------------------------------------------------------------------
-// security helpers (pure, exported for tests)
-// ---------------------------------------------------------------------------
-
-const LOCAL_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
-
-/** PURE. Constant-time token equality: hash both sides, timingSafeEqual. */
-export function tokenEquals(presented, expected) {
-  if (typeof presented !== 'string' || typeof expected !== 'string') return false;
-  if (!presented || !expected) return false;
-  const a = crypto.createHash('sha256').update(presented).digest();
-  const b = crypto.createHash('sha256').update(expected).digest();
-  return crypto.timingSafeEqual(a, b);
-}
-
-/** PURE. Extract the presented token: `Authorization: Bearer <t>` or ?token=. */
-export function presentedToken(req, url) {
-  const auth = req.headers?.authorization || '';
-  const m = /^Bearer\s+(.+)$/i.exec(auth.trim());
-  if (m) return m[1].trim();
-  return url.searchParams.get('token') || '';
-}
-
-/** PURE. True when the request carries the session token (constant-time). */
-export function checkToken(req, url, token) {
-  return tokenEquals(presentedToken(req, url), token);
-}
-
-/**
- * PURE. Origin validation: absent Origin is fine (curl, same-origin GET
- * navigations); a present Origin must be http://127.0.0.1 or http://localhost
- * — and, when the bound port is known, on exactly that port.
- */
-export function checkOrigin(origin, port = null) {
-  if (origin === undefined || origin === null || origin === '') return true;
-  let u;
-  try { u = new URL(origin); } catch { return false; }
-  if (u.protocol !== 'http:') return false;
-  if (!LOCAL_HOSTNAMES.has(u.hostname)) return false;
-  if (port !== null && port !== undefined) {
-    const originPort = u.port ? Number(u.port) : 80;
-    if (originPort !== Number(port)) return false;
-  }
-  return true;
-}
-
-/**
- * PURE. Host-header validation (DNS-rebinding defense): the Host must be a
- * localhost variant. Missing Host fails closed.
- */
-export function checkHost(host) {
-  if (!host) return false;
-  let u;
-  try { u = new URL(`http://${host}`); } catch { return false; }
-  return LOCAL_HOSTNAMES.has(u.hostname);
-}
-
-// ---------------------------------------------------------------------------
-// freshness + record helpers (pure-ish, exported for tests)
-// ---------------------------------------------------------------------------
-
-/** mtime-based freshness metadata for a state file (Praktiken-Katalog). */
-export function freshness(file, nowMs = Date.now(), staleAfterS = STALE_AFTER_S) {
-  try {
-    const st = fs.statSync(file);
-    const age = Math.max(0, Math.round((nowMs - st.mtimeMs) / 1000));
-    const hours = Math.round(age / 360) / 10;
-    return {
-      state_age: age,
-      stale_warning: age > staleAfterS
-        ? `${path.basename(file)} last changed ${hours}h ago — data may be stale`
-        : null
-    };
-  } catch {
-    return { state_age: null, stale_warning: `${path.basename(file)} not found — empty state` };
-  }
-}
-
-/** PURE. Frontmatter `title:`, else first `# ` heading, else ''. */
-export function frontmatterTitle(text) {
-  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text || '');
-  if (fm) {
-    const m = /^title:\s*(.+)\s*$/m.exec(fm[1]);
-    if (m) return m[1].trim().replace(/^["']|["']$/g, '');
-  }
-  const h = /^#\s+(.+)\s*$/m.exec(text || '');
-  return h ? h[1].trim() : '';
-}
-
-/**
- * List record markdown files for a type (decision|grill|finding) with their
- * frontmatter titles. Read-only; unknown type → null (caller sends 400).
- */
-export function listRecords(root, type) {
-  const dirName = RECORD_DIRS[type];
-  if (!dirName) return null;
-  const dir = path.join(root, '.project-brain', dirName);
-  const records = [];
-  const walk = (d) => {
-    let entries;
-    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p);
-      else if (e.isFile() && e.name.endsWith('.md')) {
-        let title = '';
-        try { title = frontmatterTitle(fs.readFileSync(p, 'utf8').slice(0, 4096)); } catch {}
-        records.push({ file: path.relative(root, p), title });
-      }
-    }
-  };
-  walk(dir);
-  records.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
-  return records;
-}
-
-// ---------------------------------------------------------------------------
-// git plumbing (the only impure part of the intel endpoints)
-// ---------------------------------------------------------------------------
-
-function runGitLog(root, { limit }) {
-  const r = spawnSync('git', gitLogArgs({ limit }), {
-    cwd: root,
-    encoding: 'utf8',
-    maxBuffer: 256 * 1024 * 1024
-  });
-  if (r.error) throw r.error;
-  if (r.status !== 0) {
-    throw new Error(`git log failed (status ${r.status}): ${(r.stderr || '').trim()}`);
-  }
-  return r.stdout || '';
-}
-
-// Parsed-commit cache keyed by HEAD + window: the three intel endpoints are
-// pure functions over the same commit array, and a dashboard load hits all
-// three back-to-back. Without this every request would block the single-
-// threaded daemon on a fresh synchronous `git log` (1-5s on large repos).
-const intelCache = { key: null, commits: null };
-
-function cachedCommits(root, { limit }) {
-  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
-  const key = `${(head.stdout || '').trim() || 'no-head'}|${limit}`;
-  if (intelCache.key !== key) {
-    intelCache.commits = parseLog(runGitLog(root, { limit }));
-    intelCache.key = key;
-  }
-  return intelCache.commits;
-}
-
-// ---------------------------------------------------------------------------
-// built-in status page (deliberately unstyled beyond system-font basics —
-// the real UI comes later through docs/design-direction.md's pipeline)
-// ---------------------------------------------------------------------------
-
-const STATUS_PAGE = `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>project-brain — Control Room (status)</title>
-<style>body{font-family:system-ui,sans-serif;margin:2rem;max-width:60rem}table{border-collapse:collapse}td,th{border:1px solid #999;padding:2px 8px;text-align:left}</style>
-</head>
-<body>
-<h1>project-brain serve — status</h1>
-<p>Minimal status page (the Control Room UI is not built yet). It proves the API using the token from the URL fragment.</p>
-<div id="out">loading…</div>
-<script>
-(function () {
-  var out = document.getElementById('out');
-  var m = /(?:^|[#&])token=([^&]+)/.exec(location.hash);
-  if (!m) { out.textContent = 'No token in URL fragment. Start via "project-brain serve" and open the printed URL.'; return; }
-  var headers = { Authorization: 'Bearer ' + decodeURIComponent(m[1]) };
-  function fetchJson(p) {
-    return fetch(p, { headers: headers }).then(function (r) {
-      if (!r.ok) throw new Error(p + ' -> HTTP ' + r.status);
-      return r.json();
-    });
-  }
-  Promise.all([fetchJson('/api/meta'), fetchJson('/api/state')]).then(function (res) {
-    var meta = res[0], state = res[1];
-    var html = '<h2>meta</h2><pre>' + JSON.stringify(meta, null, 2).replace(/</g, '&lt;') + '</pre>';
-    function table(rows, cols) {
-      if (!rows.length) return '<p>(none)</p>';
-      var h = '<table><tr>' + cols.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr>';
-      rows.forEach(function (r) {
-        h += '<tr>' + cols.map(function (c) { return '<td>' + String(r[c] || '').replace(/</g, '&lt;') + '</td>'; }).join('') + '</tr>';
-      });
-      return h + '</table>';
-    }
-    html += '<h2>workstreams</h2>' + table(state.workstreams || [], ['taskId', 'owner', 'tool', 'branch', 'status']);
-    html += '<h2>leases</h2>' + table(state.leases || [], ['target', 'lockedBy', 'until', 'notes']);
-    if (state.stale_warning) html += '<p>' + String(state.stale_warning).replace(/</g, '&lt;') + '</p>';
-    out.innerHTML = html;
-  }).catch(function (e) { out.textContent = 'API error: ' + e.message; });
-})();
-</script>
-</body>
-</html>
-`;
-
-const CONTENT_TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.map': 'application/json; charset=utf-8',
-  '.woff2': 'font/woff2'
-};
-
-// ---------------------------------------------------------------------------
 // request router core (exported; testable without binding a port)
 // ---------------------------------------------------------------------------
 
 /**
+ * The route table: pathname → handler(req, res, url). Method and token are
+ * already checked by the time an entry runs (the method matrix in
+ * serve/security.mjs decides which of these are POST); awaiting a synchronous
+ * handler is a no-op, so the table stays uniform. Every entry is one line —
+ * this table IS the API surface, and it should read like a list.
+ */
+function buildRoutes(api, sse) {
+  return new Map([
+    ['/api/state', (req, res) => apiState(api, res)],
+    ['/api/events', (req, res, url) => apiEvents(api, res, url)],
+    ['/api/intel/health', (req, res, url) => apiIntel(api, res, url, 'health')],
+    ['/api/intel/hotspots', (req, res, url) => apiIntel(api, res, url, 'hotspots')],
+    ['/api/intel/co-change', (req, res, url) => apiIntel(api, res, url, 'co-change')],
+    ['/api/intel/ownership', (req, res, url) => apiIntel(api, res, url, 'ownership')],
+    ['/api/records', (req, res, url) => apiRecords(api, res, url)],
+    ['/api/changed', (req, res) => apiChanged(api, res)],
+    ['/api/risk', (req, res, url) => apiRisk(api, res, url)],
+    ['/api/blast', (req, res, url) => apiBlast(api, res, url)],
+    ['/api/graph', (req, res) => apiGraph(api, res)],
+    ['/api/security', (req, res) => apiSecurity(api, res)],
+    ['/api/next', (req, res) => apiNext(api, res)],
+    ['/api/brief', (req, res, url) => apiBrief(api, res, url)],
+    ['/api/map', (req, res) => apiMap(api, res)],
+    ['/api/doc', (req, res, url) => apiDoc(api, res, url)],
+    ['/api/why', (req, res, url) => apiWhy(api, res, url)],
+    ['/api/fleet', (req, res) => apiFleet(api, res)],
+    ['/api/meta', (req, res) => apiMeta(api, res)],
+    ['/api/runners', (req, res) => apiRunners(api, res)],
+    ['/api/runners/log', (req, res, url) => apiRunnerLog(api, res, url)],
+    ['/api/runners/start', (req, res) => apiRunnerStart(api, req, res)],
+    ['/api/runners/stop', (req, res) => apiRunnerStop(api, req, res)],
+    ['/api/leases/claim', (req, res) => apiLeaseClaim(api, req, res)],
+    ['/api/leases/release', (req, res) => apiLeaseRelease(api, req, res)],
+    ['/api/stream', (req, res) => sse.handleStream(req, res)]
+  ]);
+}
+
+/**
+ * One request: the security preamble (the M2.75 model, in order) and then one
+ * table lookup. Nothing here knows what any endpoint does — that is the point.
+ * Never throws: an escaping error becomes a 500, or a bare end() when the
+ * response has already started.
+ */
+async function dispatch(req, res, { ctx, token, routes, uiDist }) {
+  try {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    // (c) DNS-rebinding defense on every request, page included.
+    if (!checkHost(req.headers.host)) {
+      return sendJson(res, 403, { error: 'forbidden: non-local Host header' });
+    }
+    if (!checkOrigin(req.headers.origin, ctx.port ?? null)) {
+      return sendJson(res, 403, { error: 'forbidden: cross-origin request' });
+    }
+    if (!url.pathname.startsWith('/api/')) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.setHeader('Allow', 'GET, HEAD');
+        return sendJson(res, 405, { error: 'method not allowed' });
+      }
+      return serveStatic(res, url.pathname, uiDist);
+    }
+    // (d) writes are confined to the runner/lease POST endpoints; every
+    // other /api path stays GET-only. The runner command itself is
+    // config-only, so no request can inject a command either way.
+    const method = methodCheck(url.pathname, req.method);
+    if (!method.ok) {
+      res.setHeader('Allow', method.allow);
+      return sendJson(res, 405, { error: method.error });
+    }
+    // (b) session token on every API request, constant-time compare.
+    if (!checkToken(req, url, token)) {
+      return sendJson(res, 401, { error: 'unauthorized: missing or invalid session token' });
+    }
+    const route = routes.get(url.pathname);
+    if (!route) return sendJson(res, 404, { error: `no such endpoint: ${url.pathname}` });
+    return await route(req, res, url);
+  } catch (error) {
+    if (!res.headersSent) sendJson(res, 500, { error: String(error.message || error) });
+    else try { res.end(); } catch {}
+  }
+}
+
+/**
  * Build the node http handler. `ctx.port` may be filled in after listen()
  * (used to pin the Origin check to the bound port); until then any localhost
- * origin passes. `handler.close()` tears down SSE clients + the fs watcher.
+ * origin passes. `ctx.cwd` (optional) is the directory the daemon was started
+ * in — /api/fleet uses it to mark which fleet project is the active one;
+ * omitted → process.cwd(). `handler.close()` tears down SSE clients + the fs
+ * watcher.
  */
 export function createHandler(ctx) {
   const { root, token } = ctx;
   if (!root || !token) throw new Error('createHandler requires { root, token }');
   const brainDir = path.join(root, '.project-brain');
+  const runnersDir = path.join(brainDir, 'runners');
   const uiDist = ctx.uiDist || path.join(PACKAGE_DIR, 'ui', 'dist');
+  const sse = createSseHub({ brainDir, runnersDir });
 
-  // --- SSE plumbing (shared watcher, per-connection response set) ---
-  const sseClients = new Set();
-  let watcher = null;
-  let pendingFiles = new Set();
-  let flushTimer = null;
-
-  function broadcast(payload) {
-    const frame = `data: ${JSON.stringify(payload)}\n\n`;
-    for (const res of sseClients) res.write(frame);
-  }
-
-  function ensureWatcher() {
-    if (watcher || !fs.existsSync(brainDir)) return;
-    try {
-      watcher = fs.watch(brainDir, { recursive: true }, (_event, file) => {
-        pendingFiles.add(file || '');
-        if (flushTimer) return; // debounce: one flush per quiet window
-        flushTimer = setTimeout(() => {
-          flushTimer = null;
-          const files = [...pendingFiles];
-          pendingFiles = new Set();
-          for (const f of files) broadcast({ type: 'state-changed', file: f });
-        }, SSE_DEBOUNCE_MS);
-        if (typeof flushTimer.unref === 'function') flushTimer.unref();
-      });
-    } catch {
-      watcher = null; // watch unsupported → stream still serves heartbeats
-    }
-  }
-
-  function sendJson(res, code, obj) {
-    // No CORS headers — ever (security model point e).
-    const body = JSON.stringify(obj, null, 2);
-    res.writeHead(code, {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff'
-    });
-    res.end(body);
-  }
-
-  // --- API endpoints (all read-only) ---
-
-  function apiState(res) {
-    // Read-only guard: activeStateJson() would CREATE the file via
-    // ensureActiveState(); a dashboard query must never write brain state.
-    if (!fs.existsSync(ACTIVE_STATE)) {
-      return sendJson(res, 200, {
-        workstreams: [], leases: [], blockers: [], overlaps: [],
-        ...freshness(ACTIVE_STATE)
-      });
-    }
-    sendJson(res, 200, { ...activeStateJson(), ...freshness(ACTIVE_STATE) });
-  }
-
-  function apiEvents(res, url) {
-    const file = path.join(brainDir, 'events.jsonl');
-    const raw = Number(url.searchParams.get('limit') || DEFAULT_EVENT_LIMIT);
-    const limit = Math.min(Math.max(Number.isFinite(raw) ? Math.floor(raw) : DEFAULT_EVENT_LIMIT, 1), MAX_EVENT_LIMIT);
-    if (!fs.existsSync(file)) {
-      return sendJson(res, 200, { events: [], ...freshness(file) });
-    }
-    const lines = fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.trim());
-    const parsed = [];
-    for (const line of lines) {
-      try { parsed.push(JSON.parse(line)); } catch { /* skip malformed lines */ }
-    }
-    // Tail AFTER parsing so malformed lines never eat into the limit.
-    sendJson(res, 200, { events: parsed.slice(-limit), ...freshness(file) });
-  }
-
-  function apiIntel(res, url, kind) {
-    const rawCommits = Number(url.searchParams.get('commits') || DEFAULT_COMMIT_WINDOW);
-    const commitsCap = Math.min(Math.max(Number.isFinite(rawCommits) ? Math.floor(rawCommits) : DEFAULT_COMMIT_WINDOW, 1), MAX_COMMIT_WINDOW);
-    const rawLimit = Number(url.searchParams.get('limit') || DEFAULT_ROW_LIMIT);
-    const limit = Math.max(Number.isFinite(rawLimit) ? Math.floor(rawLimit) : DEFAULT_ROW_LIMIT, 1);
-    // Live-computed from git at request time → age 0 by construction.
-    const live = { state_age: 0, stale_warning: null, generated_at: new Date().toISOString() };
-    let commits;
-    try {
-      commits = cachedCommits(root, { limit: commitsCap });
-    } catch (error) {
-      // Empty-state friendliness: not-a-repo is a degraded 200, not a 500.
-      const empty = kind === 'hotspots' ? { files: [] } : kind === 'co-change' ? { pairs: [] } : { prefixes: [], files: [] };
-      return sendJson(res, 200, { ...empty, warning: `git history unavailable: ${error.message || error}`, ...live });
-    }
-    if (kind === 'hotspots') {
-      const r = hotspots(commits, { now: Date.now() }); // `now` is required by the pure core
-      return sendJson(res, 200, { ...r, files: r.files.slice(0, limit), ...live });
-    }
-    if (kind === 'co-change') {
-      const r = coChange(commits);
-      return sendJson(res, 200, { ...r, pairs: r.pairs.slice(0, limit), ...live });
-    }
-    const r = ownership(commits);
-    sendJson(res, 200, { ...r, prefixes: r.prefixes.slice(0, limit), files: r.files.slice(0, limit), ...live });
-  }
-
-  function apiRecords(res, url) {
-    const type = url.searchParams.get('type') || '';
-    const records = listRecords(root, type);
-    if (records === null) {
-      return sendJson(res, 400, { error: `unknown record type "${type}" — expected one of: ${Object.keys(RECORD_DIRS).join(', ')}` });
-    }
-    const dir = path.join(brainDir, RECORD_DIRS[type]);
-    let newest = null;
-    for (const r of records) {
-      try {
-        const m = fs.statSync(path.join(root, r.file)).mtimeMs;
-        if (newest === null || m > newest) newest = m;
-      } catch {}
-    }
-    if (newest === null) return sendJson(res, 200, { type, records, ...freshness(dir) });
-    // Records are durable documents — age is informational, never a warning.
-    const age = Math.max(0, Math.round((Date.now() - newest) / 1000));
-    sendJson(res, 200, { type, records, state_age: age, stale_warning: null });
-  }
-
-  let providerPromise = null;
-  async function apiMeta(res) {
-    if (!providerPromise) {
-      providerPromise = getIndexProvider()
-        .then((p) => ({ name: p.name, model: p.modelName || null, available: p.name !== 'none' }))
-        .catch((error) => ({ name: 'unavailable', model: null, available: false, error: String(error.message || error) }));
-    }
-    const provider = await providerPromise;
-    let version = '0.0.0';
-    try {
-      version = JSON.parse(fs.readFileSync(path.join(PACKAGE_DIR, 'package.json'), 'utf8')).version || version;
-    } catch {}
-    sendJson(res, 200, {
-      name: 'project-brain serve',
-      version,
-      root,
-      node: process.version,
-      port: ctx.port ?? null,
-      provider,
-      ...freshness(ACTIVE_STATE)
-    });
-  }
-
-  function apiStream(req, res) {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-store',
-      Connection: 'keep-alive',
-      'X-Content-Type-Options': 'nosniff'
-    });
-    res.write(': connected\n\n');
-    ensureWatcher();
-    sseClients.add(res);
-    const heartbeat = setInterval(() => { res.write(': heartbeat\n\n'); }, SSE_HEARTBEAT_MS);
-    if (typeof heartbeat.unref === 'function') heartbeat.unref();
-    req.on('close', () => {
-      clearInterval(heartbeat);
-      sseClients.delete(res);
-    });
-  }
-
-  // --- static serving (public page; the API stays token-gated) ---
-
-  function serveStatic(res, pathname) {
-    if (!fs.existsSync(path.join(uiDist, 'index.html'))) {
-      // No built UI bundle: inline status page for every non-API path.
-      res.writeHead(200, {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff'
-      });
-      return res.end(STATUS_PAGE);
-    }
-    let rel;
-    try { rel = decodeURIComponent(pathname); } catch { rel = '/'; }
-    if (rel === '/' || rel === '') rel = '/index.html';
-    // Path-traversal guard: resolve inside uiDist or 404.
-    const resolved = path.resolve(uiDist, '.' + path.posix.normalize(rel));
-    if (resolved !== uiDist && !resolved.startsWith(uiDist + path.sep)) {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      return res.end('not found');
-    }
-    let body;
-    try {
-      body = fs.readFileSync(resolved);
-    } catch {
-      // SPA fallback to index.html for client-side routes.
-      body = fs.readFileSync(path.join(uiDist, 'index.html'));
-      rel = '/index.html';
-    }
-    res.writeHead(200, {
-      'Content-Type': CONTENT_TYPES[path.extname(rel).toLowerCase()] || 'application/octet-stream',
-      'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff'
-    });
-    res.end(body);
-  }
-
-  // --- router ---
-
-  const handler = async (req, res) => {
-    try {
-      const url = new URL(req.url || '/', 'http://127.0.0.1');
-      // (c) DNS-rebinding defense on every request, page included.
-      if (!checkHost(req.headers.host)) {
-        return sendJson(res, 403, { error: 'forbidden: non-local Host header' });
-      }
-      if (!checkOrigin(req.headers.origin, ctx.port ?? null)) {
-        return sendJson(res, 403, { error: 'forbidden: cross-origin request' });
-      }
-      if (url.pathname.startsWith('/api/')) {
-        // (d) read-only milestone: the API accepts GET only.
-        if (req.method !== 'GET') {
-          res.setHeader('Allow', 'GET');
-          return sendJson(res, 405, { error: 'method not allowed: API is read-only (GET)' });
-        }
-        // (b) session token on every API request, constant-time compare.
-        if (!checkToken(req, url, token)) {
-          return sendJson(res, 401, { error: 'unauthorized: missing or invalid session token' });
-        }
-        if (url.pathname === '/api/state') return apiState(res);
-        if (url.pathname === '/api/events') return apiEvents(res, url);
-        if (url.pathname === '/api/intel/hotspots') return apiIntel(res, url, 'hotspots');
-        if (url.pathname === '/api/intel/co-change') return apiIntel(res, url, 'co-change');
-        if (url.pathname === '/api/intel/ownership') return apiIntel(res, url, 'ownership');
-        if (url.pathname === '/api/records') return apiRecords(res, url);
-        if (url.pathname === '/api/meta') return apiMeta(res);
-        if (url.pathname === '/api/stream') return apiStream(req, res);
-        return sendJson(res, 404, { error: `no such endpoint: ${url.pathname}` });
-      }
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
-        res.setHeader('Allow', 'GET, HEAD');
-        return sendJson(res, 405, { error: 'method not allowed' });
-      }
-      return serveStatic(res, url.pathname);
-    } catch (error) {
-      if (!res.headersSent) sendJson(res, 500, { error: String(error.message || error) });
-      else try { res.end(); } catch {}
-    }
+  /**
+   * What every endpoint module receives instead of closing over createHandler:
+   * the resolved directories, the LIVE `ctx` (its `port`/`cwd` are filled in
+   * after listen(), so it must be passed by reference, never copied), the
+   * per-daemon index-provider memo and the one watcher hook a write endpoint
+   * needs after it may have created runners/.
+   */
+  const api = {
+    root,
+    brainDir,
+    runnersDir,
+    runnerLogDir: path.join(brainDir, 'runner-logs'),
+    ctx,
+    providerInfo: createProviderInfo(),
+    ensureRunnersWatcher: sse.ensureRunnersWatcher
   };
 
-  handler.close = () => {
-    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-    if (watcher) { try { watcher.close(); } catch {} watcher = null; }
-    for (const res of sseClients) { try { res.end(); } catch {} }
-    sseClients.clear();
-  };
-
+  const routes = buildRoutes(api, sse);
+  const handler = (req, res) => dispatch(req, res, { ctx, token, routes, uiDist });
+  handler.close = sse.close;
   return handler;
 }
 
@@ -576,9 +388,11 @@ export function createHandler(ctx) {
  * printed notice) up to PORT_FALLBACK_ATTEMPTS times. Resolves to
  * { server, handler, port, token, url, close }.
  */
-export async function startServer({ root = ROOT, port = DEFAULT_PORT, token, notice = () => {} } = {}) {
+export async function startServer({ root = ROOT, port = DEFAULT_PORT, token, cwd, notice = () => {} } = {}) {
   const sessionToken = token || crypto.randomBytes(32).toString('hex');
-  const ctx = { root, token: sessionToken, port: null };
+  // `cwd` only affects /api/fleet's isActive resolution (which repo the daemon
+  // was started in); omitted → process.cwd(), read per request.
+  const ctx = { root, token: sessionToken, port: null, ...(cwd ? { cwd } : {}) };
   const handler = createHandler(ctx);
   const server = http.createServer(handler);
 

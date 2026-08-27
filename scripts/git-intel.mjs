@@ -20,6 +20,12 @@
  *   - calibrateRisk(...)   → retrospective in-repo validation of the score
  *                            against the repo's own fix/revert history
  *                            (leakage-free prefix scoring + rank AUC).
+ *   - fileHealth(commits)  → per-FILE 0-10 health/danger score (churn
+ *                            percentile × co-change scatter × bus factor ×
+ *                            fix density; FILE_HEALTH_WEIGHTS are reviewable
+ *                            defaults — validate with calibrateFileHealth).
+ *   - calibrateFileHealth  → leakage-free validation that today's file scores
+ *                            predict near-future fixes (cut-point replay).
  *
  * Every result object is confidence-stamped with provenance
  * ({basis:'measured', source:'git-log', window:{commits,since,until}}) per the
@@ -552,6 +558,313 @@ export function riskScore(files, {
 }
 
 // ---------------------------------------------------------------------------
+// file health — per-file 0-10 danger score (our answer to "code health")
+// ---------------------------------------------------------------------------
+
+/**
+ * REVIEWABLE DEFAULT weights for fileHealth() — not calibrated truth (same
+ * discipline as RISK_WEIGHTS: "Kalibrierung statt Konstanten"). Validate them
+ * against near-future fixes with calibrateFileHealth() before trusting the
+ * ranking; pass `weights` to override. Rationale: churn is the strongest
+ * single defect predictor, fix density is direct evidence of past breakage,
+ * scatter (tangled coupling) and bus factor are structural amplifiers.
+ */
+export const FILE_HEALTH_WEIGHTS = Object.freeze({
+  churnPercentile: 0.35,
+  coChangeScatter: 0.2,
+  busFactor: 0.2,
+  fixDensity: 0.25
+});
+
+/** Saturation: distinct co-change partners at which scatter maxes out at 1.0. */
+export const FILE_HEALTH_SATURATION = Object.freeze({
+  scatterPartners: 8
+});
+
+/**
+ * REVIEWABLE DEFAULT weights for the three OPTIONAL code-structure factors.
+ * They contribute ONLY when the caller passes the data (exactly like
+ * blast-radius in riskScore): a fileHealth() call without `structure`/`graph`
+ * produces byte-identical output to the history-only version, and the score
+ * normalizes over the factors actually present.
+ *
+ * WHY THESE THREE AND NOT MORE. Competing tools run dozens of structural
+ * detectors on top of real parsers. Without a parser, only shape survives —
+ * and of the shapes we can measure honestly in any language, three are worth a
+ * weight:
+ *   - size:     the single most reproducible structural defect correlate in the
+ *               literature, and the one a reader feels first.
+ *   - nesting:  depth is where branch interactions hide; it is the only
+ *               complexity proxy computable from text alone (cyclomatic
+ *               complexity needs a control-flow graph, which needs a parser).
+ *   - coupling: fanIn + fanOut from the import graph. Deliberately the SUM: a
+ *               file everything imports AND that imports everything is the real
+ *               hazard — a leaf utility with 80 importers is stable, a
+ *               60-importer file that also pulls in 20 modules is a chokepoint.
+ * Everything else we could cheaply count (comment ratio, long lines, TODOs,
+ * parameter counts) is either style or unmeasurable without semantics, so it
+ * stays in `measure()` as reportable evidence and gets NO weight.
+ *
+ * These are priors, not truth: calibrateFileHealth() reports the per-factor AUC
+ * so a repo can see whether structure adds discrimination over history at all.
+ */
+export const FILE_HEALTH_STRUCTURE_WEIGHTS = Object.freeze({
+  size: 0.15,
+  nesting: 0.1,
+  coupling: 0.15
+});
+
+/** Saturation points for the structural factors — the raw value that maxes at 1.0. */
+export const FILE_HEALTH_STRUCTURE_SATURATION = Object.freeze({
+  codeLines: 400, // a 400-line module is already "please split me"
+  nestingDepth: 6, // six levels of indent/braces is where reviewers give up
+  couplingDegree: 20 // fanIn + fanOut combined
+});
+
+/** Factor names produced from git history alone. */
+export const HISTORY_FACTORS = Object.freeze([
+  'churn-percentile', 'co-change-scatter', 'bus-factor', 'fix-density'
+]);
+/** Factor names produced from code structure / the import graph. */
+export const STRUCTURE_FACTORS = Object.freeze(['size', 'nesting', 'coupling']);
+
+/** A pair must have co-changed at least this often to count as a scatter partner. */
+export const DEFAULT_SCATTER_SUPPORT = 2;
+/** Below this many commits a file's score is flagged lowConfidence, not trusted. */
+export const DEFAULT_MIN_HEALTH_COMMITS = 3;
+
+/**
+ * PURE. Per-file 0-10 health/danger score (10 = most dangerous), aggregated
+ * from four git-history factors — every factor carries its raw value and a
+ * human-readable evidence string (no bare numbers):
+ *   - churn-percentile: the file's percentile in the hotspots() decay ranking
+ *     (rank 1 of N → 1.0) — recent churn concentration.
+ *   - co-change-scatter: distinct partner files it co-changes with (pairs with
+ *     support ≥ DEFAULT_SCATTER_SUPPORT, bulk commits excluded), saturating at
+ *     FILE_HEALTH_SATURATION.scatterPartners — tangled coupling.
+ *   - bus-factor: 1 / busFactor of the file's ownership() — busFactor 1
+ *     (single effective owner) → raw 1.0.
+ *   - fix-density: share of the file's commits whose subject matches
+ *     DEFECT_FIX_REGEX (bulk commits excluded from both counts, mirroring the
+ *     coChange sweep-exclusion) — a file that keeps getting fixed keeps
+ *     breaking.
+ *
+ * plus THREE OPTIONAL code-structure factors that contribute only when their
+ * data is passed in (same discipline as blast-radius in riskScore — a caller
+ * who omits them gets byte-identical output to the history-only score):
+ *   - size: codeLines against FILE_HEALTH_STRUCTURE_SATURATION.codeLines,
+ *     from `structure` (a Map/object of file → code-structure.mjs measure()).
+ *   - nesting: maxNestingDepth against …STRUCTURE_SATURATION.nestingDepth.
+ *   - coupling: fanIn + fanOut from `graph` (an import-graph.mjs
+ *     buildImportGraph() result; only its `nodes` are read).
+ * See FILE_HEALTH_STRUCTURE_WEIGHTS for why exactly these three.
+ *
+ * score = 10 × Σ(weight_i × raw_i) / Σ(weight_i), one decimal. Total function:
+ * files with fewer than DEFAULT_MIN_HEALTH_COMMITS commits still get a score
+ * but are flagged lowConfidence: true with reason 'insufficient history' —
+ * honest flagging instead of fake precision. Deterministic: `now` is required
+ * (never Date.now()), ordering is byte-stable (score desc, then byString).
+ *
+ * @param {Array<{hash, author, dateIso, subject, files}>} commits parseLog() output
+ * @returns {{basis, source, window, params, files: Array<{file, score, commits,
+ *   lastCommit, lowConfidence?, reason?, factors: Array<{name, weight, raw,
+ *   contribution, evidence}>}>}}
+ */
+export function fileHealth(commits, {
+  now,
+  weights,
+  structureWeights,
+  structure,
+  graph,
+  halfLifeDays = DEFAULT_HALF_LIFE_DAYS,
+  maxFilesPerCommit = DEFAULT_MAX_FILES_PER_COMMIT
+} = {}) {
+  const nowMs = requireNow(now, 'fileHealth()');
+  const w = { ...FILE_HEALTH_WEIGHTS, ...(weights || {}) };
+  const sw = { ...FILE_HEALTH_STRUCTURE_WEIGHTS, ...(structureWeights || {}) };
+  const sSat = FILE_HEALTH_STRUCTURE_SATURATION;
+  // Optional inputs. Absent → the factors are never pushed and every number
+  // below is byte-identical to the history-only score.
+  const structByFile = toFileMap(structure);
+  const degreeByFile = degreesFromGraph(graph);
+  const hasStructure = Boolean(structByFile || degreeByFile);
+
+  const hs = hotspots(commits, { now: nowMs, halfLifeDays });
+  const own = ownership(commits);
+  const cc = coChange(commits, {
+    minSupport: DEFAULT_SCATTER_SUPPORT,
+    minConfidence: 0,
+    maxFilesPerCommit
+  });
+
+  const ownByFile = new Map(own.files.map((f) => [f.path, f]));
+  // Directed pairs are emitted both ways, so partners of f = all b with a === f.
+  const partnersByFile = new Map();
+  for (const p of cc.pairs) {
+    const list = partnersByFile.get(p.a) || [];
+    list.push(p.b);
+    partnersByFile.set(p.a, list);
+  }
+  // Fix density excludes bulk commits from BOTH counts (same sweep-exclusion
+  // rationale as coChange: a "fix: format everything" touching 40 files says
+  // nothing about any single one of them).
+  const fixCounts = new Map(); // file → {fixes, total}
+  for (const c of commits) {
+    const files = uniqueFiles(c.files);
+    if (!files.length || files.length > maxFilesPerCommit) continue;
+    const isFix = DEFECT_FIX_REGEX.test(c.subject || '');
+    for (const f of files) {
+      const entry = fixCounts.get(f) || { fixes: 0, total: 0 };
+      entry.total += 1;
+      if (isFix) entry.fixes += 1;
+      fixCounts.set(f, entry);
+    }
+  }
+
+  const ranked = hs.files;
+  const files = ranked.map((hot, idx) => {
+    const file = hot.file;
+    const factors = [];
+    const pushFactor = (name, weight, raw, evidence) => {
+      factors.push({ name, weight, raw: round(raw, 4), contribution: round(weight * raw, 4), evidence });
+    };
+
+    // 1. churn-percentile: rank in the decay ranking.
+    const rank = idx + 1;
+    const churnRaw = ranked.length ? (ranked.length - rank + 1) / ranked.length : 0;
+    pushFactor('churn-percentile', w.churnPercentile, churnRaw,
+      `churn rank #${rank} of ${ranked.length} (percentile ${round(churnRaw, 2)})`);
+
+    // 2. co-change-scatter: distinct recurring partners, saturating.
+    const partners = [...(partnersByFile.get(file) || [])].sort(byString);
+    const scatterRaw = Math.min(1, partners.length / FILE_HEALTH_SATURATION.scatterPartners);
+    pushFactor('co-change-scatter', w.coChangeScatter, scatterRaw,
+      partners.length
+        ? `co-changes with ${partners.length} distinct partner(s) (≥${DEFAULT_SCATTER_SUPPORT}×): ` +
+          partners.slice(0, 3).join(', ') + (partners.length > 3 ? ', …' : '')
+        : 'no recurring co-change partners');
+
+    // 3. bus-factor: 1/busFactor — single effective owner saturates at 1.0.
+    const o = ownByFile.get(file);
+    const bf = o ? o.busFactor : 0;
+    const busRaw = bf > 0 ? 1 / bf : 0;
+    const topAuthor = o && o.topAuthors[0];
+    pushFactor('bus-factor', w.busFactor, busRaw,
+      topAuthor
+        ? `bus factor ${bf} — ${topAuthor.author} owns ${Math.round(topAuthor.share * 100)}% of ${o.commits} commits`
+        : 'no ownership history');
+
+    // 4. fix-density: how often does touching this file mean repairing it?
+    const fc = fixCounts.get(file);
+    const fixRaw = fc && fc.total ? fc.fixes / fc.total : 0;
+    pushFactor('fix-density', w.fixDensity, fixRaw,
+      fc && fc.total
+        ? (fc.fixes
+          ? `${fc.fixes} of ${fc.total} commits are fix/revert commits (${Math.round(fixRaw * 100)}%)`
+          : `no fix-pattern commits in ${fc.total} commits`)
+        : 'only bulk commits — fix density unknown');
+
+    // 5-7. OPTIONAL code-structure factors — pushed only when data exists for
+    // THIS file, so a partially measured repo stays honest per row.
+    const st = structByFile && structByFile.get(file);
+    if (st) {
+      const codeLines = Number(st.codeLines) || 0;
+      pushFactor('size', sw.size, Math.min(1, codeLines / sSat.codeLines),
+        `${codeLines} code line(s) of ${Number(st.lines) || 0}` +
+        (st.functionCount ? ` across ${st.functionCount} function(s)` : '') +
+        ` (saturates at ${sSat.codeLines})`);
+      const depth = Number(st.maxNestingDepth) || 0;
+      pushFactor('nesting', sw.nesting, Math.min(1, depth / sSat.nestingDepth),
+        `max nesting depth ${depth} (avg ${Number(st.avgNestingDepth) || 0}` +
+        (st.longestFunctionLines ? `, longest function ${st.longestFunctionLines} lines` : '') +
+        `; saturates at ${sSat.nestingDepth})`);
+    }
+    const deg = degreeByFile && degreeByFile.get(file);
+    if (deg) {
+      const degree = deg.fanIn + deg.fanOut;
+      pushFactor('coupling', sw.coupling, Math.min(1, degree / sSat.couplingDegree),
+        `${deg.fanIn} file(s) import this, it imports ${deg.fanOut} — degree ${degree} ` +
+        `(saturates at ${sSat.couplingDegree})`);
+    }
+
+    // Normalize over the factors actually PRESENT (identical to the fixed
+    // four-weight sum when no structure data was supplied).
+    const totalWeight = factors.reduce((s, f) => s + f.weight, 0);
+    const weighted = factors.reduce((s, f) => s + f.weight * f.raw, 0);
+    const score = totalWeight > 0 ? Number((10 * (weighted / totalWeight)).toFixed(1)) : 0;
+    const entry = { file, score, commits: hot.commits, lastCommit: hot.lastCommit, factors };
+    if (hot.commits < DEFAULT_MIN_HEALTH_COMMITS) {
+      entry.lowConfidence = true;
+      entry.reason = 'insufficient history';
+    }
+    return entry;
+  });
+
+  files.sort((a, b) => b.score - a.score || byString(a.file, b.file));
+
+  return {
+    ...provenanceOf(commits),
+    params: {
+      weights: w,
+      saturation: { ...FILE_HEALTH_SATURATION },
+      scatterSupport: DEFAULT_SCATTER_SUPPORT,
+      minCommits: DEFAULT_MIN_HEALTH_COMMITS,
+      halfLifeDays,
+      maxFilesPerCommit,
+      fixPattern: String(DEFECT_FIX_REGEX),
+      now: new Date(nowMs).toISOString(),
+      // Added ONLY when structural data was supplied — that is what keeps the
+      // history-only output byte-identical to the pre-structure version.
+      ...(hasStructure
+        ? {
+          structure: {
+            weights: sw,
+            saturation: { ...sSat },
+            measuredFiles: structByFile ? structByFile.size : 0,
+            graphNodes: degreeByFile ? degreeByFile.size : 0
+          }
+        }
+        : {})
+    },
+    files
+  };
+}
+
+/** Normalize a Map / plain object / array of measures into Map(file → measure). */
+function toFileMap(structure) {
+  if (!structure) return null;
+  if (structure instanceof Map) return structure.size ? structure : null;
+  if (Array.isArray(structure)) {
+    const m = new Map();
+    for (const entry of structure) if (entry && entry.file) m.set(entry.file, entry);
+    return m.size ? m : null;
+  }
+  if (typeof structure === 'object') {
+    // Accept measureFiles() output directly as well as a bare {file: measure} map.
+    if (Array.isArray(structure.files)) return toFileMap(structure.files);
+    const m = new Map(Object.entries(structure));
+    return m.size ? m : null;
+  }
+  return null;
+}
+
+/**
+ * fanIn/fanOut per file from an import-graph.mjs result. Only `nodes` is read
+ * (importedBy / imports), so git-intel stays dependency-free: no import of
+ * import-graph, just its documented shape.
+ */
+function degreesFromGraph(graph) {
+  const nodes = graph && Array.isArray(graph.nodes) ? graph.nodes : null;
+  if (!nodes || !nodes.length) return null;
+  const m = new Map();
+  for (const n of nodes) {
+    if (!n || !n.file) continue;
+    m.set(n.file, { fanIn: Number(n.importedBy) || 0, fanOut: Number(n.imports) || 0 });
+  }
+  return m.size ? m : null;
+}
+
+// ---------------------------------------------------------------------------
 // calibration — retrospective validation against the repo's own history
 // ---------------------------------------------------------------------------
 
@@ -735,3 +1048,242 @@ export function calibrateRisk(commits, {
     commits: rows
   };
 }
+
+/**
+ * PURE. Leakage-free validation of fileHealth(): do TODAY's scores predict
+ * NEAR-FUTURE fixes? METHOD (and its honest limits):
+ *   - Cut point T = `horizonDays` before the newest commit in the log.
+ *   - Every file is scored by fileHealth() from commits ≤ T ONLY, evaluated
+ *     at `now` = T (zero leakage, zero clocks). `window` > 0 limits that
+ *     prefix to its most recent `window` commits (cost bound).
+ *   - Label: a file is "defective" iff a commit AFTER T (i.e. within the
+ *     horizon, by construction of the cut) whose subject matches `fixRegex`
+ *     touches it.
+ *   - No leakage by construction: a file first committed after T has no
+ *     prefix history and is never scored.
+ *   - Output: score-quartile vs fixed-rate table + rank-based ROC-AUC.
+ *
+ * This is IN-REPO SELF-CALIBRATION, not a cross-repo benchmark: the fix
+ * heuristic is a proxy label, and a repo validates the weights only against
+ * its own past. Treat AUC ≥ 0.6 as the minimum bar before trusting the
+ * health ranking.
+ *
+ * @param {Array<{hash, author, dateIso, subject, files}>} commits parseLog() output
+ */
+export function calibrateFileHealth(commits, {
+  window = 0,
+  horizonDays = 30,
+  weights,
+  structureWeights,
+  structure,
+  graph,
+  halfLifeDays = DEFAULT_HALF_LIFE_DAYS,
+  maxFilesPerCommit = DEFAULT_MAX_FILES_PER_COMMIT,
+  fixRegex = DEFECT_FIX_REGEX
+} = {}) {
+  // Chronological order by epoch ms (not ISO strings — offsets vary), hash tiebreak.
+  const chrono = commits
+    .filter((c) => Number.isFinite(Date.parse(c.dateIso)))
+    .sort((a, b) => Date.parse(a.dateIso) - Date.parse(b.dateIso) || byString(a.hash, b.hash));
+  const lastMs = chrono.length ? Date.parse(chrono[chrono.length - 1].dateIso) : 0;
+  const cutMs = lastMs - horizonDays * MS_PER_DAY;
+
+  const prefixAll = chrono.filter((c) => Date.parse(c.dateIso) <= cutMs);
+  const prefix = window > 0 ? prefixAll.slice(-window) : prefixAll;
+  const future = chrono.filter((c) => Date.parse(c.dateIso) > cutMs);
+
+  const health = chrono.length
+    ? fileHealth(prefix, {
+      now: cutMs, weights, structureWeights, structure, graph, halfLifeDays, maxFilesPerCommit
+    })
+    : { files: [] };
+
+  // First fix commit after the cut per file (chrono order → earliest wins).
+  const fixedBy = new Map();
+  let futureFixCommits = 0;
+  for (const c of future) {
+    if (!fixRegex.test(c.subject || '')) continue;
+    futureFixCommits += 1;
+    for (const f of uniqueFiles(c.files)) {
+      if (!fixedBy.has(f)) fixedBy.set(f, c.hash);
+    }
+  }
+
+  const rows = health.files.map((f) => {
+    const row = { file: f.file, score: f.score, commits: f.commits };
+    if (f.lowConfidence) row.lowConfidence = true;
+    row.defective = fixedBy.has(f.file);
+    row.fixedBy = fixedBy.get(f.file) || null;
+    return row;
+  });
+
+  const auc = rankAuc(rows.map((r) => r.score), rows.map((r) => r.defective));
+  const defects = rows.filter((r) => r.defective).length;
+
+  // Per-factor discrimination: AUC of EACH factor's raw value alone, next to
+  // the combined score. This is the honest part and the whole reason the
+  // structural factors can ship: if `size`/`nesting`/`coupling` sit at ~0.5 on
+  // a repo, the table says so and the operator leaves them off.
+  const labelByFile = new Map(rows.map((r) => [r.file, r.defective]));
+  const perFactorAcc = new Map(); // name → {weight, scores, labels}
+  for (const f of health.files) {
+    const label = labelByFile.get(f.file);
+    for (const factor of f.factors || []) {
+      if (!perFactorAcc.has(factor.name)) {
+        perFactorAcc.set(factor.name, { weight: factor.weight, scores: [], labels: [] });
+      }
+      const acc = perFactorAcc.get(factor.name);
+      acc.scores.push(factor.raw);
+      acc.labels.push(label);
+    }
+  }
+  const perFactor = [...perFactorAcc.entries()].map(([name, acc]) => ({
+    name,
+    kind: STRUCTURE_FACTORS.includes(name) ? 'structure' : 'history',
+    weight: acc.weight,
+    evaluated: acc.scores.length,
+    auc: rankAuc(acc.scores, acc.labels)
+  }));
+
+  // Baseline: the same files scored from the HISTORY factors only (weights
+  // renormalized), so the structural contribution is a measured delta rather
+  // than a claim.
+  //
+  // The comparison is deliberately restricted to files that ACTUALLY carry
+  // structure factors, and that restriction is the difference between an honest
+  // delta and a flattering one: markdown/JSON files never get measured, they
+  // are mostly never fixed, and leaving them in the history-only baseline while
+  // the structural score only exists for source files compares two different
+  // populations. Same files, same labels, different factor sets — nothing else.
+  const structuralPresent = perFactor.some((f) => f.kind === 'structure');
+  const hasStructureFactors = (entry) =>
+    (entry.factors || []).some((f) => STRUCTURE_FACTORS.includes(f.name));
+  const comparable = structuralPresent ? health.files.filter(hasStructureFactors) : health.files;
+  const subsetScore = (entry, keep) => {
+    const kept = (entry.factors || []).filter((f) => keep.includes(f.name));
+    const tw = kept.reduce((s, f) => s + f.weight, 0);
+    if (!tw) return null;
+    return Number((10 * (kept.reduce((s, f) => s + f.weight * f.raw, 0) / tw)).toFixed(1));
+  };
+  const subsetAuc = (keep) => {
+    const scores = [];
+    const labels = [];
+    for (const f of comparable) {
+      const s = keep === null ? f.score : subsetScore(f, keep);
+      if (s === null) continue;
+      scores.push(s);
+      labels.push(labelByFile.get(f.file));
+    }
+    return rankAuc(scores, labels);
+  };
+  const combinedComparableAuc = structuralPresent ? subsetAuc(null) : auc;
+  const historyOnlyAuc = subsetAuc([...HISTORY_FACTORS]);
+  const structureOnlyAuc = structuralPresent ? subsetAuc([...STRUCTURE_FACTORS]) : null;
+  const structureDelta = structuralPresent && combinedComparableAuc !== null && historyOnlyAuc !== null
+    ? round(combinedComparableAuc - historyOnlyAuc, 4)
+    : null;
+  const comparison = {
+    files: comparable.length,
+    defective: comparable.filter((f) => labelByFile.get(f.file)).length,
+    combinedAuc: combinedComparableAuc,
+    historyOnlyAuc,
+    structureOnlyAuc,
+    delta: structureDelta,
+    basis: structuralPresent
+      ? 'files carrying structure factors only — same population on both sides'
+      : 'all evaluated files (no structural factors supplied)'
+  };
+
+  // Score-quartile vs fixed-rate table (quartiles by score rank).
+  const bins = 4;
+  const sortedRows = [...rows].sort((a, b) => a.score - b.score || byString(a.file, b.file));
+  const quantiles = [];
+  for (let b = 0; b < bins; b++) {
+    const start = Math.floor((b * sortedRows.length) / bins);
+    const end = Math.floor(((b + 1) * sortedRows.length) / bins);
+    const slice = sortedRows.slice(start, end);
+    if (!slice.length) continue;
+    const defective = slice.filter((r) => r.defective).length;
+    quantiles.push({
+      quantile: `Q${b + 1}`,
+      scoreMin: slice[0].score,
+      scoreMax: slice[slice.length - 1].score,
+      files: slice.length,
+      defective,
+      defectRate: round(defective / slice.length, 4)
+    });
+  }
+
+  let verdict;
+  if (auc === null) {
+    verdict = `AUC undefined over ${rows.length} files (need both fixed and clean files after ` +
+      'the cut) — do NOT trust the health ranking yet.';
+  } else {
+    const vsRandom = auc > 0.5 ? 'better than random' : 'not better than random';
+    const gate = auc >= 0.6
+      ? 'calibration gate (0.6) met — the health ranking is defensible on this repo'
+      : 'do NOT trust the health ranking below 0.6';
+    verdict = `AUC ${auc.toFixed(2)} over ${rows.length} files — health score ${vsRandom} at ` +
+      `predicting near-future fixes; ${gate}.`;
+    if (structureDelta !== null) {
+      const sign = structureDelta > 0 ? '+' : '';
+      const helps = structureDelta > 0.02
+        ? 'structure ADDS discrimination'
+        : (structureDelta < -0.02
+          ? 'structure REMOVES discrimination — keep it off'
+          : 'structure adds nothing measurable here — keep it opt-in');
+      verdict += ` On the ${comparison.files} file(s) with structure data: history-only AUC ` +
+        `${historyOnlyAuc === null ? 'n/a' : historyOnlyAuc.toFixed(2)}, with structure ` +
+        `${combinedComparableAuc === null ? 'n/a' : combinedComparableAuc.toFixed(2)} ` +
+        `(${sign}${structureDelta.toFixed(2)}) — ${helps}.`;
+    }
+  }
+
+  return {
+    ...provenanceOf(commits),
+    method: 'in-repo self-calibration: do today\'s file-health scores predict near-future ' +
+      'fixes in this repo\'s own history — a proxy label, NOT a cross-repo benchmark',
+    params: {
+      window,
+      horizonDays,
+      halfLifeDays,
+      maxFilesPerCommit,
+      fixPattern: String(fixRegex),
+      weights: { ...FILE_HEALTH_WEIGHTS, ...(weights || {}) },
+      cut: chrono.length ? new Date(cutMs).toISOString() : null,
+      ...(structuralPresent
+        ? { structureWeights: { ...FILE_HEALTH_STRUCTURE_WEIGHTS, ...(structureWeights || {}) } }
+        : {})
+    },
+    evaluated: rows.length,
+    defective: defects,
+    futureCommits: future.length,
+    futureFixCommits,
+    quantiles,
+    auc,
+    perFactor,
+    comparison,
+    historyOnlyAuc,
+    structureOnlyAuc,
+    structureDelta,
+    ...(structuralPresent ? { structureCaveat: STRUCTURE_LEAKAGE_CAVEAT } : {}),
+    verdict,
+    files: rows
+  };
+}
+
+/**
+ * The caveat that MUST travel with any structure-augmented calibration.
+ * The history factors are rebuilt from the pre-cut prefix, so they are
+ * leakage-free by construction. The structural metrics are not: they are
+ * measured on the CURRENT working tree, because reconstructing every file's
+ * shape at the cut point would mean checking out history. A file that was
+ * repaired after the cut is therefore measured AFTER its repair — which biases
+ * the structural AUC in an unknown direction (usually optimistic, since fixes
+ * and the growth that triggered them land together). Read the structural rows
+ * of the perFactor table as an upper bound, not as a clean estimate.
+ */
+export const STRUCTURE_LEAKAGE_CAVEAT =
+  'structure factors are measured on the CURRENT working tree, not reconstructed at the cut ' +
+  'point (that would require checking out history), so files edited after the cut are measured ' +
+  'post-edit. History factors have no such leak. Treat the structural AUC as an upper bound.';
