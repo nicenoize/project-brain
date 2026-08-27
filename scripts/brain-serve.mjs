@@ -19,7 +19,9 @@
  *   (c) Origin/Host validation: a present Origin that is not
  *       http://127.0.0.1[:port] / http://localhost[:port] → 403; a Host
  *       header that is not a localhost variant → 403 (DNS-rebinding defense);
- *   (d) the ONLY write endpoints are POST /api/runners/start|stop, and the
+ *   (d) the ONLY write endpoints are POST /api/runners/start|stop and
+ *       /api/leases/claim|release (lease targets validated against the
+ *       canonical grammar; overlapping claims gated like the brief gate), and the
  *       runner command is NEVER read from any request — it resolves from
  *       BRAIN_RUNNER_CMD env, else the `runnerCmd` key in
  *       .project-brain/config.json; the API references tasks/runner ids
@@ -152,7 +154,7 @@ import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ROOT, PACKAGE_DIR, ensureDir, listIndexableFiles, takeFlag, takeOption } from './common.mjs';
-import { ACTIVE_STATE, activeStateJson } from './active-state.mjs';
+import { ACTIVE_STATE, activeStateJson, addLease, releaseLeases } from './active-state.mjs';
 import { gitLogArgs, parseLog, hotspots, coChange, ownership, riskScore, calibrateRisk, fileHealth, calibrateFileHealth } from './git-intel.mjs';
 // Both imports are verified side-effect-free: brain-route's isMain guard is
 // asserted by tests/brain-route.test.mjs, brain-brief exports its pure core.
@@ -165,7 +167,7 @@ import { getIndexProvider } from './index-provider.mjs';
 import { discoverProjects, isFleetMode } from './projects.mjs';
 // Canonical glob engine (same one brain:radar/brief/lease use) — the
 // Doc-Navigator's module→file mapping must never disagree with lease overlap.
-import { targetMatchesFile } from './lease-overlap.mjs';
+import { targetMatchesFile, validateTarget, targetsOverlap, UnsupportedPatternError } from './lease-overlap.mjs';
 import { startRunner, listRunners, stopRunner, tailLog } from './runner-supervisor.mjs';
 
 export const DEFAULT_PORT = 4100;
@@ -2378,6 +2380,101 @@ export function createHandler(ctx) {
     sendJson(res, 200, { ok: stopped.ok, status: stopped.status, id });
   }
 
+  /**
+   * POST /api/leases/claim {target, task, actor, until?, notes?}
+   * The lease board is the product's core primitive, so it must be operable
+   * from here — but claiming is exactly where wrong semantics do damage, so
+   * the target is validated against the canonical grammar (lease-overlap) and
+   * a claim that overlaps another actor's live lease is refused unless the
+   * caller acknowledges it, mirroring the runner brief gate. Every outcome is
+   * audited.
+   */
+  async function apiLeaseClaim(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) return sendJson(res, parsed.code, { error: parsed.error });
+    const body = parsed.body || {};
+    const str = (v) => (typeof v === 'string' ? v.trim() : '');
+    const target = str(body.target);
+    const task = str(body.task);
+    const actor = str(body.actor);
+    if (!target || !task || !actor) {
+      return sendJson(res, 400, {
+        error: 'bad-request',
+        hint: 'body must be {"target","task","actor"[,"until","notes"]}'
+      });
+    }
+    const check = validateTarget(target);
+    if (!check.ok) {
+      return sendJson(res, 400, { error: 'unsupported-target', reason: check.reason, target });
+    }
+    // Conflict = another actor's live lease whose target intersects this one.
+    const conflicts = [];
+    for (const lease of readLeasesSafe(Date.now()) || []) {
+      const owner = (lease.lockedBy || '').trim();
+      if (!owner || owner === actor) continue;
+      for (const other of String(lease.target || '').split(/[,\s]+/).filter(Boolean)) {
+        let hit = false;
+        try { hit = targetsOverlap(target, other); }
+        catch (error) { if (!(error instanceof UnsupportedPatternError)) throw error; }
+        if (hit) {
+          conflicts.push({ target: other, lockedBy: owner, until: lease.until || '' });
+          break;
+        }
+      }
+    }
+    if (conflicts.length && body.acknowledged !== true) {
+      return sendJson(res, 409, {
+        conflictGate: true,
+        conflicts,
+        hint: 'another actor holds an overlapping lease — resend with acknowledged:true to claim anyway'
+      });
+    }
+    try {
+      addLease({ target, project: str(body.project), lockedBy: actor, until: str(body.until), notes: str(body.notes) || task });
+    } catch (error) {
+      return sendJson(res, 500, { error: 'claim-failed', reason: String(error.message || error) });
+    }
+    appendEvent(root, {
+      ts: new Date().toISOString(),
+      verb: 'lease.claimed',
+      target, task, actor,
+      acknowledgedConflict: conflicts.length > 0,
+      conflictCount: conflicts.length
+    });
+    sendJson(res, 200, { ok: true, target, actor, conflicts });
+  }
+
+  /** POST /api/leases/release {target?, task?, actor?} — at least one needed. */
+  async function apiLeaseRelease(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) return sendJson(res, parsed.code, { error: parsed.error });
+    const body = parsed.body || {};
+    const str = (v) => (typeof v === 'string' ? v.trim() : '');
+    const target = str(body.target);
+    const taskId = str(body.task);
+    const lockedBy = str(body.actor);
+    if (!target && !taskId && !lockedBy) {
+      return sendJson(res, 400, {
+        error: 'bad-request',
+        hint: 'body must carry at least one of {"target","task","actor"}'
+      });
+    }
+    let released = 0;
+    try {
+      const result = releaseLeases({ target, taskId, lockedBy, project: str(body.project) });
+      released = typeof result === 'number' ? result : (result?.released ?? result?.count ?? 0);
+    } catch (error) {
+      return sendJson(res, 500, { error: 'release-failed', reason: String(error.message || error) });
+    }
+    appendEvent(root, {
+      ts: new Date().toISOString(),
+      verb: 'lease.released',
+      target, task: taskId, actor: lockedBy || 'control-room',
+      released
+    });
+    sendJson(res, 200, { ok: true, released, target, task: taskId, actor: lockedBy });
+  }
+
   function apiRunnerLog(res, url) {
     const id = (url.searchParams.get('id') || '').trim();
     if (!id) return sendJson(res, 400, { error: 'bad-request', hint: '?id=<runner id> is required' });
@@ -2460,7 +2557,11 @@ export function createHandler(ctx) {
         // (d) writes are confined to the two runner POST endpoints; every
         // other /api path stays GET-only. The runner command itself is
         // config-only, so no request can inject a command either way.
-        const isRunnerPostPath = url.pathname === '/api/runners/start' || url.pathname === '/api/runners/stop';
+        const POST_PATHS = new Set([
+          '/api/runners/start', '/api/runners/stop',
+          '/api/leases/claim', '/api/leases/release'
+        ]);
+        const isRunnerPostPath = POST_PATHS.has(url.pathname);
         const methodOk = isRunnerPostPath ? req.method === 'POST' : req.method === 'GET';
         if (!methodOk) {
           res.setHeader('Allow', isRunnerPostPath ? 'POST' : 'GET');
@@ -2493,6 +2594,8 @@ export function createHandler(ctx) {
         if (url.pathname === '/api/runners/log') return apiRunnerLog(res, url);
         if (url.pathname === '/api/runners/start') return await apiRunnerStart(req, res);
         if (url.pathname === '/api/runners/stop') return await apiRunnerStop(req, res);
+        if (url.pathname === '/api/leases/claim') return await apiLeaseClaim(req, res);
+        if (url.pathname === '/api/leases/release') return await apiLeaseRelease(req, res);
         if (url.pathname === '/api/stream') return apiStream(req, res);
         return sendJson(res, 404, { error: `no such endpoint: ${url.pathname}` });
       }
