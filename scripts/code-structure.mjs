@@ -601,6 +601,8 @@ export const REFACTOR_THRESHOLDS = Object.freeze({
   // Above this top-author share the repo is treated as effectively solo and
   // the add-owner move is suppressed (see rule 7).
   soloRepoShare: 0.8,
+  // add-owner only speaks about files that already earned attention.
+  ownerAdviceMinScore: 6.5,
   busFactorRaw: 1
 });
 
@@ -723,9 +725,18 @@ export function refactorPlan(fileMeasure, graphFacts, healthFactors, opts = {}) 
   // because one person routinely commits under several git identities
   // (`nicenoize` / `Sebastian Herrmann` / `sherrmann` in this very repo would
   // otherwise read as a three-person team). Pass `opts.topAuthorShare` (0..1).
+  // The repo-level concentration gate was not enough: on a five-author repo
+  // it passes, and then the rule fires on EVERY file with bus factor 1 —
+  // which is most of them. Advice that is always true is noise. Gate it on
+  // the file mattering too: "this dangerous file also has one owner" is worth
+  // saying; the same sentence about a trivial file is not.
   const busRaw = rawOf('bus-factor');
   const share = Number.isFinite(opts.topAuthorShare) ? opts.topAuthorShare : null;
-  const ownerRuleApplies = share === null ? true : share < t.soloRepoShare;
+  const notSoloRepo = share === null ? true : share < t.soloRepoShare;
+  const fileMatters = Number.isFinite(opts.fileScore)
+    ? opts.fileScore >= t.ownerAdviceMinScore
+    : items.length > 0; // fallback: something else already fired on this file
+  const ownerRuleApplies = notSoloRepo && fileMatters;
   if (ownerRuleApplies && busRaw !== null && busRaw >= t.busFactorRaw) {
     add('add-owner',
       'bus factor 1 — one person is the only effective owner; pair on the next change or ' +

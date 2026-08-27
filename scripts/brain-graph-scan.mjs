@@ -56,11 +56,15 @@ const SOURCE_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|mts|cts|py|go|rb|php|rs)$/i;
  * git listing too, since a repo may legitimately track a vendor/ tree.
  */
 const IGNORE_DIR_RE =
-  /(^|\/)(node_modules|\.git|\.next|dist|build|out|coverage|vendor|\.gocache|__pycache__|\.venv|\.tox|target|\.worktrees)(\/|$)/;
+  /(^|\/)(node_modules|\.git|\.next|dist|build|out|coverage|vendor|\.gocache|__pycache__|\.venv|\.tox|target|\.worktrees|\.claude|\.cursor|\.vscode|\.idea|\.impeccable|\.obsidian)(\/|$)/;
 
 /** Both forms per directory: fast-glob prunes reliably only when it can match the dir itself. */
 const IGNORE_GLOBS = [
+  // Vendored tool directories are somebody else's source: scanning them puts
+  // a plugin's scripts into the user's orphan list (found on club-ops, whose
+  // .claude/skills/** showed up as dead-code candidates).
   'node_modules', '.git', '.next', 'dist', 'build', 'out', 'coverage', 'vendor',
+  '.claude', '.cursor', '.vscode', '.idea', '.impeccable', '.obsidian',
   '.gocache', '__pycache__', '.venv', '.tox', 'target', '.worktrees'
 ].flatMap((d) => [`**/${d}`, `**/${d}/**`]).concat('**/.project-brain/vector-db/**');
 

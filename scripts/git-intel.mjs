@@ -567,13 +567,22 @@ export function riskScore(files, {
  * against near-future fixes with calibrateFileHealth() before trusting the
  * ranking; pass `weights` to override. Rationale: churn is the strongest
  * single defect predictor, fix density is direct evidence of past breakage,
- * scatter (tangled coupling) and bus factor are structural amplifiers.
+ * scatter (tangled coupling) is a structural amplifier.
+ *
+ * bus-factor was dropped from the SCORE after measuring AUC 0.50 — exactly a
+ * coin flip — on two independent repos: this one (solo, where the factor is
+ * trivially constant) and a 2,930-commit five-author repo, where it still
+ * carried no information. It kept 0.20 of the weight while contributing
+ * nothing, which flattered the history baseline in every comparison against
+ * the structure factors. It is still MEASURED and still shown: "only one
+ * person knows this file" is useful for a human to read even though it does
+ * not predict the next fix. A number that informs and a number that predicts
+ * are different jobs, and only the second belongs in a score.
  */
 export const FILE_HEALTH_WEIGHTS = Object.freeze({
-  churnPercentile: 0.35,
-  coChangeScatter: 0.2,
-  busFactor: 0.2,
-  fixDensity: 0.25
+  churnPercentile: 0.4,
+  coChangeScatter: 0.25,
+  fixDensity: 0.35
 });
 
 /** Saturation: distinct co-change partners at which scatter maxes out at 1.0. */
@@ -744,12 +753,15 @@ export function fileHealth(commits, {
           partners.slice(0, 3).join(', ') + (partners.length > 3 ? ', …' : '')
         : 'no recurring co-change partners');
 
-    // 3. bus-factor: 1/busFactor — single effective owner saturates at 1.0.
+    // 3. bus-factor: MEASURED and reported, but NOT scored (AUC 0.50 on two
+    //    independent repos — see FILE_HEALTH_WEIGHTS). weight 0 keeps it in
+    //    the factor list, where a human can read it, without letting it move
+    //    a number it cannot predict.
     const o = ownByFile.get(file);
     const bf = o ? o.busFactor : 0;
     const busRaw = bf > 0 ? 1 / bf : 0;
     const topAuthor = o && o.topAuthors[0];
-    pushFactor('bus-factor', w.busFactor, busRaw,
+    pushFactor('bus-factor', 0, busRaw,
       topAuthor
         ? `bus factor ${bf} — ${topAuthor.author} owns ${Math.round(topAuthor.share * 100)}% of ${o.commits} commits`
         : 'no ownership history');
