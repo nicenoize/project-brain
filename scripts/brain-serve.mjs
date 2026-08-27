@@ -315,6 +315,9 @@ const MAX_WHY_HISTORY = 5;
 const MAX_ORPHAN_DIRS = 40;
 const ORPHAN_SCAN_DEPTH = 3;
 const CODE_EXT_RE = /\.(m?[jt]sx?|cjs|py|go|rs|rb|java|kt|swift|php|cs|scala|sh|vue|svelte|c|h|cc|cpp|hpp)$/i;
+// Extensions that make a slash-less backtick span a FILE rather than a dotted
+// identifier — keeps `app.mjs` in and `record.symbols` out.
+const KNOWN_FILE_EXT_RE = /\.(m?[jt]sx?|cjs|json|md|mdx|ya?ml|toml|sh|py|go|rs|rb|java|kt|swift|php|cs|css|scss|html|txt|lock|sql|proto|vue|svelte)$/i;
 const SKIP_TOP_DIRS = new Set([
   'node_modules', 'dist', 'build', 'out', 'coverage', 'vendor', 'tmp', 'temp',
   'venv', '__pycache__', 'target', '.project-brain'
@@ -362,8 +365,15 @@ export function extractPaths(text, { limit = MAX_MODULE_GLOBS } = {}) {
     const raw = normPath(m[1]);
     if (!raw || raw.length > 200) continue;
     if (!/^[\w.@\-/*]+$/.test(raw)) continue;      // prose, commands, code → out
-    if (!raw.includes('/')) continue;              // bare identifiers → out
-    if (!raw.includes('*') && !/\.[A-Za-z0-9]{1,8}$/.test(raw)) continue;
+    if (raw.includes('/')) {
+      // A path or glob: needs a star or a file extension, else it is a bare dir
+      // reference like `scripts/` that would over-claim the whole tree.
+      if (!raw.includes('*') && !/\.[A-Za-z0-9]{1,8}$/.test(raw)) continue;
+    } else if (!KNOWN_FILE_EXT_RE.test(raw)) {
+      // No slash: only a real filename counts (`app.mjs`), never an identifier
+      // the prose happens to dot-qualify (`record.symbols`, `store.search`).
+      continue;
+    }
     if (seen.has(raw)) continue;
     seen.add(raw);
     out.push(raw);
@@ -446,7 +456,9 @@ export function summarize(body, max = 220) {
  */
 export function decisionExcerpt(body, max = 280) {
   for (const heading of ['Decision', 'Context']) {
-    const re = new RegExp(`^#{1,6}\\s+${heading}\\b[^\\n]*\\n([\\s\\S]*?)(?=\\n#{1,6}\\s|$)`, 'im');
+    // No `m` flag on purpose: `$` must mean end-of-record, not end-of-line,
+    // or the lazy body capture stops after the section's first line.
+    const re = new RegExp(`(?:^|\\n)#{1,6}[ \\t]+${heading}\\b[^\\n]*\\n([\\s\\S]*?)(?=\\n#{1,6}[ \\t]|$)`, 'i');
     const m = re.exec(String(body || ''));
     if (m && m[1].trim()) return summarize(m[1], max);
   }
@@ -475,8 +487,14 @@ export function resolveBrainDoc(root, rel) {
   const inside = (p) => p === brainDir || p.startsWith(brainDir + path.sep);
   if (!inside(resolved)) return null;
   try {
-    // Symlink escape: a link inside the brain dir pointing out of it.
-    if (fs.existsSync(resolved) && !inside(fs.realpathSync(resolved))) return null;
+    // Symlink escape: a link inside the brain dir pointing out of it. Both
+    // sides are realpath'd — on macOS the root itself is often reached through
+    // a symlink (/var → /private/var), which would otherwise reject every doc.
+    if (fs.existsSync(resolved)) {
+      const realBrain = fs.realpathSync(brainDir);
+      const realDoc = fs.realpathSync(resolved);
+      if (realDoc !== realBrain && !realDoc.startsWith(realBrain + path.sep)) return null;
+    }
   } catch { /* unreadable → let the caller 404 on read */ }
   return resolved;
 }
@@ -856,7 +874,7 @@ function buildBlast({ seeds, importers, partners, depth }) {
 
   const addEdge = (from, to, kind, confidence) => {
     if (to === from) return;
-    const edgeKey = `${from} ${to} ${kind}`;
+    const edgeKey = `${from}\x1f${to}\x1f${kind}`;
     if (seenEdges.has(edgeKey)) return;
     if (edges.length >= BLAST_MAX_EDGES) { overflow = true; return; }
     seenEdges.add(edgeKey);
@@ -1557,14 +1575,21 @@ export function createHandler(ctx) {
     return out;
   }
 
-  /** Newest commit (git log is newest-first) touching any matching file → ms. */
+  /**
+   * Newest AUTHOR date among commits touching a matching file → epoch ms.
+   * Scans the whole window and keeps the max rather than trusting log order:
+   * git orders by committer date while `%aI` is the author date, and the two
+   * disagree after any rebase/cherry-pick.
+   */
   function newestCommitMs(commits, matches) {
+    let newest = null;
     for (const c of commits) {
-      if (!(c.files || []).some(matches)) continue;
       const t = Date.parse(c.dateIso);
-      return Number.isFinite(t) ? t : null;
+      if (!Number.isFinite(t) || (newest !== null && t <= newest)) continue;
+      if (!(c.files || []).some(matches)) continue;
+      newest = t;
     }
-    return null;
+    return newest;
   }
 
   function commitsSafe() {

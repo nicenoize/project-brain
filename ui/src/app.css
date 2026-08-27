@@ -413,3 +413,22 @@
 .basis-tag.measured { color: var(--lamp-run); }
 .basis-tag.inferred { color: var(--ink-3); }
 .empty.covered { color: var(--lamp-run); }
+
+/* module map */
+.linklike {
+  background: none; border: 0; padding: 0;
+  font: inherit; color: var(--signal); cursor: pointer;
+  text-align: left; text-decoration: underline; text-underline-offset: 3px;
+}
+.drift { font: 10.5px var(--font-data); color: var(--lamp-attn-ink); text-transform: uppercase; letter-spacing: 0.05em; }
+.unit { font-size: 9.5px; color: var(--ink-3); }
+.doc-view { margin-top: 10px; border-top: 1px solid var(--hairline); padding-top: 8px; }
+.doc-path { font-size: 10.5px; color: var(--ink-3); margin: 0 0 6px; }
+.doc-body {
+  margin: 0; max-height: 260px; overflow: auto;
+  font: 11.5px var(--font-data); color: var(--ink-2);
+  white-space: pre-wrap;
+}
+/* module map lives in the wide column: keep the name column from starving */
+.sheet .map-name { width: 46%; }
+.compact .factor-evidence { display: none; }
