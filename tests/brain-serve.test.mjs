@@ -416,8 +416,8 @@ test('frontmatterTitle: frontmatter wins, heading fallback, quotes stripped', ()
 // tests reseed.
 // ---------------------------------------------------------------------------
 
-test('answer endpoints: all four are token-gated (401 without)', async () => {
-  for (const p of ['/api/changed', '/api/risk', '/api/next', '/api/brief']) {
+test('answer endpoints: all five are token-gated (401 without)', async () => {
+  for (const p of ['/api/changed', '/api/risk', '/api/next', '/api/brief', '/api/blast']) {
     const r = await request(p);
     assert.equal(r.status, 401, `${p} must require the session token`);
   }
@@ -541,6 +541,124 @@ test('/api/brief with no target files → empty advisories, still 200', async ()
   const body = JSON.parse(r.body);
   assert.deepEqual(body.files, []);
   assert.deepEqual(body.advisories, []);
+});
+
+// ---------------------------------------------------------------------------
+// /api/blast — "what breaks if I change this?" (measured ⊕ inferred)
+//
+// The fixture is a .mjs repo with no .ts/.tsx sources, so it exercises exactly
+// the degradation that matters: graphAvailable:false with a reason, while the
+// co-change (inferred) edges still answer the question. The co-change block
+// below appends three commits to the fixture — deliberately AFTER every test
+// that asserts on the two seed commits, and before the runner section (which
+// does not read git history).
+// ---------------------------------------------------------------------------
+
+test('/api/blast on the fixture: 200 with nodes/edges arrays + graphAvailable boolean', async () => {
+  const r = await request('/api/blast?files=app.mjs', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.deepEqual(body.files, ['app.mjs']);
+  assert.ok(Array.isArray(body.nodes) && Array.isArray(body.edges));
+  assert.equal(typeof body.truncated, 'boolean');
+  assert.equal(typeof body.graphAvailable, 'boolean');
+  // A .mjs-only fixture has no TS sources → the static graph honestly reports
+  // itself unavailable and explains why, instead of pretending to be empty.
+  assert.equal(body.graphAvailable, false);
+  assert.equal(typeof body.reason, 'string');
+  assert.match(body.reason, /ts|tsx|TypeScript/i);
+  assert.equal(body.coverage.tsFiles, 0);
+  assert.equal(body.coverage.totalSeeds, 1);
+  // Seeds are always node depth 0 with kind 'seed'.
+  const seed = body.nodes.find((n) => n.file === 'app.mjs');
+  assert.ok(seed, 'the seed file is always a node');
+  assert.equal(seed.kind, 'seed');
+  assert.equal(seed.depth, 0);
+  assert.equal(typeof seed.score, 'number');
+  for (const e of body.edges) {
+    assert.ok(['imports', 'co-change'].includes(e.kind));
+    assert.equal(e.basis, e.kind === 'imports' ? 'measured' : 'inferred');
+    assert.equal(typeof e.confidence, 'number');
+  }
+  assert.equal(body.provenance.basis, 'mixed');
+  assert.equal(body.provenance.edgeKinds.imports.startsWith('measured'), true);
+  assert.equal(body.provenance.edgeKinds['co-change'].startsWith('inferred'), true);
+  assert.equal(body.state_age, 0);
+});
+
+test('/api/blast honors explicit ?files= (multi-seed) and caps depth at 3', async () => {
+  const multi = await request('/api/blast?files=app.mjs,lib.mjs', { headers: bearer });
+  assert.equal(multi.status, 200);
+  const body = JSON.parse(multi.body);
+  assert.deepEqual(body.files, ['app.mjs', 'lib.mjs']);
+  assert.equal(body.coverage.totalSeeds, 2);
+  assert.equal(body.nodes.filter((n) => n.kind === 'seed').length, 2);
+  assert.equal(body.depth, 2, 'default depth is 2');
+
+  const deep = JSON.parse((await request('/api/blast?files=app.mjs&depth=9', { headers: bearer })).body);
+  assert.equal(deep.depth, 3, 'depth is capped at 3');
+  const shallow = JSON.parse((await request('/api/blast?files=app.mjs&depth=1', { headers: bearer })).body);
+  assert.equal(shallow.depth, 1);
+  const garbage = JSON.parse((await request('/api/blast?files=app.mjs&depth=abc', { headers: bearer })).body);
+  assert.equal(garbage.depth, 2, 'unparseable depth falls back to the default');
+  const zero = JSON.parse((await request('/api/blast?files=app.mjs&depth=0', { headers: bearer })).body);
+  assert.equal(zero.depth, 1, 'depth is clamped to at least 1');
+});
+
+test('/api/blast rejects an oversized ?files= list (>500) with 400', async () => {
+  const many = Array.from({ length: 501 }, (_, i) => `f${i}.mjs`).join(',');
+  const r = await request(`/api/blast?files=${many}`, { headers: bearer });
+  assert.equal(r.status, 400);
+  assert.match(r.body, /too many files/);
+});
+
+test('/api/blast with no changes and no files → degraded 200, never an error', async () => {
+  const r = await request('/api/blast', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.deepEqual(body.files, []);
+  assert.deepEqual(body.nodes, []);
+  assert.deepEqual(body.edges, []);
+  assert.equal(body.truncated, false);
+  assert.equal(body.reason, 'no-changes');
+});
+
+test('/api/blast returns INFERRED co-change edges even without a static graph', async () => {
+  // Three commits touching both files → support 3, confidence 1.0, which is
+  // exactly the git-intel co-change threshold. This is the every-language
+  // fallback: no TS program, but the history still answers the question.
+  for (let i = 0; i < 3; i++) {
+    fs.appendFileSync(path.join(FIXTURE, 'feature.mjs'), `export const a${i} = ${i};\n`);
+    fs.appendFileSync(path.join(FIXTURE, 'feature.test.mjs'), `// case ${i}\n`);
+    execSync('git add feature.mjs feature.test.mjs', { cwd: FIXTURE });
+    execSync(`git -c commit.gpgsign=false commit -q -m "feat: pair ${i}"`, { cwd: FIXTURE });
+  }
+  const r = await request('/api/blast?files=feature.mjs', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.equal(body.graphAvailable, false, 'still no TS graph — this is the fallback path');
+  const edge = body.edges.find((e) => e.from === 'feature.mjs' && e.to === 'feature.test.mjs');
+  assert.ok(edge, 'co-change partner surfaced from history');
+  assert.equal(edge.kind, 'co-change');
+  assert.equal(edge.basis, 'inferred', 'history edges are marked inferred, never measured');
+  assert.ok(edge.confidence > 0 && edge.confidence <= 1);
+  const node = body.nodes.find((n) => n.file === 'feature.test.mjs');
+  assert.ok(node, 'the partner is a ranked node');
+  assert.equal(node.kind, 'co-change');
+  assert.equal(node.depth, 1);
+  assert.ok(node.score > 0 && node.score < 1, 'reached nodes score below the seed');
+});
+
+test('/api/blast caches adjacency per HEAD (a second query never rebuilds it)', async () => {
+  await request('/api/blast?files=feature.mjs', { headers: bearer });
+  const first = serve.blastStats();
+  assert.ok(first.computes >= 1, 'adjacency built at least once');
+  assert.equal(typeof first.key, 'string');
+  // Different question, same HEAD → the graph + co-change adjacency is reused.
+  await request('/api/blast?files=app.mjs,lib.mjs&depth=3', { headers: bearer });
+  const second = serve.blastStats();
+  assert.equal(second.computes, first.computes, 'same HEAD → cached, not recomputed');
+  assert.equal(second.key, first.key);
 });
 
 // ---------------------------------------------------------------------------

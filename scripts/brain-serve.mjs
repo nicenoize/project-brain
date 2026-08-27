@@ -45,6 +45,25 @@
  *                          repo has TS sources) + calibrateRisk cached per
  *                          HEAD; default change-set staged ∪ unstaged, empty →
  *                          {score:null, reason:'no-changes'}
+ *   /api/blast?files=a,b&depth=N
+ *                          "What breaks if I change this?" — depth-limited
+ *                          blast radius (default 2, cap 3) around the change
+ *                          set. Blends TWO edge kinds and labels each one:
+ *                          'imports' edges are MEASURED (ts-graph resolved
+ *                          static imports, confidence 1) and 'co-change'
+ *                          edges are INFERRED (git history, confidence =
+ *                          P(b|a)) — the UI shows provenance per edge
+ *                          (Praktiken-Katalog: measured vs inferred). Nodes
+ *                          are scored by graph proximity × edge confidence so
+ *                          the list ranks "most likely to break"; measured
+ *                          import edges outrank inferred history at equal
+ *                          depth. Non-TS repo / missing optional `typescript`
+ *                          → graphAvailable:false + `reason`, and the
+ *                          co-change edges are STILL returned — the honest
+ *                          degradation that works in every language. Node cap
+ *                          60 (→ truncated:true, highest-scoring kept);
+ *                          adjacency cached per HEAD like intelCache
+ *                          (blastStats() is the test hook)
  *   /api/next              brain:route's exported PURE rule engine over
  *                          minimal read-only sensed signals — ranked next
  *                          actions (≤5, each tagged auto|human)
@@ -52,6 +71,28 @@
  *                          governing ADRs) + a ~1200-token brain:pack
  *                          for-agent preview (provider 'none' or any throw →
  *                          packPreview null + packWarning, never a 500)
+ *   /api/map               Doc-Navigator map: every .project-brain/modules/*
+ *                          record with its derived fileGlobs, linked
+ *                          decision/feature/finding counts, and a MEASURED
+ *                          staleness flag (record older than
+ *                          BRAIN_STALE_DOC_DAYS, default 60, OR older than the
+ *                          newest commit touching its globs — "the docs are
+ *                          drifting from the code", proven from git, not
+ *                          guessed) + `orphans`: top-level code areas with no
+ *                          module record at all — the honest gap. We do NOT
+ *                          generate docs from code; we make the human/agent-
+ *                          authored records navigable and connect them to files
+ *   /api/doc?file=<p>      One .project-brain record: frontmatter + body
+ *                          (capped 64KB) + outgoing links (decisions, modules,
+ *                          files). `file` is repo-relative and validated: it
+ *                          must resolve INSIDE .project-brain and end in .md —
+ *                          traversal, absolute paths and non-.md → 400, and
+ *                          nothing outside the brain dir is ever opened
+ *   /api/why?file=<p>      "Why is this code file like this": its module, the
+ *                          governing ADRs (module/glob match, mirroring
+ *                          brain:radar's mapping), the open findings citing
+ *                          it, and the last 5 commits touching it (read from
+ *                          cachedCommits — no extra git call)
  *   /api/runners           supervised runner records (listRunners; the
  *                          record's workPackageId is exposed as `task`) +
  *                          runnerCmdConfigured
@@ -97,6 +138,9 @@ import { gitLogArgs, parseLog, hotspots, coChange, ownership, riskScore, calibra
 import { applyRules, scoreChange } from './brain-route.mjs';
 import { buildBrief } from './brain-brief.mjs';
 import { getIndexProvider } from './index-provider.mjs';
+// Canonical glob engine (same one brain:radar/brief/lease use) — the
+// Doc-Navigator's module→file mapping must never disagree with lease overlap.
+import { targetMatchesFile } from './lease-overlap.mjs';
 import { startRunner, listRunners, stopRunner, tailLog } from './runner-supervisor.mjs';
 
 export const DEFAULT_PORT = 4100;
@@ -246,6 +290,211 @@ export function listRecords(root, type) {
   walk(dir);
   records.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
   return records;
+}
+
+// ---------------------------------------------------------------------------
+// Doc-Navigator helpers (/api/map, /api/doc, /api/why) — pure, exported for
+// tests. Deliberately NOT a doc generator: nothing here reads code to invent
+// prose. It reads the human/agent-authored .project-brain records, derives the
+// file globs they already name, and measures the drift between the two.
+// ---------------------------------------------------------------------------
+
+/** Record folders the map counts. Separate from RECORD_DIRS on purpose:
+ *  /api/records' public type vocabulary must not shift underneath it. */
+export const DOC_DIRS = Object.freeze({
+  decisions: 'decisions',
+  modules: 'modules',
+  features: 'features',
+  findings: 'findings',
+  insights: 'insights'
+});
+
+const MAX_DOC_BYTES = 64 * 1024;
+const MAX_MODULE_GLOBS = 40;
+const MAX_WHY_HISTORY = 5;
+const MAX_ORPHAN_DIRS = 40;
+const ORPHAN_SCAN_DEPTH = 3;
+const CODE_EXT_RE = /\.(m?[jt]sx?|cjs|py|go|rs|rb|java|kt|swift|php|cs|scala|sh|vue|svelte|c|h|cc|cpp|hpp)$/i;
+const SKIP_TOP_DIRS = new Set([
+  'node_modules', 'dist', 'build', 'out', 'coverage', 'vendor', 'tmp', 'temp',
+  'venv', '__pycache__', 'target', '.project-brain'
+]);
+
+/** Read at call time so tests (and users) can flip the threshold per process. */
+export function staleDocDays() {
+  const n = Number(process.env.BRAIN_STALE_DOC_DAYS);
+  return Number.isFinite(n) && n > 0 ? n : 60;
+}
+
+/** PURE. Repo-relative normalization: strip `./`, unify separators. */
+export function normPath(p) {
+  return String(p || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+/**
+ * PURE. Frontmatter key/values + body — same shape as common.mjs parseDoc but
+ * CRLF-tolerant and never throwing. Nested YAML (findings' `sources:` list)
+ * is skipped by the key regex, which is exactly what callers want here.
+ */
+export function parseFrontmatter(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(String(text || ''));
+  if (!m) return { data: {}, body: String(text || '') };
+  const data = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+    if (kv) data[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, '');
+  }
+  return { data, body: m[2] || '' };
+}
+
+/**
+ * PURE. Repo paths a record NAMES in backticks (`scripts/retrieval.mjs`,
+ * `scripts/**`). This is the honest source for a module's fileGlobs: the
+ * author already wrote which files the module owns — we just read them back
+ * instead of inferring ownership from the code.
+ */
+export function extractPaths(text, { limit = MAX_MODULE_GLOBS } = {}) {
+  const out = [];
+  const seen = new Set();
+  const re = /`([^`\n]+)`/g;
+  let m;
+  while ((m = re.exec(String(text || ''))) !== null) {
+    const raw = normPath(m[1]);
+    if (!raw || raw.length > 200) continue;
+    if (!/^[\w.@\-/*]+$/.test(raw)) continue;      // prose, commands, code → out
+    if (!raw.includes('/')) continue;              // bare identifiers → out
+    if (!raw.includes('*') && !/\.[A-Za-z0-9]{1,8}$/.test(raw)) continue;
+    if (seen.has(raw)) continue;
+    seen.add(raw);
+    out.push(raw);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/**
+ * PURE. A module record's file globs: an explicit frontmatter list wins
+ * (`globs:`/`fileGlobs:`/`files:`, comma-separated), else the paths its body
+ * names. Explicit-first means a record can always override the derivation.
+ */
+export function moduleGlobs(data = {}, body = '') {
+  const explicit = String(data.globs ?? data.fileGlobs ?? data.files ?? '').trim();
+  if (explicit) {
+    return [...new Set(explicit.split(',').map(normPath).filter(Boolean))].slice(0, MAX_MODULE_GLOBS);
+  }
+  return extractPaths(body);
+}
+
+/** PURE. Canonical glob/dir/exact match, delegated to the lease engine. */
+export function globMatchesFile(glob, file) {
+  const g = normPath(glob);
+  const f = normPath(file);
+  if (!g || !f) return false;
+  if (g === f) return true;
+  try { return targetMatchesFile(g, f); } catch { return false; }
+}
+
+/** PURE. Path heuristic mirroring brain-radar/infer's inferModule. */
+export function inferModuleFromPath(file) {
+  const f = normPath(file);
+  if (!f) return '';
+  if (f.includes('/modules/')) return path.basename(f, path.extname(f));
+  const parts = f.split('/');
+  if (['app', 'pages', 'components', 'lib', 'src', 'server', 'actions'].includes(parts[0])) {
+    return parts.slice(0, 2).join('/');
+  }
+  return path.dirname(f) === '.' ? '' : path.dirname(f);
+}
+
+/**
+ * PURE. The module owning a file: the first module record whose globs match,
+ * else the path heuristic. `modules` is the loadDocRecords() shape.
+ */
+export function moduleForFile(file, modules = []) {
+  const f = normPath(file);
+  for (const rec of modules) {
+    if ((rec.globs || []).some((g) => globMatchesFile(g, f))) return rec.module || rec.name;
+  }
+  return inferModuleFromPath(f);
+}
+
+/**
+ * PURE. Module aliases used to match records by their `module:` frontmatter —
+ * same widening brain:radar applies (ADRs curate short module names like
+ * `retrieval` while a path infers `scripts/retrieval`).
+ */
+export function moduleAliases(module, file = '') {
+  const last = String(module || '').split('/').filter(Boolean).pop() || '';
+  const stem = file ? path.basename(normPath(file), path.extname(normPath(file))) : '';
+  return new Set([module, last, stem].map((s) => String(s || '').trim()).filter(Boolean));
+}
+
+/** PURE. First real paragraph of a record body (headings/links skipped). */
+export function summarize(body, max = 220) {
+  for (const block of String(body || '').split(/\r?\n\s*\r?\n/)) {
+    const t = block.trim();
+    if (!t || t.startsWith('#') || t.startsWith('---') || t.startsWith('|')) continue;
+    const flat = t.replace(/\s+/g, ' ').replace(/^[-*]\s+/, '');
+    return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  }
+  return '';
+}
+
+/**
+ * PURE. The "why" excerpt of an ADR: the Decision section if the record has
+ * one (that IS the answer), else Context, else the opening paragraph.
+ */
+export function decisionExcerpt(body, max = 280) {
+  for (const heading of ['Decision', 'Context']) {
+    const re = new RegExp(`^#{1,6}\\s+${heading}\\b[^\\n]*\\n([\\s\\S]*?)(?=\\n#{1,6}\\s|$)`, 'im');
+    const m = re.exec(String(body || ''));
+    if (m && m[1].trim()) return summarize(m[1], max);
+  }
+  return summarize(body, max);
+}
+
+/**
+ * Resolve a `?file=` doc parameter to an absolute path INSIDE
+ * <root>/.project-brain, or null when it must be rejected (400). Rejects:
+ * absolute paths (posix + windows drive), NUL bytes, non-.md, and anything
+ * that escapes the brain dir after resolution — including via a symlink,
+ * which is re-checked against the real path. A leading `.project-brain/` is
+ * accepted (that is how every record is addressed elsewhere in the API).
+ */
+export function resolveBrainDoc(root, rel) {
+  if (typeof rel !== 'string') return null;
+  const raw = rel.trim();
+  if (!raw || raw.length > 1024) return null;
+  if (raw.includes('\0')) return null;
+  if (raw.startsWith('/') || raw.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(raw)) return null;
+  const norm = normPath(raw);
+  if (!/\.md$/i.test(norm)) return null;
+  const brainDir = path.resolve(root, '.project-brain');
+  const inner = norm.replace(/^\.project-brain\/+/, '');
+  const resolved = path.resolve(brainDir, inner);
+  const inside = (p) => p === brainDir || p.startsWith(brainDir + path.sep);
+  if (!inside(resolved)) return null;
+  try {
+    // Symlink escape: a link inside the brain dir pointing out of it.
+    if (fs.existsSync(resolved) && !inside(fs.realpathSync(resolved))) return null;
+  } catch { /* unreadable → let the caller 404 on read */ }
+  return resolved;
+}
+
+/** PURE. `[[wiki-link]]` targets a record body names (deduped, bounded). */
+export function wikiLinks(body, limit = 60) {
+  const out = [];
+  const seen = new Set();
+  const re = /\[\[([^\]|#\n]+)(?:[|#][^\]\n]*)?\]\]/g;
+  let m;
+  while ((m = re.exec(String(body || ''))) !== null) {
+    const id = m[1].trim().replace(/\.md$/i, '');
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -437,31 +686,63 @@ function cachedCalibration(root, commits) {
 // until committed — acceptable staleness for a read-only dashboard). Mirrors
 // brain-intel.mjs#blastRadiusFor: null (factor omitted) for non-TS repos,
 // a missing optional `typescript` dep, or any failure. Never throws.
-const tsGraphCache = { key: null, ctx: null, indexable: null };
+const tsGraphCache = { key: null, ctx: null, indexable: null, tsFiles: 0, reason: null };
 
-async function blastRadiusFor(root, files) {
-  if (process.env.BRAIN_TS_GRAPH === '0') return null;
-  try {
-    const key = gitHead(root);
-    if (tsGraphCache.key !== key) {
-      const indexable = await listIndexableFiles();
-      let ctx = null;
+/**
+ * Load (and cache per HEAD) the ts-graph semantic context. Unlike
+ * blastRadiusFor this keeps the REASON a graph is missing, because /api/blast
+ * has to explain the degradation instead of silently dropping the factor.
+ * Never throws: every failure becomes {ctx:null, reason}.
+ */
+async function tsGraphFor(root) {
+  if (process.env.BRAIN_TS_GRAPH === '0') {
+    return { ctx: null, indexable: [], tsFiles: 0, reason: 'static import graph disabled via BRAIN_TS_GRAPH=0' };
+  }
+  const key = gitHead(root);
+  if (tsGraphCache.key !== key) {
+    let indexable = [];
+    let tsFiles = 0;
+    let ctx = null;
+    let reason = null;
+    try {
+      indexable = await listIndexableFiles();
+      tsFiles = indexable.filter((f) => /\.(ts|tsx)$/.test(f)).length;
       // Cheap guard first: without TS sources the loose program is empty
       // anyway, and loading the optional `typescript` package costs time.
-      if (indexable.some((f) => /\.(ts|tsx)$/.test(f))) {
+      if (tsFiles > 0) {
         const { loadTsSemanticContext } = await import('./ts-graph.mjs');
         ctx = (await loadTsSemanticContext(root, new Set(indexable))) || null;
+        if (!ctx) reason = 'no TypeScript program — install the optional `typescript` dependency (npm i -D typescript)';
+      } else {
+        reason = 'no .ts/.tsx sources indexed — static import graph unavailable for this repo';
       }
-      tsGraphCache.ctx = ctx;
-      tsGraphCache.indexable = indexable;
-      tsGraphCache.key = key;
+    } catch (error) {
+      ctx = null;
+      reason = `static import graph unavailable: ${error.message || error}`;
     }
-    if (!tsGraphCache.ctx) return null;
+    tsGraphCache.ctx = ctx;
+    tsGraphCache.indexable = indexable;
+    tsGraphCache.tsFiles = tsFiles;
+    tsGraphCache.reason = reason;
+    tsGraphCache.key = key;
+  }
+  return {
+    ctx: tsGraphCache.ctx,
+    indexable: tsGraphCache.indexable || [],
+    tsFiles: tsGraphCache.tsFiles,
+    reason: tsGraphCache.ctx ? null : tsGraphCache.reason
+  };
+}
+
+async function blastRadiusFor(root, files) {
+  try {
+    const { ctx, indexable } = await tsGraphFor(root);
+    if (!ctx) return null;
     const touched = new Set(files);
     const dependents = [];
-    for (const rel of tsGraphCache.indexable) {
+    for (const rel of indexable) {
       if (touched.has(rel)) continue;
-      const info = tsGraphCache.ctx.get(rel);
+      const info = ctx.get(rel);
       if (info?.resolvedImports?.some((imp) => touched.has(imp))) dependents.push(rel);
     }
     dependents.sort();
@@ -469,6 +750,173 @@ async function blastRadiusFor(root, files) {
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// blast radius — "what breaks if I change this?" (measured ⊕ inferred)
+// ---------------------------------------------------------------------------
+
+export const BLAST_DEFAULT_DEPTH = 2;
+export const BLAST_MAX_DEPTH = 3;
+export const BLAST_MAX_NODES = 60;
+const BLAST_MAX_EDGES = 400;
+// Fan-out cap per node and per edge kind: one file imported by 900 others must
+// not turn a dashboard query into a 900-node dump (the cap is a cost bound,
+// truncated:true is the honesty bit).
+const BLAST_MAX_FANOUT = 25;
+// Score decay per hop, and the discount applied to inferred (history) edges so
+// a MEASURED import dependent always outranks an INFERRED co-change partner at
+// equal depth and equal confidence.
+const BLAST_DEPTH_DECAY = 0.6;
+const BLAST_INFERRED_WEIGHT = 0.85;
+
+/** Per-edge provenance contract the UI renders against (measured vs inferred). */
+const BLAST_PROVENANCE = Object.freeze({
+  basis: 'mixed',
+  source: 'ts-graph static imports (measured) ⊕ git-log co-change (inferred)',
+  edgeKinds: Object.freeze({
+    imports: 'measured — compiler-resolved static import',
+    'co-change': 'inferred — files landed in the same commits, confidence = P(b|a)'
+  })
+});
+
+// Adjacency (reverse import index + co-change partners) cached per HEAD like
+// intelCache: it is identical for every ?files= query at the same commit, and
+// rebuilding it per request would re-walk the whole TS program. `computes` is
+// the exported test hook proving a second request reuses it.
+const blastCache = { key: null, value: null, computes: 0 };
+
+/** Test hook: observe the blast adjacency cache without touching internals. */
+export function blastStats() {
+  return { key: blastCache.key, computes: blastCache.computes };
+}
+
+/**
+ * Build both adjacency maps once per HEAD:
+ *   importers: file → [files that statically import it]  (MEASURED, ts-graph)
+ *   partners:  file → [{file, confidence}] co-change      (INFERRED, git log)
+ * Co-change partners can name deleted files — history is reported as it
+ * happened; the UI marks those edges inferred anyway.
+ */
+async function blastAdjacency(root, commits) {
+  const key = `${gitHead(root)}|${DEFAULT_COMMIT_WINDOW}`;
+  if (blastCache.key === key && blastCache.value) return blastCache.value;
+  const { ctx, indexable, tsFiles, reason } = await tsGraphFor(root);
+  const importers = new Map();
+  if (ctx) {
+    for (const rel of indexable) {
+      const info = ctx.get(rel);
+      for (const imported of info?.resolvedImports || []) {
+        if (!importers.has(imported)) importers.set(imported, []);
+        importers.get(imported).push(rel);
+      }
+    }
+    for (const list of importers.values()) list.sort();
+  }
+  const cc = coChange(commits);
+  const partners = new Map();
+  for (const pair of cc.pairs) {
+    if (!partners.has(pair.a)) partners.set(pair.a, []);
+    partners.get(pair.a).push({ file: pair.b, confidence: pair.confidence });
+  }
+  for (const list of partners.values()) {
+    list.sort((x, y) => y.confidence - x.confidence || (x.file < y.file ? -1 : x.file > y.file ? 1 : 0));
+  }
+  const value = {
+    importers,
+    partners,
+    graphAvailable: Boolean(ctx),
+    tsFiles,
+    reason: ctx ? null : reason,
+    window: cc.window
+  };
+  blastCache.key = key;
+  blastCache.value = value;
+  blastCache.computes += 1;
+  return value;
+}
+
+/**
+ * PURE. Breadth-first blast radius over the two adjacency maps.
+ *
+ * Blend rule (documented, because the UI shows it): an 'imports' edge is
+ * MEASURED — the compiler resolved that module specifier, confidence 1. A
+ * 'co-change' edge is INFERRED — the two files landed in the same commits,
+ * confidence = P(b|a) from git history. Node score is the best path product
+ * seen: parent_score × edge_confidence × kind_weight × depth_decay. Nodes
+ * reached by any measured edge are 'dependent'; history-only nodes are
+ * 'co-change'.
+ */
+function buildBlast({ seeds, importers, partners, depth }) {
+  const nodes = new Map();
+  for (const file of seeds) nodes.set(file, { file, kind: 'seed', depth: 0, score: 1 });
+  const edges = [];
+  const seenEdges = new Set();
+  let overflow = false;
+
+  const addEdge = (from, to, kind, confidence) => {
+    if (to === from) return;
+    const edgeKey = `${from} ${to} ${kind}`;
+    if (seenEdges.has(edgeKey)) return;
+    if (edges.length >= BLAST_MAX_EDGES) { overflow = true; return; }
+    seenEdges.add(edgeKey);
+    edges.push({
+      from,
+      to,
+      kind,
+      confidence: Math.round(confidence * 1000) / 1000,
+      basis: kind === 'imports' ? 'measured' : 'inferred'
+    });
+  };
+
+  let frontier = [...seeds];
+  for (let d = 1; d <= depth; d++) {
+    const next = [];
+    for (const from of frontier) {
+      const parent = nodes.get(from);
+      if (!parent) continue;
+      const expansions = [
+        ...(importers.get(from) || []).slice(0, BLAST_MAX_FANOUT)
+          .map((file) => ({ file, kind: 'imports', confidence: 1, weight: 1 })),
+        ...(partners.get(from) || []).slice(0, BLAST_MAX_FANOUT)
+          .map((p) => ({ file: p.file, kind: 'co-change', confidence: p.confidence, weight: BLAST_INFERRED_WEIGHT }))
+      ];
+      for (const exp of expansions) {
+        addEdge(from, exp.file, exp.kind, exp.confidence);
+        if (exp.file === from) continue;
+        const score = parent.score * exp.confidence * exp.weight * BLAST_DEPTH_DECAY;
+        const existing = nodes.get(exp.file);
+        const kind = exp.kind === 'imports' ? 'dependent' : 'co-change';
+        if (!existing) {
+          nodes.set(exp.file, { file: exp.file, kind, depth: d, score });
+          next.push(exp.file);
+          continue;
+        }
+        if (existing.kind === 'seed') continue; // the question itself never demotes
+        existing.score = Math.max(existing.score, score);
+        existing.depth = Math.min(existing.depth, d);
+        if (kind === 'dependent') existing.kind = 'dependent'; // measured wins
+      }
+    }
+    frontier = next;
+  }
+
+  const seedNodes = [...nodes.values()].filter((n) => n.kind === 'seed');
+  const reached = [...nodes.values()]
+    .filter((n) => n.kind !== 'seed')
+    .sort((a, b) => b.score - a.score || a.depth - b.depth || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+  const budget = Math.max(0, BLAST_MAX_NODES - seedNodes.length);
+  const kept = reached.slice(0, budget);
+  const truncated = overflow || kept.length < reached.length;
+  const keptFiles = new Set([...seedNodes, ...kept].map((n) => n.file));
+  const keptEdges = edges
+    .filter((e) => keptFiles.has(e.from) && keptFiles.has(e.to))
+    .sort((a, b) => b.confidence - a.confidence || (a.from < b.from ? -1 : a.from > b.from ? 1 : 0) || (a.to < b.to ? -1 : a.to > b.to ? 1 : 0));
+  return {
+    nodes: [...seedNodes, ...kept].map((n) => ({ ...n, score: Math.round(n.score * 1000) / 1000 })),
+    edges: keptEdges,
+    truncated
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -832,6 +1280,65 @@ export function createHandler(ctx) {
   }
 
   /**
+   * "What breaks if I change this?" — see the file header for the blend rule.
+   * Degradation ladder, never a 500: no seeds → empty answer with
+   * reason 'no-changes'; no git history → co-change edges empty + warning; no
+   * TS graph → graphAvailable:false + reason, co-change edges still returned.
+   */
+  async function apiBlast(res, url) {
+    const explicit = filesParam(url);
+    if (explicit && explicit.length > MAX_FILES_PARAM) {
+      return sendJson(res, 400, { error: `too many files (max ${MAX_FILES_PARAM})` });
+    }
+    const rawDepth = Number(url.searchParams.get('depth') || BLAST_DEFAULT_DEPTH);
+    const depth = Math.min(
+      Math.max(Number.isFinite(rawDepth) ? Math.floor(rawDepth) : BLAST_DEFAULT_DEPTH, 1),
+      BLAST_MAX_DEPTH
+    );
+    const files = targetFiles(url);
+    if (!files.length) {
+      // Empty change-set is a 200 like /api/risk — and costs nothing: neither
+      // the TS program nor git log is touched when there is no question.
+      return sendJson(res, 200, {
+        files: [], nodes: [], edges: [], truncated: false,
+        graphAvailable: false,
+        coverage: { tsFiles: 0, totalSeeds: 0 },
+        reason: 'no-changes',
+        depth,
+        provenance: BLAST_PROVENANCE,
+        ...liveMeta()
+      });
+    }
+    let commits = [];
+    let warning;
+    try {
+      commits = cachedCommits(root, { limit: DEFAULT_COMMIT_WINDOW });
+    } catch (error) {
+      warning = `git history unavailable: ${error.message || error} — co-change edges omitted`;
+    }
+    const adjacency = await blastAdjacency(root, commits);
+    const { nodes, edges, truncated } = buildBlast({
+      seeds: files,
+      importers: adjacency.importers,
+      partners: adjacency.partners,
+      depth
+    });
+    sendJson(res, 200, {
+      files,
+      nodes,
+      edges,
+      truncated,
+      graphAvailable: adjacency.graphAvailable,
+      coverage: { tsFiles: adjacency.tsFiles, totalSeeds: files.length },
+      ...(adjacency.reason ? { reason: adjacency.reason } : {}),
+      ...(warning ? { warning } : {}),
+      depth,
+      provenance: { ...BLAST_PROVENANCE, window: adjacency.window || null },
+      ...liveMeta()
+    });
+  }
+
+  /**
    * Minimal read-only sensing for the exported brain-route rule engine.
    * brain-route's own senseState() is not exported (and opens the index /
    * calls gh), so only the cheap, highest-value signals are sensed here:
@@ -997,6 +1504,303 @@ export function createHandler(ctx) {
       ...(briefWarning ? { briefWarning } : {}),
       packPreview,
       ...(packWarning ? { packWarning } : {}),
+      ...liveMeta()
+    });
+  }
+
+  // --- Doc-Navigator (/api/map, /api/doc, /api/why) ---
+  // Intent-first, NOT an auto-generated wiki: every word served here was
+  // written by a human or an agent into .project-brain. What the code adds is
+  // navigation (record → files, file → record) and one measured honesty
+  // signal — where the docs have fallen behind the commits.
+
+  /** Read one record folder (flat, .md only) into a working shape. Soft → []. */
+  function docRecordsOf(kind) {
+    const dir = path.join(brainDir, kind);
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+    const out = [];
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.endsWith('.md')) continue;
+      const abs = path.join(dir, e.name);
+      let text = '';
+      try { text = fs.readFileSync(abs, 'utf8').slice(0, MAX_DOC_BYTES); } catch { continue; }
+      const { data, body } = parseFrontmatter(text);
+      let mtimeMs = null;
+      try { mtimeMs = fs.statSync(abs).mtimeMs; } catch { /* soft */ }
+      const name = e.name.replace(/\.md$/i, '');
+      out.push({
+        file: normPath(path.relative(root, abs)),
+        name,
+        title: frontmatterTitle(text) || name,
+        module: String(data.module || '').trim(),
+        data,
+        body,
+        mtimeMs,
+        globs: kind === 'modules' ? moduleGlobs(data, body) : [],
+        sources: kind === 'findings' ? findingSources(text) : []
+      });
+    }
+    out.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+    return out;
+  }
+
+  /** Findings carry a nested `sources:` list the flat FM parser skips. */
+  function findingSources(text) {
+    const out = [];
+    const re = /^\s*-\s*path:\s*(.+)$/gm;
+    let m;
+    while ((m = re.exec(String(text || ''))) !== null) {
+      const p = normPath(m[1].trim().replace(/^["']|["']$/g, ''));
+      if (p) out.push(p);
+    }
+    return out;
+  }
+
+  /** Newest commit (git log is newest-first) touching any matching file → ms. */
+  function newestCommitMs(commits, matches) {
+    for (const c of commits) {
+      if (!(c.files || []).some(matches)) continue;
+      const t = Date.parse(c.dateIso);
+      return Number.isFinite(t) ? t : null;
+    }
+    return null;
+  }
+
+  function commitsSafe() {
+    try { return { commits: cachedCommits(root, { limit: DEFAULT_COMMIT_WINDOW }), warning: null }; }
+    catch (error) { return { commits: [], warning: `git history unavailable: ${error.message || error}` }; }
+  }
+
+  /** Does a top-level dir hold source files at all? Bounded, never throws. */
+  function containsCode(dir, depth = 0) {
+    if (depth > ORPHAN_SCAN_DEPTH) return false;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || SKIP_TOP_DIRS.has(e.name)) continue;
+      if (e.isFile() && CODE_EXT_RE.test(e.name)) return true;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || SKIP_TOP_DIRS.has(e.name)) continue;
+      if (e.isDirectory() && containsCode(path.join(dir, e.name), depth + 1)) return true;
+    }
+    return false;
+  }
+
+  function topLevelCodeDirs() {
+    let entries;
+    try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return []; }
+    const dirs = [];
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('.') || SKIP_TOP_DIRS.has(e.name)) continue;
+      if (containsCode(path.join(root, e.name))) dirs.push(e.name);
+      if (dirs.length >= MAX_ORPHAN_DIRS) break;
+    }
+    return dirs.sort();
+  }
+
+  function apiMap(res) {
+    const now = Date.now();
+    const staleDays = staleDocDays();
+    const moduleRecs = docRecordsOf('modules');
+    const decisions = docRecordsOf('decisions');
+    const features = docRecordsOf('features');
+    const findings = docRecordsOf('findings');
+    const insights = docRecordsOf('insights');
+    const { commits, warning } = commitsSafe();
+
+    const countIn = (recs, aliases) => recs.filter((r) => r.module && aliases.has(r.module)).length;
+
+    const modules = moduleRecs.map((rec) => {
+      const aliases = moduleAliases(rec.module || rec.name, rec.file);
+      aliases.add(rec.name);
+      if (rec.data.feature) aliases.add(String(rec.data.feature).trim());
+      // The record's own last change: measured from git when the record is in
+      // the commit window, else its mtime (a fresh clone has no history for it).
+      const docMs = newestCommitMs(commits, (f) => normPath(f) === rec.file) ?? rec.mtimeMs;
+      // The newest commit touching the code the record claims to describe.
+      // Brain records are excluded so a doc edit can never mark itself stale.
+      const codeMs = rec.globs.length
+        ? newestCommitMs(commits, (f) => {
+          const n = normPath(f);
+          return !n.startsWith('.project-brain/') && rec.globs.some((g) => globMatchesFile(g, n));
+        })
+        : null;
+      const ageDays = docMs == null ? null : Math.round(((now - docMs) / 86_400_000) * 10) / 10;
+      const staleByAge = ageDays !== null && ageDays > staleDays;
+      const staleByCode = docMs != null && codeMs != null && codeMs > docMs;
+      return {
+        name: rec.name,
+        module: rec.module || rec.name,
+        file: rec.file,
+        title: rec.title,
+        summary: summarize(rec.body),
+        fileGlobs: rec.globs,
+        decisionCount: countIn(decisions, aliases),
+        featureCount: countIn(features, aliases),
+        findingCount: countIn(findings, aliases),
+        stale: Boolean(staleByAge || staleByCode),
+        // Honest about WHICH signal fired — "drifting from code" and "nobody
+        // has touched this in months" are different problems for the reader.
+        staleReason: staleByCode ? 'code-newer-than-doc' : staleByAge ? `older-than-${staleDays}d` : null,
+        ageDays,
+        lastDocChange: docMs != null ? new Date(docMs).toISOString() : null,
+        lastCodeChange: codeMs != null ? new Date(codeMs).toISOString() : null
+      };
+    });
+
+    // Orphans: top-level code areas no module record claims. This is the gap a
+    // generated wiki hides by inventing a page for everything.
+    const claimedTops = new Set();
+    for (const rec of moduleRecs) {
+      for (const g of rec.globs) {
+        const top = normPath(g).split('/')[0];
+        if (top && !top.includes('*')) claimedTops.add(top);
+      }
+    }
+    const codeDirs = topLevelCodeDirs().filter((d) => !claimedTops.has(d));
+
+    sendJson(res, 200, {
+      modules,
+      orphans: {
+        codeDirs,
+        reason: codeDirs.length
+          ? 'top-level code directories no .project-brain/modules/*.md record names — the brain has no authored intent for them'
+          : 'every top-level code directory is named by at least one module record'
+      },
+      counts: {
+        decisions: decisions.length,
+        modules: moduleRecs.length,
+        features: features.length,
+        findings: findings.length,
+        insights: insights.length
+      },
+      provenance: {
+        basis: commits.length ? 'measured' : 'declared',
+        source: '.project-brain records + git log',
+        window: { commits: commits.length },
+        staleDocDays: staleDays,
+        note: 'records are authored, not generated; staleness is measured against commit history'
+      },
+      ...(warning ? { warning } : {}),
+      ...freshness(path.join(brainDir, 'modules'))
+    });
+  }
+
+  /** Outgoing links of one record: `[[wiki-links]]` + the paths it names. */
+  function docLinks(body, data) {
+    const decisions = docRecordsOf('decisions');
+    const modules = docRecordsOf('modules');
+    const dById = new Map(decisions.map((r) => [r.name, r]));
+    const mById = new Map(modules.map((r) => [r.name, r]));
+    const outD = [];
+    const outM = [];
+    const seen = new Set();
+    for (const id of wikiLinks(body)) {
+      const d = dById.get(id);
+      if (d && !seen.has(d.file)) { seen.add(d.file); outD.push({ file: d.file, id: d.name, title: d.title }); continue; }
+      const m = mById.get(id);
+      if (m && !seen.has(m.file)) { seen.add(m.file); outM.push({ file: m.file, name: m.name, title: m.title }); }
+    }
+    const fmModule = String(data.module || '').trim();
+    if (fmModule) {
+      const m = modules.find((r) => r.module === fmModule || r.name === fmModule);
+      if (m && !seen.has(m.file)) { seen.add(m.file); outM.push({ file: m.file, name: m.name, title: m.title }); }
+    }
+    return { decisions: outD, modules: outM, files: extractPaths(body, { limit: 60 }) };
+  }
+
+  function apiDoc(res, url) {
+    const rel = url.searchParams.get('file');
+    const resolved = resolveBrainDoc(root, rel === null ? '' : rel);
+    if (!resolved) {
+      // Rejected BEFORE any filesystem read — traversal never touches disk.
+      return sendJson(res, 400, {
+        error: 'bad-request',
+        hint: '?file= must be a repo-relative .md path inside .project-brain/'
+      });
+    }
+    let raw;
+    try { raw = fs.readFileSync(resolved, 'utf8'); }
+    catch { return sendJson(res, 404, { error: 'not-found', file: normPath(rel || '') }); }
+    const truncated = raw.length > MAX_DOC_BYTES;
+    const text = truncated ? raw.slice(0, MAX_DOC_BYTES) : raw;
+    const { data, body } = parseFrontmatter(text);
+    const file = normPath(path.relative(root, resolved));
+    sendJson(res, 200, {
+      file,
+      title: frontmatterTitle(text) || path.basename(file, '.md'),
+      frontmatter: data,
+      body,
+      truncated,
+      links: docLinks(body, data),
+      ...freshness(resolved)
+    });
+  }
+
+  function apiWhy(res, url) {
+    const file = normPath(url.searchParams.get('file') || '');
+    if (!file || file.length > 512 || file.includes('\0')) {
+      return sendJson(res, 400, { error: 'bad-request', hint: '?file=<repo-relative code file> is required' });
+    }
+    const moduleRecs = docRecordsOf('modules');
+    const owner = moduleRecs.find((r) => (r.globs || []).some((g) => globMatchesFile(g, file))) || null;
+    const module = owner ? (owner.module || owner.name) : inferModuleFromPath(file);
+    // Same alias widening brain:radar uses so a curated ADR module (`retrieval`)
+    // still matches a path-inferred one (`scripts/retrieval`).
+    const aliases = moduleAliases(module, file);
+    if (owner) {
+      aliases.add(owner.name);
+      if (owner.module) aliases.add(owner.module);
+      if (owner.data.feature) aliases.add(String(owner.data.feature).trim());
+    }
+    const decisions = docRecordsOf('decisions')
+      .filter((d) => d.module && aliases.has(d.module))
+      .map((d) => ({
+        file: d.file,
+        id: d.name,
+        title: d.title,
+        module: d.module,
+        excerpt: decisionExcerpt(d.body)
+      }));
+    const findings = docRecordsOf('findings')
+      .filter((f) => (f.module && aliases.has(f.module)) || f.sources.includes(file))
+      .map((f) => ({
+        file: f.file,
+        slug: f.name,
+        title: f.title,
+        status: String(f.data.status || 'open').trim(),
+        category: String(f.data.category || '').trim(),
+        impact: Number(f.data.impact) || 0
+      }));
+    const { commits, warning } = commitsSafe();
+    const history = [];
+    for (const c of commits) {
+      if (!(c.files || []).some((f) => normPath(f) === file)) continue;
+      history.push({ hash: c.hash, subject: c.subject, dateIso: c.dateIso, author: c.author });
+      if (history.length >= MAX_WHY_HISTORY) break;
+    }
+    const reason = decisions.length || findings.length
+      ? null
+      : owner
+        ? `module ${module} owns this file, but no ADR or finding references it`
+        : 'no module record or governing ADR covers this file — the brain has no authored intent for it yet';
+    sendJson(res, 200, {
+      file,
+      module,
+      moduleRecord: owner ? owner.file : null,
+      decisions,
+      findings,
+      history,
+      ...(reason ? { reason } : {}),
+      ...(warning ? { warning } : {}),
+      provenance: {
+        basis: 'measured',
+        source: '.project-brain records + git log',
+        window: { commits: commits.length },
+        matchedBy: owner ? 'module-record-glob' : 'path-heuristic'
+      },
       ...liveMeta()
     });
   }
@@ -1198,8 +2002,12 @@ export function createHandler(ctx) {
         if (url.pathname === '/api/records') return apiRecords(res, url);
         if (url.pathname === '/api/changed') return apiChanged(res);
         if (url.pathname === '/api/risk') return await apiRisk(res, url);
+        if (url.pathname === '/api/blast') return await apiBlast(res, url);
         if (url.pathname === '/api/next') return await apiNext(res);
         if (url.pathname === '/api/brief') return await apiBrief(res, url);
+        if (url.pathname === '/api/map') return apiMap(res);
+        if (url.pathname === '/api/doc') return apiDoc(res, url);
+        if (url.pathname === '/api/why') return apiWhy(res, url);
         if (url.pathname === '/api/meta') return apiMeta(res);
         if (url.pathname === '/api/runners') return apiRunners(res);
         if (url.pathname === '/api/runners/log') return apiRunnerLog(res, url);
