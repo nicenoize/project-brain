@@ -17,31 +17,42 @@ import { instrumentFriction } from './friction.mjs';
  * process.cwd(). Resolution order:
  *
  *   1. BRAIN_ROOT env override (tests, unusual layouts) — used verbatim.
- *   2. Nearest ancestor (incl. startDir) containing a `.project-brain/` dir —
- *      a brain-enabled root wins even inside nested git repos.
- *   3. Nearest ancestor containing `.git` (dir or worktree/submodule file) —
- *      repo root before `brain:init` has run.
+ *   2. Climbing from startDir, the FIRST of these wins:
+ *        a. a `.project-brain/` dir — a brain-enabled root, or
+ *        b. a `.git` DIRECTORY — an independent repository root.
+ *   3. Otherwise the nearest `.git` FILE (worktree or submodule pointer).
  *   4. startDir itself — preserves the old cwd semantics for bare temp dirs
  *      and non-repo contexts (the test suite's mkdtemp fixtures rely on this).
+ *
+ * Why a `.git` directory outranks a more distant `.project-brain`, while a
+ * `.git` file does not: a `.git` directory means "this is its own repository",
+ * and an unrelated repo that merely happens to sit inside a brain-enabled
+ * folder must not be measured as if it were that folder. A workspace like
+ * ~/work/ with a brain at the top and twenty cloned repos beneath it used to
+ * report every one of them using the wrapper's git history — a complete,
+ * confidently formatted answer about the wrong repository, which is worse than
+ * an error. A `.git` FILE is the opposite case: worktrees (brain:orchestrate
+ * creates them) and submodules are the SAME project seen from elsewhere, and
+ * their brain state legitimately lives at the parent root, so they keep
+ * climbing. The distinction is pure filesystem — no `git` subprocess, because
+ * ROOT is resolved at module load in all 55 importers of this file.
  */
 export function findRoot(startDir = process.cwd()) {
   if (process.env.BRAIN_ROOT) return path.resolve(process.env.BRAIN_ROOT);
   const start = path.resolve(startDir);
   const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
-  const markers = [
-    { name: '.project-brain', hit: isDir },              // must be a directory
-    { name: '.git', hit: (p) => fs.existsSync(p) }       // dir, or file in worktrees/submodules
-  ];
-  for (const marker of markers) {
-    let dir = start;
-    for (;;) {
-      if (marker.hit(path.join(dir, marker.name))) return dir;
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
+  let gitPointer = null;               // nearest `.git` FILE — the last resort
+  let dir = start;
+  for (;;) {
+    if (isDir(path.join(dir, '.project-brain'))) return dir;
+    const dotGit = path.join(dir, '.git');
+    if (isDir(dotGit)) return dir;                       // independent repo root
+    if (gitPointer === null && fs.existsSync(dotGit)) gitPointer = dir; // worktree/submodule
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
-  return start;
+  return gitPointer ?? start;
 }
 
 export const ROOT = findRoot();
@@ -328,7 +339,18 @@ export function mergePackageScripts(pkg) {
     'brain:grill': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-grill.mjs',
     'brain:route': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-route.mjs',
     'brain:close': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-close.mjs',
-    'brain:reflect': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-reflect.mjs'
+    'brain:reflect': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-reflect.mjs',
+    // The M2.5/M2.75 surfaces. These shipped as scripts but were never
+    // registered, so consuming repos got the files on brain:update-skill and
+    // no way to run them short of the `x` escape hatch — the code arrived and
+    // the product did not. (CONTRIBUTING rule 6.)
+    'brain:intel': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-intel.mjs',
+    'brain:security': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-security.mjs',
+    'brain:lint': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-lint.mjs',
+    'brain:graph-scan': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-graph-scan.mjs',
+    'brain:serve': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-serve.mjs',
+    'brain:draft': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-draft.mjs',
+    'brain:release': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-release.mjs'
   };
   for (const [k, v] of Object.entries(scripts)) {
     if (!pkg.scripts[k] || pkg.scripts[k].includes('skills/project-brain/')) pkg.scripts[k] = v;

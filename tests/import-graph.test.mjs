@@ -25,7 +25,8 @@ import {
   defaultEntryPoints,
   globToRegExp,
   SCAN_NOTE,
-  ORPHAN_CAVEAT
+  ORPHAN_CAVEAT,
+  parseGoModule
 } from '../scripts/import-graph.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -834,4 +835,81 @@ test('graph-scan CLI: --help exits 0 and documents the scanner honestly', () => 
   const r = spawnSync(process.execPath, [SCAN_SCRIPT, '--help'], { encoding: 'utf8' });
   assert.equal(r.status, 0);
   assert.match(r.stdout, /NOT a parser/);
+});
+
+/* ---------------------------------------------------------------------------
+ * Go modules: absolute intra-repo imports.
+ *
+ * Go files import their own siblings by the module path declared in go.mod
+ * (`acme/operator/factory`), which resembles nothing on disk. The suffix ladder
+ * covers the easy layout — go.mod at the repo root, module name equal to the
+ * first path segment — and silently covers nothing else. A real 31-file
+ * Kubernetes operator with go.mod in src/ resolved 0 of 190 specifiers.
+ * ------------------------------------------------------------------------ */
+
+test('parseGoModule: reads the module line, ignores everything else', () => {
+  assert.equal(parseGoModule('module acme/operator\n\ngo 1.22\n'), 'acme/operator');
+  assert.equal(parseGoModule('// header\nmodule  spaced/mod  // trailing\n'), 'spaced/mod');
+  assert.equal(parseGoModule('module "quoted/mod"\n'), 'quoted/mod');
+  // A `replace` or `require` line naming a module must not be mistaken for one.
+  assert.equal(parseGoModule('require acme/other v1.0.0\nmodule acme/self\n'), 'acme/self');
+  assert.equal(parseGoModule('go 1.22\nrequire x/y v0.1.0\n'), '');
+  assert.equal(parseGoModule(''), '');
+  assert.equal(parseGoModule(null), '');
+});
+
+test('buildImportGraph: go.mod in a subdirectory resolves module-absolute imports', () => {
+  const files = [
+    'src/go.mod',
+    'src/main.go',
+    'src/factory/factory.go',
+    'src/targets/target.go'
+  ];
+  const sources = {
+    'src/go.mod': 'module acme/operator\n\ngo 1.22\n',
+    'src/main.go': 'package main\n\nimport (\n\t"fmt"\n\t"acme/operator/factory"\n)\n',
+    'src/factory/factory.go': 'package factory\n\nimport "acme/operator/targets"\n',
+    'src/targets/target.go': 'package targets\n'
+  };
+  const g = buildImportGraph({ files, readFile: (f) => sources[f] });
+
+  const edge = (from, to) => g.edges.find((e) => e.from === from && e.to === to);
+  assert.ok(edge('src/main.go', 'src/factory/factory.go'), 'main → factory not resolved');
+  assert.ok(edge('src/factory/factory.go', 'src/targets/target.go'), 'factory → targets not resolved');
+  assert.equal(edge('src/main.go', 'src/factory/factory.go').confidence, 0.8);
+
+  // go.mod is read, never scanned and never a node — the coverage numbers must
+  // keep describing source files only.
+  assert.equal(g.nodes.length, 3);
+  assert.equal(g.coverage.filesScanned, 3);
+  assert.ok(!g.nodes.some((n) => n.file === 'src/go.mod'));
+
+  // stdlib stays external; the module-internal specs are gone from external.
+  assert.deepEqual(g.external.map((e) => e.spec), ['fmt']);
+});
+
+test('buildImportGraph: a nested go.mod wins over its parent module', () => {
+  const files = ['go.mod', 'main.go', 'tools/go.mod', 'tools/cli/cli.go', 'tools/lib/lib.go'];
+  const sources = {
+    'go.mod': 'module acme/root\n',
+    'main.go': 'package main\n',
+    'tools/go.mod': 'module acme/root/tools\n',
+    'tools/cli/cli.go': 'package cli\n\nimport "acme/root/tools/lib"\n',
+    'tools/lib/lib.go': 'package lib\n'
+  };
+  const g = buildImportGraph({ files, readFile: (f) => sources[f] });
+  // Longest prefix first: acme/root/tools → tools/, so the target is tools/lib.
+  // Under the parent module alone the spec would point at tools/tools/lib.
+  assert.ok(g.edges.find((e) => e.from === 'tools/cli/cli.go' && e.to === 'tools/lib/lib.go'));
+});
+
+test('buildImportGraph: a module-internal import with no package on disk stays external', () => {
+  const files = ['go.mod', 'main.go'];
+  const sources = {
+    'go.mod': 'module acme/app\n',
+    'main.go': 'package main\n\nimport "acme/app/missing"\n'
+  };
+  const g = buildImportGraph({ files, readFile: (f) => sources[f] });
+  assert.equal(g.edges.length, 0);
+  assert.deepEqual(g.external.map((e) => e.spec), ['acme/app/missing']);
 });

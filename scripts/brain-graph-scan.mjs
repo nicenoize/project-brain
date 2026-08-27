@@ -48,6 +48,17 @@ const DEFAULT_MAX_CYCLES = 25;
 
 /** Every source extension import-graph.mjs can scan. */
 const SOURCE_GLOB = '**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts,py,go,rb,php,rs}';
+
+/**
+ * Manifests the resolver reads to place imports, alongside the source files.
+ * Not source, never scanned, never a node — but without go.mod, Go's absolute
+ * intra-module import paths (`acme/operator/factory`) have nothing to resolve
+ * against, and a package-structured Go repo yields zero internal edges. Found
+ * on a real operator whose go.mod sits in src/, which is exactly why this is a
+ * path pattern and not a fixed root-level probe like tsconfig's.
+ */
+const MANIFEST_RE = /(?:^|\/)go\.mod$/;
+const MANIFEST_GLOB = '**/go.mod';
 const SOURCE_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|mts|cts|py|go|rb|php|rs)$/i;
 
 /**
@@ -56,11 +67,15 @@ const SOURCE_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|mts|cts|py|go|rb|php|rs)$/i;
  * git listing too, since a repo may legitimately track a vendor/ tree.
  */
 const IGNORE_DIR_RE =
-  /(^|\/)(node_modules|\.git|\.next|dist|build|out|coverage|vendor|\.gocache|__pycache__|\.venv|\.tox|target|\.worktrees)(\/|$)/;
+  /(^|\/)(node_modules|\.git|\.next|dist|build|out|coverage|vendor|\.gocache|__pycache__|\.venv|\.tox|target|\.worktrees|\.claude|\.cursor|\.vscode|\.idea|\.impeccable|\.obsidian)(\/|$)/;
 
 /** Both forms per directory: fast-glob prunes reliably only when it can match the dir itself. */
 const IGNORE_GLOBS = [
+  // Vendored tool directories are somebody else's source: scanning them puts
+  // a plugin's scripts into the user's orphan list (found on club-ops, whose
+  // .claude/skills/** showed up as dead-code candidates).
   'node_modules', '.git', '.next', 'dist', 'build', 'out', 'coverage', 'vendor',
+  '.claude', '.cursor', '.vscode', '.idea', '.impeccable', '.obsidian',
   '.gocache', '__pycache__', '.venv', '.tox', 'target', '.worktrees'
 ].flatMap((d) => [`**/${d}`, `**/${d}/**`]).concat('**/.project-brain/vector-db/**');
 
@@ -130,14 +145,14 @@ function gitSourceFiles(root) {
     cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024
   });
   if (r.error || r.status !== 0) return null;
-  return (r.stdout || '').split('\n').filter((f) => f && SOURCE_EXT_RE.test(f));
+  return (r.stdout || '').split('\n').filter((f) => f && (SOURCE_EXT_RE.test(f) || MANIFEST_RE.test(f)));
 }
 
 /** Fallback for non-git roots. Bounded ignores keep it from walking node_modules. */
 async function globSourceFiles(root) {
   try {
     const { default: fg } = await import('fast-glob');
-    return await fg([SOURCE_GLOB], {
+    return await fg([SOURCE_GLOB, MANIFEST_GLOB], {
       cwd: root, dot: false, onlyFiles: true, followSymbolicLinks: false, ignore: IGNORE_GLOBS
     });
   } catch {

@@ -151,3 +151,46 @@ test('findRoot unit: BRAIN_ROOT env overrides discovery', () => {
     else process.env.BRAIN_ROOT = prev;
   }
 });
+
+/* The workspace case that made this rule necessary: a folder with a brain in
+   it, holding unrelated cloned repos. Every one of them used to resolve to the
+   wrapper, so `health-calibrate` inside a 666-commit repo silently reported the
+   wrapper's 33 commits — a complete, well-formatted answer about the wrong
+   repository. A `.git` DIRECTORY now stops the climb; a `.git` FILE (worktree,
+   submodule — the same project seen from elsewhere) still does not. */
+test('findRoot unit: a nested independent repo wins over an outer .project-brain', () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'brain-nested-')));
+  fs.mkdirSync(path.join(base, '.project-brain'), { recursive: true });
+
+  // An unrelated clone sitting inside the brain-enabled workspace.
+  const clone = path.join(base, 'vendor-repo');
+  fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
+  const cloneSub = path.join(clone, 'src', 'deep');
+  fs.mkdirSync(cloneSub, { recursive: true });
+  assert.equal(findRoot(cloneSub), clone, 'nested repo must be measured as itself');
+  assert.equal(findRoot(clone), clone);
+
+  // A worktree/submodule pointer is the SAME project — it keeps climbing so
+  // brain state stays at the parent root (brain:orchestrate depends on this).
+  const wt = path.join(base, 'worktree-a');
+  fs.mkdirSync(wt, { recursive: true });
+  fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${path.join(base, '.git', 'worktrees', 'a')}\n`);
+  assert.equal(findRoot(wt), base, 'worktree must resolve to the brain root');
+
+  // A plain subdirectory of the workspace still resolves to the workspace.
+  const plain = path.join(base, 'notes');
+  fs.mkdirSync(plain, { recursive: true });
+  assert.equal(findRoot(plain), base);
+});
+
+/* Ordering guard: with no .project-brain anywhere, the nearest independent repo
+   still wins over an outer one — nesting alone must not reach past a repo. */
+test('findRoot unit: nearest .git directory wins over an outer .git directory', () => {
+  const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'brain-nestgit-')));
+  fs.mkdirSync(path.join(base, '.git'), { recursive: true });
+  const inner = path.join(base, 'inner');
+  fs.mkdirSync(path.join(inner, '.git'), { recursive: true });
+  const innerSub = path.join(inner, 'pkg');
+  fs.mkdirSync(innerSub, { recursive: true });
+  assert.equal(findRoot(innerSub), inner);
+});

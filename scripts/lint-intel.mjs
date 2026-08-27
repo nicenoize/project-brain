@@ -242,7 +242,7 @@ function emptyLevelCounts() {
 export function fingerprintOf({ tool = '', ruleId = '', file = '', startLine = null, message = '' } = {}) {
   return crypto
     .createHash('sha256')
-    .update(`${tool} ${ruleId} ${file} ${startLine == null ? '' : startLine} ${message}`)
+    .update(`${tool}\x1f${ruleId}\x1f${file}\x1f${startLine == null ? '' : startLine}\x1f${message}`)
     .digest('hex')
     .slice(0, 16);
 }
