@@ -73,7 +73,6 @@
  * side-effect-free.
  */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -253,11 +252,12 @@ export function fingerprintOf({ tool = '', ruleId = '', file = '', startLine = n
  * fingerprint. Ranking re-sorts by weight and falls back to this.
  */
 function byLocation(a, b) {
-  return byString(a.file, b.file) ||
+  const rank = (f) => (Object.prototype.hasOwnProperty.call(LEVEL_RANK, f.level) ? LEVEL_RANK[f.level] : LEVELS.length);
+  return byString(a.file || '', b.file || '') ||
     (a.startLine || 0) - (b.startLine || 0) ||
-    LEVEL_RANK[a.level] - LEVEL_RANK[b.level] ||
-    byString(a.ruleId, b.ruleId) ||
-    byString(a.fingerprint, b.fingerprint);
+    rank(a) - rank(b) ||
+    byString(a.ruleId || '', b.ruleId || '') ||
+    byString(a.fingerprint || '', b.fingerprint || '');
 }
 
 /**
@@ -396,7 +396,7 @@ export function parseSarif(raw, opts = {}) {
         message,
         file,
         startLine,
-        endLine: endLine === null ? null : endLine,
+        endLine,
         fingerprint: ''
       };
       finding.fingerprint = fingerprintOf(finding);
@@ -677,15 +677,24 @@ export function rankFindings(findings, signals = {}) {
     // 3. dependents — the blast radius nobody else measures.
     if (graph && placeable) {
       const deps = depIndex.get(finding.file);
-      if (deps) {
+      if (deps && deps.length) {
         const direct = deps.filter((d) => d.depth === 1).length;
         const rawDeps = Math.min(1, deps.length / LINT_RANK_SATURATION.dependents);
         pushFactor('dependents', w.dependents, rawDeps, 'dependents',
           `${deps.length} file(s) transitively import this (${direct} directly); ` +
           `saturates at ${LINT_RANK_SATURATION.dependents}`);
-      } else {
+      } else if (deps) {
+        // MEASURED zero: the file is in the graph and nothing imports it.
         pushFactor('dependents', w.dependents, 0, 'dependents',
           'no file in the import graph imports this — a leaf as far as the scan can see');
+      } else {
+        // NOT measured: the file is outside the scanned graph (wrong language,
+        // ignored directory, unreadable). Omitting beats scoring an unknown 0.
+        reasons.push({
+          kind: 'insufficient-data',
+          message: `${finding.file} is not in the import graph (unscanned language or ignored path) — ` +
+            'the dependents factor was OMITTED rather than scored 0'
+        });
       }
     }
 
@@ -972,6 +981,12 @@ export function calibrateLintRank(findings, commits, {
     for (const f of [...new Set(c.files || [])]) if (!fixedBy.has(f)) fixedBy.set(f, c.hash);
   }
 
+  const perFileCount = new Map();
+  for (const f of ranked.findings) {
+    if (!f.file) continue;
+    perFileCount.set(f.file, (perFileCount.get(f.file) || 0) + 1);
+  }
+
   const rows = [...byFile.keys()].sort(byString).map((file) => {
     const f = byFile.get(file);
     const row = {
@@ -979,7 +994,7 @@ export function calibrateLintRank(findings, commits, {
       weight: f.weight,
       level: f.level,
       severityRank: LEVEL_RAW[f.level] ?? LEVEL_RAW.note,
-      findings: ranked.findings.filter((x) => x.file === file).length,
+      findings: perFileCount.get(file) || 0,
       defective: fixedBy.has(file),
       fixedBy: fixedBy.get(file) || null
     };
@@ -1033,12 +1048,24 @@ export function calibrateLintRank(findings, commits, {
       `predicting near-future fixes; ${gate}.`;
     if (delta !== null) {
       const sign = delta > 0 ? '+' : '';
-      const helps = delta > 0.02
-        ? 'the ranking ADDS information over the tool\'s own severity ordering'
-        : (delta < -0.02
-          ? 'the ranking is WORSE than plain severity here — fall back to the tool\'s ordering'
-          : 'the ranking adds nothing measurable over plain severity here');
+      // A delta over a baseline that is ITSELF at-or-below chance is not
+      // evidence of anything: beating a coin flip by 0.05 while also losing to
+      // the coin flip is noise, and calling it "adds information" would be the
+      // exact overclaim this module exists to avoid.
+      const helps = auc < 0.5
+        ? 'but BOTH orderings are at or below chance here, so the delta is noise, not evidence — ' +
+          'neither ranking is usable on this repo yet'
+        : (delta > 0.02
+          ? 'the ranking ADDS information over the tool\'s own severity ordering'
+          : (delta < -0.02
+            ? 'the ranking is WORSE than plain severity here — fall back to the tool\'s ordering'
+            : 'the ranking adds nothing measurable over plain severity here'));
       verdict += ` Severity-only baseline AUC ${severityAuc.toFixed(2)} (${sign}${delta.toFixed(2)}) — ${helps}.`;
+    }
+    if (defects < minEvaluated / 2) {
+      verdict += ` Only ${defects} of ${rows.length} file(s) were fixed inside the horizon, so the ` +
+        'estimate rests on a handful of positives and will move a lot with one more commit — ' +
+        'read it as "too few outcomes to say", not as a measurement.';
     }
   }
 
@@ -1438,7 +1465,9 @@ export function rankingSignals({
 
   let graph = null;
   try {
-    const sources = [...new Set((files || []).map(normPath))]
+    // Discover here when the caller did not already pay for `git ls-files`.
+    const discovered = files || gitFiles(root, spawn) || [];
+    const sources = [...new Set(discovered.map(normPath))]
       .filter((f) => SOURCE_EXT_RE.test(f) && !IGNORE_DIR_RE.test(f))
       .sort(byString);
     if (sources.length) {
@@ -1502,7 +1531,8 @@ export function lintReport({
   tool = '',
   limit = DEFAULT_LIMIT,
   weights,
-  commitWindow
+  commitWindow,
+  signals: injectedSignals = null
 } = {}) {
   const wanted = String(tool || '').trim().toLowerCase();
   const files = gitFiles(root, spawn);
@@ -1528,7 +1558,9 @@ export function lintReport({
   for (const r of results) if (r.ran) findings.push(...(r.findings || []));
   const deduped = dedupeFindings([...findings].sort(byLocation));
 
-  const signals = rankingSignals({ root, now, env, spawn, files, commitWindow });
+  // Signals are injectable so a caller that also calibrates (the CLI) pays for
+  // one `git log` + one import graph, not two.
+  const signals = injectedSignals || rankingSignals({ root, now, env, spawn, files, commitWindow });
   const ranking = rankFindings(deduped, {
     hotspots: signals.hotspots,
     graph: signals.graph,
@@ -1664,7 +1696,7 @@ function printCalibration(cal) {
   out(`  Caveat: ${cal.caveat}`);
 }
 
-function main() {
+export function main() {
   const args = process.argv.slice(2);
   if (takeFlag(args, '--help') || takeFlag(args, '-h')) {
     out(usage());
@@ -1684,7 +1716,14 @@ function main() {
   }
 
   const now = Date.now();
-  const report = lintReport({ root: ROOT, now, sarifPaths, tool, limit, commitWindow });
+  // One signal build, shared by the report and the calibration.
+  const signals = rankingSignals({ root: ROOT, now, commitWindow });
+  // When calibrating, keep the FULL ranked list (calibration must see every
+  // finding, not the display slice) and trim only for printing.
+  const report = lintReport({
+    root: ROOT, now, sarifPaths, tool, commitWindow, signals,
+    limit: calibrate ? MAX_FINDINGS : limit
+  });
 
   if (!calibrate) {
     if (json) process.stdout.write(JSON.stringify(report, null, 2) + '\n');
@@ -1692,13 +1731,17 @@ function main() {
     process.exit(0);
   }
 
-  // Calibration re-reads the raw (unranked) findings from the report's ranked
-  // list — the fields it needs are the whitelist ones, which survive ranking.
-  const signals = rankingSignals({ root: ROOT, now, commitWindow });
-  const cal = calibrateLintRank(report.findings.concat(), signals.commits, {
+  // Calibration reads the ranked findings; the fields it needs are the
+  // whitelist ones, which survive ranking untouched.
+  const cal = calibrateLintRank(report.findings, signals.commits, {
     horizonDays,
     graph: signals.graph
   });
+  const full = report.findings;
+  report.findings = full.slice(0, limit);
+  report.truncated = full.length > limit;
+  report.limit = limit;
+
   if (json) process.stdout.write(JSON.stringify({ report, calibration: cal }, null, 2) + '\n');
   else {
     printHuman(report);
