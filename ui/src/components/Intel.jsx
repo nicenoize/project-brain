@@ -14,13 +14,52 @@ function Provenance({ data }) {
 /** Git-intel bay: hotspot treemap + tables. Fills the board on day one
     (empty-state rule) and shares its space with the lease board — a leased
     treemap cell scrolls to the lease row (map = list raise). */
-export default function Intel({ hotspots, coChange, ownership, leases }) {
+export default function Intel({ hotspots, health, coChange, ownership, leases }) {
   const files = hotspots?.files || [];
   const pairs = coChange?.pairs || [];
   const prefixes = ownership?.prefixes || [];
+  const dangerous = health?.files || [];
+  const cal = health?.calibration;
 
   return (
     <>
+      {dangerous.length > 0 && (
+        <div className="sheet">
+          <table>
+            <thead>
+              <tr><th className="num">danger</th><th>File</th><th>Top factor</th></tr>
+            </thead>
+            <tbody>
+              {dangerous.slice(0, 8).map((f) => {
+                const top = (f.factors || []).slice().sort((a, b) => b.contribution - a.contribution)[0];
+                return (
+                  <tr key={f.file}>
+                    <td>
+                      <span className="num danger-score" data-band={f.score >= 6.5 ? 'high' : f.score >= 3.5 ? 'mid' : 'low'}>
+                        {f.score.toFixed(1)}
+                      </span>
+                      {f.lowConfidence ? <span className="low-conf" title="fewer than 3 commits — treat as a hint, not a score">*</span> : null}
+                    </td>
+                    <td className="path">{f.file}</td>
+                    <td className="factor-evidence">{top?.evidence || ''}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {cal?.auc != null && (
+            <p className="claim">
+              Receipt: AUC {cal.auc.toFixed(2)} over {cal.files} files of this repo's own
+              fix history — {cal.note}.
+            </p>
+          )}
+          <div className="action-line">
+            before touching the top file, score the change:{' '}
+            <code>project-brain x intel risk --files {dangerous[0]?.file}</code>
+          </div>
+          <Provenance data={health} />
+        </div>
+      )}
       <div className="sheet">
         <h2 style={{ font: '700 12px var(--font-ui)', textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--ink-2)', marginBottom: 8 }}>
           Hotspots — churn × recency

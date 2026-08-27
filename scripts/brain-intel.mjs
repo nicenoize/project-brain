@@ -12,6 +12,11 @@
  *   brain-intel.mjs risk [--files a,b,c] [--score] [--since <rev|date>] [--json]
  *       (without --files: reads staged files via `git diff --cached --name-only`)
  *   brain-intel.mjs calibrate [--window N] [--horizon-days K] [--json]
+ *   brain-intel.mjs health [--limit N] [--json]
+ *       (per-file 0-10 danger score: churn percentile × co-change scatter ×
+ *        bus factor × fix density — receipt-backed, lowConfidence-flagged)
+ *   brain-intel.mjs health-calibrate [--window N] [--horizon-days K] [--json]
+ *       (cut-point replay: do TODAY's file scores predict NEAR-FUTURE fixes?)
  *
  * Shared flags: --commits N (history window, default 500 commits to bound
  * cost — mirrors brain-why's -n convention; --since replaces the cap),
@@ -50,6 +55,8 @@ import {
   riskFactors,
   riskScore,
   calibrateRisk,
+  fileHealth,
+  calibrateFileHealth,
   DEFAULT_HALF_LIFE_DAYS,
   DEFAULT_MIN_SUPPORT,
   DEFAULT_MIN_CONFIDENCE
@@ -70,6 +77,8 @@ function usage() {
     '  ownership    Top authors + bus factor per path prefix and file.',
     '  risk         Risk factors for a change-set (--files a,b,c or staged files).',
     '  calibrate    Validate the risk weights against this repo\'s own fix/revert history.',
+    '  health       Per-file 0-10 danger score (churn × coupling × bus factor × fix density).',
+    '  health-calibrate  Validate the health score: do today\'s scores predict near-future fixes?',
     '',
     'Flags:',
     '  --json            Parseable JSON on stdout, nothing else.',
@@ -78,8 +87,8 @@ function usage() {
     '  --since <rev|date> Analyze <rev>..HEAD or --since=<date> instead of the commit cap.',
     '  --files a,b,c     (risk) Change-set; default: staged files (git diff --cached).',
     '  --score           (risk) Aggregate factors into the 0-10 score (opt-in until calibrated).',
-    `  --window N        (calibrate) Commits to evaluate (default ${DEFAULT_CALIBRATE_WINDOW}).`,
-    `  --horizon-days K  (calibrate) Fix-observation horizon in days (default ${DEFAULT_HORIZON_DAYS}).`,
+    `  --window N        (calibrate) Commits to evaluate; (health-calibrate) prefix commits scored (default ${DEFAULT_CALIBRATE_WINDOW}).`,
+    `  --horizon-days K  (calibrate, health-calibrate) Fix-observation horizon in days (default ${DEFAULT_HORIZON_DAYS}).`,
     `  --half-life N     Hotspot decay half-life in days (default ${DEFAULT_HALF_LIFE_DAYS}).`,
     '  --now <iso>       Clock override for reproducible hotspot/risk output.'
   ].join('\n');
@@ -342,6 +351,77 @@ function cmdCalibrate(commits, { json, window, horizonDays, halfLifeDays }) {
 }
 
 // ---------------------------------------------------------------------------
+// health — per-file danger score + its calibration receipt
+// ---------------------------------------------------------------------------
+
+/** The factor that drives a file's score: highest contribution, name tiebreak. */
+function topFactorOf(entry) {
+  return [...entry.factors]
+    .sort((a, b) => b.contribution - a.contribution || (a.name < b.name ? -1 : 1))[0];
+}
+
+/** "Kein Score ohne Aktion": the health table always ends in a concrete next step. */
+function healthNextAction(result) {
+  const top = result.files.find((f) => !f.lowConfidence) || result.files[0];
+  if (!top) return '→ no git history to rank yet; start with: project-brain brief';
+  const riskCmd = `before touching: project-brain x intel risk --files ${top.file}`;
+  const bus = top.factors.find((f) => f.name === 'bus-factor');
+  if (bus && bus.raw >= 1) {
+    return `→ highest-risk file ${top.file} also has bus factor 1 — pair or document it; ${riskCmd}`;
+  }
+  const lead = topFactorOf(top);
+  return `→ ${top.file} scores ${top.score.toFixed(1)}/10, driven by ${lead.name} ` +
+    `(${lead.evidence}); ${riskCmd}`;
+}
+
+function cmdHealth(commits, { json, limit, nowMs, halfLifeDays }) {
+  const result = fileHealth(commits, { now: nowMs, halfLifeDays });
+  const withAction = { ...result, nextAction: healthNextAction(result) };
+  if (json) return printJson(withAction);
+  out('File health (0-10, 10 = most dangerous: churn percentile × co-change scatter × bus factor × fix density)');
+  if (!result.files.length) {
+    out('  (no commits found)');
+    out(provenanceLine(result));
+    out(withAction.nextAction);
+    return;
+  }
+  table(
+    result.files.slice(0, limit).map((f, i) => {
+      const lead = topFactorOf(f);
+      return [i + 1, f.score.toFixed(1) + (f.lowConfidence ? '*' : ' '), f.commits, lead.evidence, f.file];
+    }),
+    ['#', 'SCORE', 'COMMITS', 'TOP FACTOR', 'FILE']
+  );
+  if (result.files.some((f) => f.lowConfidence)) {
+    out(`  * low confidence: fewer than ${result.params.minCommits} commits — insufficient history`);
+  }
+  out('  Weights are uncalibrated defaults — validate with: project-brain x intel health-calibrate');
+  out(provenanceLine(result));
+  out(withAction.nextAction);
+}
+
+function cmdHealthCalibrate(commits, { json, window, horizonDays, halfLifeDays }) {
+  const result = calibrateFileHealth(commits, { window, horizonDays, halfLifeDays });
+  if (json) return printJson(result);
+  out(`File-health calibration — ${result.method}`);
+  out(`  Every file is scored from commits at or before the cut (${(result.params.cut || '').slice(0, 10) || 'n/a'});`);
+  out(`  "defective" = a fix/revert/hotfix/regression commit within the ${horizonDays}d after the cut touches it.`);
+  out(`  evaluated ${result.evaluated} file(s) · fixed after cut ${result.defective} · ` +
+    `future commits ${result.futureCommits} (${result.futureFixCommits} fix)`);
+  if (result.quantiles.length) {
+    out('');
+    table(
+      result.quantiles.map((q) =>
+        [q.quantile, `${q.scoreMin.toFixed(1)}–${q.scoreMax.toFixed(1)}`, q.files, q.defective, pct(q.defectRate)]),
+      ['BIN', 'SCORE', 'FILES', 'FIXED', 'RATE']
+    );
+  }
+  out('');
+  out(provenanceLine(result));
+  out(result.verdict);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -395,7 +475,7 @@ async function main() {
   }
 
   const sub = args.shift();
-  if (!sub || !['hotspots', 'co-change', 'ownership', 'risk', 'calibrate'].includes(sub)) {
+  if (!sub || !['hotspots', 'co-change', 'ownership', 'risk', 'calibrate', 'health', 'health-calibrate'].includes(sub)) {
     process.stderr.write(usage() + '\n');
     process.exit(1);
   }
@@ -407,6 +487,8 @@ async function main() {
     if (sub === 'co-change') return cmdCoChange(commits, opts);
     if (sub === 'ownership') return cmdOwnership(commits, opts);
     if (sub === 'calibrate') return cmdCalibrate(commits, opts);
+    if (sub === 'health') return cmdHealth(commits, opts);
+    if (sub === 'health-calibrate') return cmdHealthCalibrate(commits, opts);
     // risk
     const files = filesRaw
       ? filesRaw.split(',').map((s) => s.trim().replace(/^\.\//, '')).filter(Boolean)

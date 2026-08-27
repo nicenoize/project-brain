@@ -91,7 +91,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ROOT, PACKAGE_DIR, ensureDir, listIndexableFiles, takeFlag, takeOption } from './common.mjs';
 import { ACTIVE_STATE, activeStateJson } from './active-state.mjs';
-import { gitLogArgs, parseLog, hotspots, coChange, ownership, riskScore, calibrateRisk } from './git-intel.mjs';
+import { gitLogArgs, parseLog, hotspots, coChange, ownership, riskScore, calibrateRisk, fileHealth, calibrateFileHealth } from './git-intel.mjs';
 // Both imports are verified side-effect-free: brain-route's isMain guard is
 // asserted by tests/brain-route.test.mjs, brain-brief exports its pure core.
 import { applyRules, scoreChange } from './brain-route.mjs';
@@ -366,6 +366,7 @@ function runGitLog(root, { limit }) {
 // three back-to-back. Without this every request would block the single-
 // threaded daemon on a fresh synchronous `git log` (1-5s on large repos).
 const intelCache = { key: null, commits: null };
+const healthCalCache = { key: null, value: null };
 
 function gitHead(root) {
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
@@ -655,8 +656,31 @@ export function createHandler(ctx) {
       commits = cachedCommits(root, { limit: commitsCap });
     } catch (error) {
       // Empty-state friendliness: not-a-repo is a degraded 200, not a 500.
-      const empty = kind === 'hotspots' ? { files: [] } : kind === 'co-change' ? { pairs: [] } : { prefixes: [], files: [] };
+      const empty = kind === 'hotspots' || kind === 'health' ? { files: [] } : kind === 'co-change' ? { pairs: [] } : { prefixes: [], files: [] };
       return sendJson(res, 200, { ...empty, warning: `git history unavailable: ${error.message || error}`, ...live });
+    }
+    if (kind === 'health') {
+      // Per-file danger score + its per-HEAD-cached calibration receipt.
+      const r = fileHealth(commits, { now: Date.now() });
+      let calibration = null;
+      try {
+        if (healthCalCache.key !== intelCache.key) {
+          const cal = calibrateFileHealth(commits, { window: Math.min(commits.length, 300) });
+          healthCalCache.key = intelCache.key;
+          healthCalCache.value = cal ? {
+            auc: cal.auc ?? null,
+            files: cal.evaluated ?? null,
+            quartiles: (cal.quantiles || []).map((q) => ({
+              q: q.q ?? q.label ?? '',
+              defectRate: q.defectRate ?? q.rate ?? 0
+            })),
+            verdictLine: cal.verdict || '',
+            note: 'in-repo self-calibration, not a cross-repo benchmark'
+          } : null;
+        }
+        calibration = healthCalCache.value;
+      } catch { calibration = null; }
+      return sendJson(res, 200, { ...r, files: r.files.slice(0, limit), calibration, ...live });
     }
     if (kind === 'hotspots') {
       const r = hotspots(commits, { now: Date.now() }); // `now` is required by the pure core
@@ -1167,6 +1191,7 @@ export function createHandler(ctx) {
         }
         if (url.pathname === '/api/state') return apiState(res);
         if (url.pathname === '/api/events') return apiEvents(res, url);
+        if (url.pathname === '/api/intel/health') return apiIntel(res, url, 'health');
         if (url.pathname === '/api/intel/hotspots') return apiIntel(res, url, 'hotspots');
         if (url.pathname === '/api/intel/co-change') return apiIntel(res, url, 'co-change');
         if (url.pathname === '/api/intel/ownership') return apiIntel(res, url, 'ownership');
