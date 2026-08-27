@@ -97,6 +97,89 @@ export function capBytes(text, budgetBytes, marker = TRUNCATION_MARKER) {
  * @param {object} opts   { budgetBytes?, now? (ms epoch) }
  * @returns {string} newline-terminated digest, ≤ budgetBytes.
  */
+/**
+ * Headings this digest already reports through the structured path. Anything
+ * else in active_state.md is prose the schema never anticipated.
+ */
+export const CANONICAL_SECTIONS = Object.freeze([
+  'workstreams', 'file leases', 'leases', 'blockers', 'overlaps', 'last sync'
+]);
+
+/**
+ * PURE. Summarize the sections of active_state.md that this digest's schema
+ * does NOT know about.
+ *
+ * WHY. The digest was built to cap a file written in its own table format. On
+ * a repo that never adopted that format it reported "Workstreams — 0 active /
+ * Leases — 0 open" and stopped: 547 bytes of nothing, out of a 51 KB file
+ * holding `## Developers`, `## Active Work`, `## Known Warts`. It did not cost
+ * tokens — it FAILED TO SAVE them, because an agent that actually needed the
+ * state then had to read all 51 KB (≈12,957 tokens) raw. A tool that only
+ * understands the structure it invented is useless on every repo that did not
+ * adopt it, which is the same defect as a whitelist of directory names or a
+ * lease board that stays empty until everyone declares intent.
+ *
+ * What it emits per unknown section: the heading, how many lines it holds, and
+ * the first few non-empty lines — bullets preferred, because a bullet is
+ * usually the point of the paragraph around it. What it never does is pretend
+ * to be complete: the shown/total counts are printed so a reader knows whether
+ * opening the file would tell them more.
+ *
+ * @param {string} markdown  raw active_state.md
+ * @param {object} [opts]
+ * @param {number} [opts.maxSections]   sections to report (newest-first order of the file)
+ * @param {number} [opts.maxLinesEach]  preview lines per section
+ * @returns {{sections: Array<{heading, lines, shown: string[]}>, totalLines: number, omittedSections: number}}
+ */
+export function summarizeProseSections(markdown, opts = {}) {
+  const maxSections = Number.isFinite(opts.maxSections) ? opts.maxSections : 8;
+  const maxLinesEach = Number.isFinite(opts.maxLinesEach) ? opts.maxLinesEach : 3;
+  const text = String(markdown || '');
+  if (!text.trim()) return { sections: [], totalLines: 0, omittedSections: 0 };
+
+  const known = new Set(CANONICAL_SECTIONS);
+  const found = [];
+  let current = null;
+  let totalLines = 0;
+  for (const raw of text.split('\n')) {
+    const h = raw.match(/^##\s+(.+?)\s*$/);
+    if (h) {
+      const heading = h[1].trim();
+      // Match on the leading words so "Overlaps / Conflict Risks" is still the
+      // canonical Overlaps section and is not reported twice.
+      const key = heading.toLowerCase();
+      const isKnown = [...known].some((k) => key === k || key.startsWith(`${k} `) || key.startsWith(`${k}/`) || key.startsWith(`${k} /`));
+      current = isKnown ? null : { heading, lines: 0, body: [] };
+      if (current) found.push(current);
+      continue;
+    }
+    if (!current) continue;
+    const line = raw.trim();
+    if (!line) continue;
+    current.lines += 1;
+    totalLines += 1;
+    current.body.push(line);
+  }
+
+  // Bullets first — a bullet is usually the point of the prose around it —
+  // then whatever else came first, so a section of plain paragraphs is not
+  // reported as empty.
+  const sections = found
+    .filter((s) => s.lines > 0)
+    .slice(0, maxSections)
+    .map((s) => {
+      const bullets = s.body.filter((l) => /^[-*+]\s+/.test(l));
+      const pick = (bullets.length ? bullets : s.body).slice(0, maxLinesEach);
+      return { heading: s.heading, lines: s.lines, shown: pick.map((l) => clip(l, 160)) };
+    });
+
+  return {
+    sections,
+    totalLines,
+    omittedSections: Math.max(0, found.filter((s) => s.lines > 0).length - sections.length)
+  };
+}
+
 export function buildStateDigest(state = {}, opts = {}) {
   const budgetBytes = Number.isFinite(opts.budgetBytes) && opts.budgetBytes > 0
     ? opts.budgetBytes
@@ -158,6 +241,24 @@ export function buildStateDigest(state = {}, opts = {}) {
     lines.push('Overlaps:');
     for (const o of overlaps) lines.push(`- ${clip(o, 160)}`);
   }
+  // Sections the schema does not know about. Reported LAST so the structured
+  // answer is never pushed out by prose when the budget bites, and only when
+  // there is prose to report — a canonical file is byte-identical to before.
+  const prose = summarizeProseSections(opts.markdown);
+  if (prose.sections.length) {
+    lines.push('');
+    lines.push(
+      `Other sections in active_state.md (${prose.sections.length}` +
+      `${prose.omittedSections ? ` of ${prose.sections.length + prose.omittedSections}` : ''}` +
+      `, ${prose.totalLines} line(s) total) — this file does not use the workstream/lease tables:`
+    );
+    for (const sec of prose.sections) {
+      lines.push(`- ## ${clip(sec.heading, 80)} (${sec.lines} line(s))`);
+      for (const l of sec.shown) lines.push(`    ${l}`);
+    }
+    lines.push('  ^ excerpt only — open .project-brain/active_state.md for the rest.');
+  }
+
   if (sessions.length) {
     lines.push('');
     lines.push(`Recent sessions: ${sessions.map((s) => clip(s, 80)).join(' · ')}`);
@@ -193,7 +294,12 @@ function main() {
     }
     const state = activeStateJson();
     state.sessions = recentSessionPointers(path.join(BRAIN_DIR, 'sessions'));
-    process.stdout.write(buildStateDigest(state, { budgetBytes: stateDigestBudgetBytes(), now: Date.now() }));
+    // The raw file, so sections outside the schema can be summarized too.
+    let markdown = '';
+    try { markdown = fs.readFileSync(ACTIVE_STATE, 'utf8'); } catch { /* digest degrades to the structured half */ }
+    process.stdout.write(buildStateDigest(state, {
+      budgetBytes: stateDigestBudgetBytes(), now: Date.now(), markdown
+    }));
   } catch (error) {
     process.stderr.write(`[brain:state-digest] ${error.message || error}\n`);
   }

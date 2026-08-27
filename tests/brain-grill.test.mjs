@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 // Pure exports — importing the script must NOT run its CLI (isMain guard).
 import {
   generateChallenges, renderInterview, STAKEHOLDER_LENSES, LENS_IDS,
-  resolveLenses, parseLensVerdicts, lensConflict
+  resolveLenses, parseLensVerdicts, lensConflict, splitInterviews, mergeSplitAnswers
 } from '../scripts/brain-grill.mjs';
 import { serializeGrill, parseGrill, GRILL_VERDICTS } from '../scripts/findings.mjs';
 import { inferType } from '../scripts/infer.mjs';
@@ -345,4 +345,93 @@ test('brain-grill.mjs scaffold: an unknown --lens fails loudly', () => {
   assert.equal(r.status, 2, 'a typo must not silently drop a perspective');
   assert.match(r.stderr, /unknown lens\(es\): maintaner/);
   assert.match(r.stderr, /--lens all/);
+});
+
+/* ---------------------------------------------------------------------------
+ * --split: independence, not just separate paragraphs.
+ *
+ * One agent answering seven lenses in sequence harmonises them — by the time it
+ * writes the maintainer's verdict it knows what it wrote for the user's, and a
+ * critique that already agrees with itself is the thing this axis exists to
+ * prevent. Independence needs separate CONTEXTS. The brain spawns nothing: it
+ * prepares N briefs and merges N answers (ADR 0030).
+ * ------------------------------------------------------------------------ */
+
+test('splitInterviews: one self-contained brief per lens, or none', () => {
+  const meta = { title: 'Pooled calibration', target: 'pooled', lenses: ['maintainer', 'payer'] };
+  const input = { category: 'feature-direction', lenses: meta.lenses };
+  const briefs = splitInterviews(meta, input);
+  assert.equal(briefs.length, 2);
+  assert.deepEqual(briefs.map((b) => b.lens), ['maintainer', 'payer']);
+  assert.deepEqual(briefs.map((b) => b.filename), ['pooled.maintainer.md', 'pooled.payer.md']);
+
+  for (const b of briefs) {
+    // Each brief states WHO it speaks for and what they lose — an answerer who
+    // has to infer their own position argues about a job title.
+    assert.match(b.body, new RegExp(`# Grill \\(${b.lens}\\)`));
+    assert.match(b.body, /You are answering as/);
+    assert.match(b.body, /What you lose if this plan is wrong/);
+    // Independence is stated, not implied.
+    assert.match(b.body, /you cannot see their answers/);
+    // No other lens leaks in — that would let one brief anchor the next.
+    const others = ['maintainer', 'payer'].filter((l) => l !== b.lens);
+    for (const o of others) assert.ok(!b.body.includes(`## Lens: ${o}`), `${b.lens} leaked ${o}`);
+    // One verdict line, its own, and no overall verdict to tempt them with.
+    assert.match(b.body, new RegExp(`${b.lens}: proceed\\|revise\\|block`));
+    assert.ok(!/_proceed_ \(defended/.test(b.body), 'a split brief must not carry the overall verdict');
+    // The save instruction would be wrong here: they are one of N.
+    assert.match(b.body, /Do not record an overall verdict/);
+    assert.ok(!b.body.includes('brain:grill -- save'), 'a split brief must not tell its reader to save');
+  }
+
+  assert.deepEqual(splitInterviews({ title: 'x' }, {}), [], 'no lenses → no split');
+  assert.deepEqual(splitInterviews({ title: 'x', lenses: ['nope'] }, {}), []);
+});
+
+test('mergeSplitAnswers: answers stay separated, unanswered stays unanswered', () => {
+  const r = mergeSplitAnswers([
+    { lens: 'maintainer', text: '## Your verdict\nmaintainer: block — schema across twelve repos' },
+    { lens: 'payer', text: '## Your verdict\npayer: proceed — two weeks' },
+    { lens: 'on-call', text: 'I ran out of time.' }
+  ]);
+  assert.deepEqual(r.lenses, ['maintainer', 'payer', 'on-call']);
+  // Every answer keeps its own heading: merging must not blend the voices.
+  assert.match(r.body, /## Answers — maintainer/);
+  assert.match(r.body, /## Answers — payer/);
+  assert.match(r.body, /- maintainer: block/);
+  assert.match(r.body, /- payer: proceed/);
+  // A brief nobody answered is recorded as unanswered, never as agreement.
+  assert.deepEqual(r.missing, ['on-call']);
+  assert.match(r.body, /No verdict line found for: on-call/);
+  assert.ok(!/on-call: proceed/.test(r.body));
+
+  // And the merged body is what lensConflict reads, so the round trip holds.
+  const c = lensConflict(parseLensVerdicts(r.body, ['maintainer', 'payer', 'on-call']));
+  assert.equal(c.conflict, true);
+  assert.equal(c.worst, 'block');
+  assert.deepEqual(c.missing, ['on-call']);
+
+  assert.deepEqual(mergeSplitAnswers([]).lenses, []);
+});
+
+test('parseLensVerdicts: the TEMPLATE line is not an answer', () => {
+  // Found end-to-end: an answered brief still contains the scaffold's
+  // placeholder `maintainer: proceed|revise|block — _why…_`, which was the
+  // FIRST match and made every lens report `proceed` regardless of what the
+  // reviewer wrote. A merge said "proceed: maintainer" over a brief saying
+  // `block` — a verdict tool reporting the opposite of the verdict.
+  const answered = [
+    'maintainer: proceed|revise|block — _why, in one sentence_',
+    'maintainer: block — the schema becomes load-bearing'
+  ].join('\n');
+  assert.equal(parseLensVerdicts(answered, ['maintainer']).maintainer, 'block');
+
+  // An untouched template is unanswered, not a proceed.
+  assert.equal(
+    parseLensVerdicts('payer: proceed|revise|block — _why, in one sentence_', ['payer']).payer,
+    null
+  );
+  // A real answer still parses in every shape it was already accepting.
+  assert.equal(parseLensVerdicts('- **payer**: proceed — fine', ['payer']).payer, 'proceed');
+  assert.equal(parseLensVerdicts('payer — REVISE', ['payer']).payer, 'revise');
 });

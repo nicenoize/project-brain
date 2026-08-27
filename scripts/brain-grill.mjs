@@ -23,8 +23,8 @@
  *
  * Subcommands:
  *   scaffold <finding|plan|decision-slug | --title "proposal">
- *            [--category c] [--lens a,b|all] [--context] [--max-symbols N] [--json]
- *   save     [--target <slug>] [--title "..."] [--target-type t] [--category c]
+ *            [--category c] [--lens a,b|all] [--split [dir]] [--context] [--max-symbols N] [--json]
+ *   save     [--target <slug>] [--merge <split-dir>] [--title "..."] [--target-type t] [--category c]
  *            [--module m] [--verdict open|proceed|revise|block]
  *            [--sources a.mjs,b/c.md] [--actor X]
  *            [--body "..." | --body-file <path> | stdin]
@@ -212,7 +212,12 @@ export function parseLensVerdicts(body, ids = LENS_IDS) {
   const text = String(body || '');
   const out = {};
   for (const id of ids) {
-    const re = new RegExp(`^\\s*-?\\s*\\*{0,2}${id.replace(/[-]/g, '\\-')}\\*{0,2}\\s*(?:verdict)?\\s*[:\u2014-]\\s*\\*{0,2}(proceed|revise|block)\\*{0,2}`, 'im');
+    // `(?!\\|)` rejects the TEMPLATE line the scaffold writes —
+    // `maintainer: proceed|revise|block — _why…_`. Without it the placeholder
+    // is the first match in every answered brief, and every lens is reported as
+    // `proceed` no matter what the reviewer actually wrote. Found end-to-end:
+    // a merge said "proceed: maintainer" over a brief that said `block`.
+    const re = new RegExp(`^\\s*-?\\s*\\*{0,2}${id.replace(/[-]/g, '\\-')}\\*{0,2}\\s*(?:verdict)?\\s*[:\u2014-]\\s*\\*{0,2}(proceed|revise|block)\\*{0,2}(?!\\||[a-z])`, 'im');
     const m = text.match(re);
     out[id] = m ? m[1].toLowerCase() : null;
   }
@@ -330,6 +335,62 @@ export function generateChallenges(input = {}) {
   return out;
 }
 
+/**
+ * PURE. One SELF-CONTAINED interview per lens, for answering in separate
+ * contexts.
+ *
+ * WHY SPLIT AT ALL. One agent answering seven lenses in sequence harmonises
+ * them: by the time it writes the maintainer's verdict it knows what it wrote
+ * for the user's, and a critique that already agrees with itself is the one
+ * thing this axis exists to prevent. The value of several perspectives is the
+ * DISAGREEMENT, and disagreement needs independence — which means separate
+ * contexts, not separate paragraphs.
+ *
+ * The brain spawns nothing. It prepares N briefs; the host hands each to a
+ * different agent or session, and `save --merge` reads the answers back and
+ * runs lensConflict over them (ADR 0030: judgment is delegated, claims are
+ * not). No API key, no credits, no model on any measured path.
+ *
+ * Each brief repeats the grounded evidence — contract, decisions, conflicts —
+ * because an answerer who cannot see the blast radius is guessing, and a brief
+ * that assumes the reader saw another brief is not independent.
+ *
+ * @returns {Array<{lens: string, filename: string, body: string}>}
+ */
+export function splitInterviews(meta, input = {}) {
+  const lenses = (meta.lenses || []).filter((id) => STAKEHOLDER_LENSES[id]);
+  if (!lenses.length) return [];
+  // Shared, lens-free evidence: everything except the per-lens bank.
+  const shared = generateChallenges({ ...input, lenses: [] })
+    .filter((c) => c.section !== 'Fundamentals');
+  const slug = slugify(meta.target || meta.title || 'grill') || 'grill';
+  return lenses.map((id) => {
+    const lens = STAKEHOLDER_LENSES[id];
+    const only = generateChallenges({ ...input, lenses: [id] })
+      .filter((c) => c.section === `Lens: ${id}`);
+    const lines = [];
+    lines.push(`# Grill (${id}): ${meta.title || meta.target || 'proposal'}`);
+    lines.push('');
+    lines.push(`> You are answering as: **${lens.who}**.`);
+    lines.push(`> What you lose if this plan is wrong: ${lens.stake}.`);
+    lines.push('');
+    lines.push('Answer only from this position. Do not soften it to fit what');
+    lines.push('another reviewer might say — you cannot see their answers, and');
+    lines.push('that is deliberate. The disagreement between briefs is the finding.');
+    lines.push('');
+    const body = renderInterview(
+      { ...meta, lenses: [], split: true },
+      [...shared, ...only]
+    );
+    // Drop the shared header of renderInterview; this brief has its own.
+    lines.push(body.split('\n').slice(1).join('\n').replace(/^\n+/, ''));
+    lines.push('');
+    lines.push(`## Your verdict`);
+    lines.push(`${id}: proceed|revise|block — _why, in one sentence_`);
+    return { lens: id, filename: `${slug}.${id}.md`, body: `${lines.join('\n').replace(/\n{3,}/g, '\n\n')}\n` };
+  });
+}
+
 /** Render the grounded interview as Markdown the agent fills in. PURE. */
 export function renderInterview(meta, challenges) {
   const lines = [];
@@ -344,11 +405,21 @@ export function renderInterview(meta, challenges) {
   if (tags) lines.push(`> ${tags}`);
   lines.push('');
   lines.push('Answer every question HONESTLY before you implement. The goal is to');
-  lines.push('flush out issues now, when they are cheap. When done, record the');
-  lines.push('interview + your verdict:');
+  lines.push('flush out issues now, when they are cheap.');
   lines.push('');
-  lines.push(`  npm run brain:grill -- save --target ${meta.target ? `"${meta.target}"` : '"<id>"'} --verdict proceed|revise|block \\`);
-  lines.push('         --sources <the files you actually inspected> --body-file answers.md');
+  if (meta.split) {
+    // A split brief is one of N answered in separate contexts. Telling its
+    // reader to `save` an overall verdict would be exactly wrong: they are not
+    // deciding for the whole plan, and the merge is someone else's step.
+    lines.push('This is ONE of several briefs, each answered without sight of the');
+    lines.push('others. Do not record an overall verdict — return this file with your');
+    lines.push('answers filled in; the verdicts are merged afterwards.');
+  } else {
+    lines.push('When done, record the interview + your verdict:');
+    lines.push('');
+    lines.push(`  npm run brain:grill -- save --target ${meta.target ? `"${meta.target}"` : '"<id>"'} --verdict proceed|revise|block \\`);
+    lines.push('         --sources <the files you actually inspected> --body-file answers.md');
+  }
   lines.push('');
 
   if (!challenges.length) {
@@ -388,8 +459,13 @@ export function renderInterview(meta, challenges) {
     }
     lines.push('');
   }
-  lines.push('## Verdict');
-  lines.push('_proceed_ (defended — build it) · _revise_ (issues found — change the plan first) · _block_ (do not build it)');
+  // A split brief carries its own single-lens verdict line; an overall verdict
+  // next to it would invite the reader to decide for the whole plan, which is
+  // precisely what they are not being asked to do.
+  if (!meta.split) {
+    lines.push('## Verdict');
+    lines.push('_proceed_ (defended — build it) · _revise_ (issues found — change the plan first) · _block_ (do not build it)');
+  }
   if (lenses.length) {
     lines.push('');
     lines.push('One lens blocking is enough to stop: the reason to ask several is to let');
@@ -549,6 +625,18 @@ async function cmdScaffold(args) {
   const title = takeOption(args, '--title').trim();
   const moduleOpt = takeOption(args, '--module').trim();
   const lensOpt = (takeOption(args, '--lens') || '').trim();
+  // `--split` is both a flag and an optional path, so takeOption is wrong here:
+  // it strips the token and returns '' for the bare form, and for
+  // `--split --json` it would swallow `--json` as the value.
+  let split = false;
+  let splitOpt = '';
+  const splitAt = args.indexOf('--split');
+  if (splitAt !== -1) {
+    split = true;
+    const next = args[splitAt + 1];
+    if (next && !next.startsWith('-')) { splitOpt = next; args.splice(splitAt, 2); }
+    else args.splice(splitAt, 1);
+  }
   const { ids: lenses, unknown: unknownLenses } = resolveLenses(lensOpt);
   if (unknownLenses.length) {
     // A typo must never silently remove a perspective — that is the exact
@@ -581,6 +669,9 @@ async function cmdScaffold(args) {
   }
 
   meta.lenses = lenses;
+  const splitDir = path.isAbsolute(String(splitOpt || ''))
+    ? String(splitOpt)
+    : path.join(ROOT, String(splitOpt || '') || path.join('.project-brain', 'grills', `${slugify(meta.target || meta.title || 'grill')}.split`));
   const challenges = generateChallenges({
     targetType: meta.targetType, category: meta.category, title: meta.title,
     module: meta.module, blast, adrs, relatedFindings, lenses
@@ -593,6 +684,28 @@ async function cmdScaffold(args) {
       evidence: { blast: blast.length, adrs: adrs.length, relatedFindings: relatedFindings.length, indexed: blast.length > 0 },
       challenges
     }, null, 2) + '\n');
+    return;
+  }
+
+  if (split) {
+    if (!lenses.length) {
+      process.stderr.write('[brain:grill] --split needs --lens (it splits BY lens).\n');
+      process.exit(2);
+    }
+    const briefs = splitInterviews(meta, {
+      targetType: meta.targetType, category: meta.category, title: meta.title,
+      module: meta.module, blast, adrs, relatedFindings, lenses
+    });
+    ensureDir(splitDir);
+    for (const b of briefs) write(path.join(splitDir, b.filename), b.body);
+    process.stdout.write(
+      `${briefs.length} independent brief(s) written to ${path.relative(ROOT, splitDir)}/\n` +
+      briefs.map((b) => `  ${b.filename}`).join('\n') + '\n\n' +
+      'Hand each to a SEPARATE agent or session — one context answering all of\n' +
+      'them harmonises the verdicts, which is the thing this is for. When the\n' +
+      'answers come back:\n\n' +
+      `  npm run brain:grill -- save --target "${meta.target || meta.title}" --merge ${path.relative(ROOT, splitDir)}\n`
+    );
     return;
   }
 
@@ -617,6 +730,79 @@ function readBody(args) {
     try { const s = fs.readFileSync(0, 'utf8'); if (s.trim()) return s; } catch { /* no stdin */ }
   }
   return '_No answers recorded. Re-run `brain:grill save` with --body / --body-file or piped stdin._';
+}
+
+/**
+ * PURE. Fold N independently answered lens briefs into one body.
+ *
+ * Each brief was answered without sight of the others (that is the point), so
+ * the merge must not blend them: every answer keeps its lens heading, and the
+ * per-lens verdict lines are collected verbatim so `parseLensVerdicts` and
+ * `lensConflict` see exactly what each reviewer wrote.
+ *
+ * @param {Array<{lens: string, text: string}>} briefs
+ * @returns {{body: string, lenses: string[], missing: string[]}}
+ */
+export function mergeSplitAnswers(briefs = []) {
+  const lines = [];
+  const lenses = [];
+  const missing = [];
+  const verdictLines = [];
+  for (const b of briefs) {
+    const lens = String(b.lens || '').trim();
+    const text = String(b.text || '');
+    if (!lens) continue;
+    lenses.push(lens);
+    const parsed = parseLensVerdicts(text, [lens]);
+    if (parsed[lens]) verdictLines.push(`- ${lens}: ${parsed[lens]}`);
+    else missing.push(lens);
+    lines.push(`## Answers — ${lens}`);
+    lines.push('');
+    lines.push(text.trim());
+    lines.push('');
+  }
+  if (verdictLines.length) {
+    lines.push('## Verdict per lens');
+    lines.push('');
+    lines.push(...verdictLines);
+    lines.push('');
+  }
+  if (missing.length) {
+    // Never infer a verdict from an unanswered brief: a lens nobody answered
+    // must not be counted as agreeing.
+    lines.push(`_No verdict line found for: ${missing.join(', ')} — recorded as unanswered._`);
+    lines.push('');
+  }
+  return { body: `${lines.join('\n').replace(/\n{3,}/g, '\n\n')}\n`, lenses, missing };
+}
+
+/** Read answered `<slug>.<lens>.md` briefs out of a --split directory. */
+function readSplitDir(dir) {
+  const abs = path.isAbsolute(dir) ? dir : path.join(ROOT, dir);
+  let names;
+  try {
+    names = fs.readdirSync(abs).filter((f) => f.endsWith('.md')).sort(byStringName);
+  } catch {
+    process.stderr.write(`[brain:grill] --merge: cannot read ${dir}\n`);
+    process.exit(1);
+  }
+  const out = [];
+  for (const name of names) {
+    const parts = name.replace(/\.md$/, '').split('.');
+    const lens = parts[parts.length - 1];
+    if (!STAKEHOLDER_LENSES[lens]) continue;   // not a lens brief — skip quietly
+    out.push({ lens, text: read(path.join(abs, name)) || '' });
+  }
+  if (!out.length) {
+    process.stderr.write(`[brain:grill] --merge: no <slug>.<lens>.md briefs in ${dir}\n`);
+    process.exit(1);
+  }
+  return out;
+}
+
+/** Byte-stable name sort — never localeCompare. */
+function byStringName(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 function cmdSave(args) {
@@ -652,7 +838,13 @@ function cmdSave(args) {
 
   const actor = takeOption(args, '--actor') || process.env.BRAIN_ACTOR || '';
   const sourcePaths = (takeOption(args, '--sources') || '').split(/[,\n]/).map(s => s.trim()).filter(Boolean);
-  const body = readBody(args);
+  const mergeDir = takeOption(args, '--merge').trim();
+  let merged = null;
+  if (mergeDir) {
+    merged = mergeSplitAnswers(readSplitDir(mergeDir));
+    process.stdout.write(`Merged ${merged.lenses.length} independently answered brief(s) from ${mergeDir}\n`);
+  }
+  const body = merged ? merged.body : readBody(args);
 
   const sources = [];
   for (const sp of sourcePaths) {
@@ -746,7 +938,9 @@ function cmdList(args) {
 function usage() {
   return [
     'Usage:',
-    '  npm run brain:grill -- scaffold <finding|plan|decision-slug> [--category c] [--lens a,b|all] [--context] [--max-symbols N] [--json]',
+    '  npm run brain:grill -- scaffold <finding|plan|decision-slug> [--category c] [--lens a,b|all] [--split [dir]] [--context] [--max-symbols N] [--json]',
+    '     --split: write ONE brief per lens for answering in SEPARATE agent contexts — one context answering all of them harmonises the verdicts.',
+    '  npm run brain:grill -- save --target <id> --merge <split-dir>   # fold the independently answered briefs back together',
     `     --lens: also grill AS a stakeholder — ${LENS_IDS.join(', ')} (or all). Each returns its own verdict; where they disagree is the finding.`,
     '  npm run brain:grill -- scaffold --title "free-form proposal" [--category c] [--module m]',
     '  npm run brain:grill -- save [--target <id>] [--title "..."] [--target-type t] [--category c] [--module m]',
