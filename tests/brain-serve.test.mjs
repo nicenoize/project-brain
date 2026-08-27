@@ -3,8 +3,13 @@
  *
  * The M2.75 security model is mandatory, so every point gets its own test:
  * token gating (401 on missing/wrong, constant-time compare), Origin/Host
- * validation (403, DNS-rebinding defense), no CORS headers, read-only API
- * (405 on non-GET), and the strict 127.0.0.1 bind.
+ * validation (403, DNS-rebinding defense), no CORS headers, the method
+ * matrix (writes confined to POST /api/runners/start|stop, 405 elsewhere),
+ * and the strict 127.0.0.1 bind. The runner write API block additionally
+ * proves: runner command resolution is config-only (body injection inert),
+ * the brief gate blocks unacknowledged starts over foreign leases without
+ * spawning, every start/stop leaves an audit line in events.jsonl, stop
+ * really kills the process, and no zombie children survive the run.
  *
  * Fixture: a mkdtemp git repo with a seeded .project-brain (active_state.md
  * with one workstream + one lease, events.jsonl, one decision record).
@@ -24,6 +29,9 @@ import { execSync } from 'node:child_process';
 
 const FIXTURE = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-serve-'));
 process.env.BRAIN_ROOT = FIXTURE;
+// The runner tests manage BRAIN_RUNNER_CMD themselves — an ambient value from
+// the invoking shell must not leak into the "unconfigured" assertions.
+delete process.env.BRAIN_RUNNER_CMD;
 
 const BRAIN = path.join(FIXTURE, '.project-brain');
 fs.mkdirSync(path.join(BRAIN, 'decisions'), { recursive: true });
@@ -96,8 +104,8 @@ after(async () => {
   fs.rmSync(FIXTURE, { recursive: true, force: true });
 });
 
-/** Raw client so we can spoof Host/Origin headers freely. */
-function request(pathname, { headers = {}, method = 'GET' } = {}) {
+/** Raw client so we can spoof Host/Origin headers and send raw bodies. */
+function request(pathname, { headers = {}, method = 'GET', body } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request({
       host: '127.0.0.1',
@@ -111,11 +119,21 @@ function request(pathname, { headers = {}, method = 'GET' } = {}) {
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
     });
     req.on('error', reject);
+    if (body !== undefined) req.write(body);
     req.end();
   });
 }
 
 const bearer = { Authorization: `Bearer ${TOKEN}` };
+
+/** JSON POST with the session token (headers can override/extend). */
+function post(pathname, obj, headers = {}) {
+  return request(pathname, {
+    method: 'POST',
+    headers: { ...bearer, 'Content-Type': 'application/json', ...headers },
+    body: typeof obj === 'string' ? obj : JSON.stringify(obj)
+  });
+}
 
 // ---------------------------------------------------------------------------
 // security model — (a) loopback bind
@@ -383,4 +401,344 @@ test('frontmatterTitle: frontmatter wins, heading fallback, quotes stripped', ()
   assert.equal(serve.frontmatterTitle('---\ntitle: "Quoted Title"\n---\n# Other'), 'Quoted Title');
   assert.equal(serve.frontmatterTitle('# Heading Only\n\nbody'), 'Heading Only');
   assert.equal(serve.frontmatterTitle(''), '');
+});
+
+// ---------------------------------------------------------------------------
+// runner write API (M2.75) — tests run in registration order, and this whole
+// section deliberately comes AFTER the read-only assertions above (it appends
+// audit events and reseeds active_state.md).
+// ---------------------------------------------------------------------------
+
+const RUNNERS_DIR = path.join(BRAIN, 'runners');
+const EVENTS_FILE = path.join(BRAIN, 'events.jsonl');
+const MARKER = 'MARKER_OK_31337';
+const MARKER_CMD = `'${process.execPath}' -e 'console.log("${MARKER}"); setInterval(() => console.log("tick"), 100)'`;
+
+/** Every PID the API ever spawns lands here; the final sweep asserts all dead. */
+const spawnedPids = [];
+
+function killQuietly(pid) {
+  for (const target of [-pid, pid]) {
+    try { process.kill(target, 'SIGKILL'); } catch { /* already dead */ }
+  }
+}
+
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
+async function waitFor(predicate, timeoutMs = 3000, stepMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, stepMs));
+  }
+  return predicate();
+}
+
+function readEvents() {
+  if (!fs.existsSync(EVENTS_FILE)) return [];
+  return fs.readFileSync(EVENTS_FILE, 'utf8').split('\n').filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(Boolean);
+}
+
+test('runners: GET /api/runners is token-gated and reports runnerCmdConfigured=false when unset', async () => {
+  assert.equal(process.env.BRAIN_RUNNER_CMD, undefined);
+  const denied = await request('/api/runners');
+  assert.equal(denied.status, 401, 'runner listing requires the session token');
+
+  const r = await request('/api/runners', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.deepEqual(body.runners, []);
+  assert.equal(body.runnerCmdConfigured, false);
+  assert.ok('state_age' in body, 'freshness metadata is present');
+});
+
+test('runners: resolveRunnerCmd — env wins over config.json, absent config → "", never the request', () => {
+  assert.equal(serve.resolveRunnerCmd(FIXTURE, {}), '', 'nothing configured → empty');
+  const cfg = path.join(BRAIN, 'config.json');
+  fs.writeFileSync(cfg, JSON.stringify({ runnerCmd: 'from-config --wp {id}' }));
+  try {
+    assert.equal(serve.resolveRunnerCmd(FIXTURE, {}), 'from-config --wp {id}');
+    assert.equal(serve.resolveRunnerCmd(FIXTURE, { BRAIN_RUNNER_CMD: 'from-env' }), 'from-env', 'env overrides config');
+    fs.writeFileSync(cfg, 'not json {{{');
+    assert.equal(serve.resolveRunnerCmd(FIXTURE, {}), '', 'malformed config → unconfigured, not a throw');
+  } finally {
+    fs.rmSync(cfg, { force: true });
+  }
+});
+
+test('runners: start without a configured runner command → 400 no-runner-cmd, nothing spawned', async () => {
+  const r = await post('/api/runners/start', { task: 'T-42' });
+  assert.equal(r.status, 400);
+  const body = JSON.parse(r.body);
+  assert.equal(body.error, 'no-runner-cmd');
+  assert.match(body.hint, /BRAIN_RUNNER_CMD|config\.json/);
+  assert.equal(fs.existsSync(RUNNERS_DIR), false, 'no supervision record may appear');
+});
+
+test('runners: unknown task → 400 (the API references workstream rows, never commands)', async () => {
+  process.env.BRAIN_RUNNER_CMD = MARKER_CMD;
+  try {
+    const r = await post('/api/runners/start', { task: 'no-such-task' });
+    assert.equal(r.status, 400);
+    assert.equal(JSON.parse(r.body).error, 'unknown-task');
+    const missing = await post('/api/runners/start', {});
+    assert.equal(missing.status, 400, 'missing task field matches no workstream');
+  } finally {
+    delete process.env.BRAIN_RUNNER_CMD;
+  }
+});
+
+test('runners: leaseAdvisories — foreign active leases only, expired excluded, unparseable kept', () => {
+  const now = Date.parse('2026-01-01T00:00:00Z');
+  const leases = [
+    { target: 'src/**', lockedBy: 'bob', until: '2099-01-01T00:00', notes: 'active foreign' },
+    { target: 'docs/**', lockedBy: 'bob', until: '2000-01-01T00:00', notes: 'expired' },
+    { target: 'src/api/**', lockedBy: 'alice', until: '2099-01-01T00:00', notes: 'own lease' },
+    { target: 'undated/**', lockedBy: 'carol', until: 'soonish', notes: 'unparseable ttl' }
+  ];
+  const advisories = serve.leaseAdvisories(leases, 'alice', now);
+  assert.deepEqual(advisories.map((a) => a.target), ['src/**', 'undated/**']);
+  assert.equal(advisories[0].lockedBy, 'bob');
+  assert.match(advisories[0].message, /leased by bob/);
+  assert.match(advisories[0].message, /until 2099/);
+});
+
+test('runners: brief gate → 409 with advisories, NO spawn, NO record, NO audit event', async () => {
+  // Reseed per the spec: workstream owner=alice, foreign lease lockedBy=bob
+  // (plus an expired bob lease and alice's own lease — both must not gate).
+  fs.writeFileSync(path.join(BRAIN, 'active_state.md'), `# Active State
+
+## Workstreams
+
+| task_id | owner | tool | project | branch | scope / links | status |
+| --- | --- | --- | --- | --- | --- | --- |
+| WP-7 | alice | claude | demo | feature/wp7 | src/** | active |
+
+## File Leases
+
+| path glob or file | project | locked_by | until | notes |
+| --- | --- | --- | --- | --- |
+| src/** | demo | bob | 2099-01-01T00:00 | refactor in flight |
+| docs/** | demo | bob | 2000-01-01T00:00 | long expired |
+| src/api/** | demo | alice | 2099-01-01T00:00 | own lease |
+`);
+  process.env.BRAIN_RUNNER_CMD = MARKER_CMD;
+  try {
+    const r = await post('/api/runners/start', { task: 'WP-7' });
+    assert.equal(r.status, 409);
+    const body = JSON.parse(r.body);
+    assert.equal(body.briefGate, true);
+    assert.equal(body.advisories.length, 1, 'expired + own leases are excluded');
+    assert.equal(body.advisories[0].target, 'src/**');
+    assert.equal(body.advisories[0].lockedBy, 'bob');
+    assert.equal(body.advisories[0].until, '2099-01-01T00:00');
+    assert.match(body.advisories[0].message, /leased by bob/);
+    assert.equal(fs.existsSync(path.join(RUNNERS_DIR, 'WP-7.json')), false, 'gate must not spawn or record');
+    assert.ok(!readEvents().some((e) => e.verb === 'runner.started'), 'gate must not audit a start');
+  } finally {
+    delete process.env.BRAIN_RUNNER_CMD;
+  }
+});
+
+test('runners: acknowledged start spawns the CONFIGURED command (body injection ignored) + audit', async () => {
+  process.env.BRAIN_RUNNER_CMD = MARKER_CMD;
+  try {
+    // Injection attempt: runnerCmd/command in the body must be dead weight.
+    const r = await post('/api/runners/start', {
+      task: 'WP-7',
+      acknowledged: true,
+      runnerCmd: 'echo INJECTED_EVIL && rm -rf /',
+      command: 'echo INJECTED_EVIL'
+    });
+    assert.equal(r.status, 200);
+    const { runner } = JSON.parse(r.body);
+    assert.equal(runner.task, 'WP-7');
+    assert.equal(runner.status, 'running');
+    assert.ok(Number.isInteger(runner.pid) && runner.pid > 0);
+    assert.ok(runner.startedAt);
+    assert.ok(runner.logFile.endsWith('WP-7.log'));
+    spawnedPids.push(runner.pid);
+    assert.equal(pidAlive(runner.pid), true, 'the runner process is really alive');
+
+    const record = JSON.parse(fs.readFileSync(path.join(RUNNERS_DIR, 'WP-7.json'), 'utf8'));
+    assert.equal(record.runnerCmd, MARKER_CMD, 'spawned command is the configured one');
+    assert.ok(!record.runnerCmd.includes('INJECTED_EVIL'), 'body-supplied command never reaches the record');
+
+    const gotMarker = await waitFor(() => {
+      try { return fs.readFileSync(record.logFile, 'utf8').includes(MARKER); } catch { return false; }
+    });
+    assert.equal(gotMarker, true, 'log proves the configured command ran');
+    assert.ok(!fs.readFileSync(record.logFile, 'utf8').includes('INJECTED_EVIL'), 'injected command never ran');
+
+    const started = readEvents().filter((e) => e.verb === 'runner.started');
+    assert.equal(started.length, 1, 'exactly one audit line for the one start');
+    assert.equal(started[0].task, 'WP-7');
+    assert.equal(started[0].actor, 'control-room');
+    assert.equal(started[0].acknowledgedBriefGate, true);
+    assert.equal(started[0].advisoryCount, 1);
+    assert.ok(started[0].ts);
+  } finally {
+    delete process.env.BRAIN_RUNNER_CMD;
+  }
+});
+
+test('runners: GET /api/runners maps workPackageId→task and never leaks the runner command', async () => {
+  process.env.BRAIN_RUNNER_CMD = MARKER_CMD;
+  try {
+    const r = await request('/api/runners', { headers: bearer });
+    assert.equal(r.status, 200);
+    const body = JSON.parse(r.body);
+    assert.equal(body.runnerCmdConfigured, true);
+    const entry = body.runners.find((x) => x.id === 'WP-7');
+    assert.ok(entry, 'the started runner is listed');
+    assert.equal(entry.task, 'WP-7');
+    assert.equal(entry.status, 'running');
+    assert.ok(!('runnerCmd' in entry), 'the command never appears in API responses');
+    assert.ok(!r.body.includes(MARKER), 'not even inside other fields');
+  } finally {
+    delete process.env.BRAIN_RUNNER_CMD;
+  }
+});
+
+test('runners: starting the same task again → 409 already-running, no second process', async () => {
+  process.env.BRAIN_RUNNER_CMD = MARKER_CMD;
+  try {
+    const before = JSON.parse(fs.readFileSync(path.join(RUNNERS_DIR, 'WP-7.json'), 'utf8')).pid;
+    const r = await post('/api/runners/start', { task: 'WP-7', acknowledged: true });
+    assert.equal(r.status, 409);
+    assert.equal(JSON.parse(r.body).error, 'already-running');
+    const after = JSON.parse(fs.readFileSync(path.join(RUNNERS_DIR, 'WP-7.json'), 'utf8')).pid;
+    assert.equal(after, before, 'the record still points at the original process');
+  } finally {
+    delete process.env.BRAIN_RUNNER_CMD;
+  }
+});
+
+test('runners: log tail is token-gated and bounded', async () => {
+  const denied = await request('/api/runners/log?id=WP-7');
+  assert.equal(denied.status, 401);
+
+  await waitFor(() => {
+    const t = fs.readFileSync(path.join(RUNNERS_DIR, 'WP-7.json'), 'utf8');
+    try { return fs.readFileSync(JSON.parse(t).logFile, 'utf8').split('\n').length > 6; } catch { return false; }
+  });
+  const r = await request('/api/runners/log?id=WP-7&lines=5', { headers: bearer });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.ok(Array.isArray(body.lines));
+  assert.ok(body.lines.length >= 1 && body.lines.length <= 5, `lines param bounds output, got ${body.lines.length}`);
+  assert.equal(typeof body.truncated, 'boolean');
+  assert.ok(body.lines.some((l) => l === MARKER || l === 'tick'), 'tail shows real runner output');
+
+  const missing = await request('/api/runners/log?id=no-such-runner', { headers: bearer });
+  assert.equal(missing.status, 404);
+});
+
+test('runners: stop really kills the process, audits runner.stopped, is idempotent', async () => {
+  const record = JSON.parse(fs.readFileSync(path.join(RUNNERS_DIR, 'WP-7.json'), 'utf8'));
+  const r = await post('/api/runners/stop', { id: 'WP-7' });
+  assert.equal(r.status, 200);
+  const body = JSON.parse(r.body);
+  assert.equal(body.ok, true);
+  assert.equal(body.status, 'stopped');
+  assert.throws(() => process.kill(record.pid, 0), (error) => error.code === 'ESRCH', 'process must be really dead');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(RUNNERS_DIR, 'WP-7.json'), 'utf8')).status, 'exited');
+
+  const stoppedEvents = readEvents().filter((e) => e.verb === 'runner.stopped');
+  assert.equal(stoppedEvents.length, 1);
+  assert.equal(stoppedEvents[0].id, 'WP-7');
+  assert.equal(stoppedEvents[0].actor, 'control-room');
+
+  const again = await post('/api/runners/stop', { id: 'WP-7' });
+  assert.equal(again.status, 200, 'stop is idempotent per the supervisor lib');
+  assert.equal(JSON.parse(again.body).status, 'already-exited');
+
+  const unknown = await post('/api/runners/stop', { id: 'never-existed' });
+  assert.equal(unknown.status, 404);
+});
+
+test('runners security: POSTs pass through Origin/token gates; GET on a POST path → 405', async () => {
+  const evilOrigin = await post('/api/runners/start', { task: 'WP-7', acknowledged: true }, { Origin: 'http://evil.example' });
+  assert.equal(evilOrigin.status, 403, 'cross-origin POST rejected even with a valid token');
+
+  const noToken = await request('/api/runners/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task: 'WP-7' })
+  });
+  assert.equal(noToken.status, 401);
+
+  const evilHost = await post('/api/runners/stop', { id: 'WP-7' }, { Host: 'evil.example' });
+  assert.equal(evilHost.status, 403, 'DNS-rebinding Host rejected on POSTs too');
+
+  const wrongMethod = await request('/api/runners/start', { headers: bearer });
+  assert.equal(wrongMethod.status, 405, 'GET on a POST endpoint is rejected');
+  assert.equal(wrongMethod.headers.allow, 'POST');
+});
+
+test('runners security: content-type, malformed JSON, and oversized bodies are rejected', async () => {
+  process.env.BRAIN_RUNNER_CMD = MARKER_CMD;
+  try {
+    const wrongType = await request('/api/runners/start', {
+      method: 'POST',
+      headers: { ...bearer, 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ task: 'WP-7' })
+    });
+    assert.equal(wrongType.status, 415, 'non-JSON content type rejected');
+
+    const malformed = await post('/api/runners/start', '{"task": nope');
+    assert.equal(malformed.status, 400);
+    assert.match(JSON.parse(malformed.body).error, /malformed JSON/);
+
+    const notObject = await post('/api/runners/start', '[1,2,3]');
+    assert.equal(notObject.status, 400, 'non-object JSON body rejected');
+
+    const huge = await post('/api/runners/start', `{"task":"${'x'.repeat(20 * 1024)}"}`);
+    assert.equal(huge.status, 413, 'bodies over the 16KB cap are rejected');
+  } finally {
+    delete process.env.BRAIN_RUNNER_CMD;
+  }
+});
+
+test('SSE: runner record changes under .project-brain/runners/ emit state-changed', async () => {
+  fs.mkdirSync(RUNNERS_DIR, { recursive: true });
+  await new Promise((resolve, reject) => {
+    const req = http.get({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: `/api/stream?token=${TOKEN}`
+    }, (res) => {
+      let buf = '';
+      let touched = false;
+      const timer = setTimeout(() => {
+        req.destroy();
+        reject(new Error('no state-changed event for a runner record change'));
+      }, 5000);
+      res.on('data', (chunk) => {
+        buf += chunk;
+        if (!touched && buf.includes(': connected')) {
+          touched = true;
+          // A dead-PID record touch — exactly what start/stop/reconcile write.
+          fs.writeFileSync(path.join(RUNNERS_DIR, 'sse-touch.json'),
+            JSON.stringify({ pid: 99999999, workPackageId: 'sse-touch', status: 'exited', logFile: '' }));
+        }
+        if (buf.includes('state-changed') && buf.includes('runners')) {
+          clearTimeout(timer);
+          req.destroy();
+          resolve();
+        }
+      });
+    });
+    req.on('error', () => {}); // destroy() races the socket teardown
+  });
+});
+
+test('runners: no zombie children survive the test run', async () => {
+  for (const pid of spawnedPids) killQuietly(pid);
+  const allDead = await waitFor(() => spawnedPids.every((pid) => !pidAlive(pid)), 3000);
+  assert.equal(allDead, true, `zombie runner pids still alive: ${spawnedPids.filter((pid) => pidAlive(pid)).join(', ')}`);
 });

@@ -1,10 +1,12 @@
 /**
  * brain:serve — local Control-Room daemon (strategy doc §M2.75).
  *
- * A read-only JSON API + SSE stream over the existing brain state
+ * A JSON API + SSE stream over the existing brain state
  * (active_state.md, events.jsonl, decisions/grills/findings, git-intel),
- * plus static serving for the future `ui/dist` bundle. Node `http` only —
- * no framework (AGPL-client house rule, no new deps).
+ * the M2.75 runner write API (start/stop/tail supervised runner processes
+ * via runner-supervisor.mjs — a lib, not a command script), plus static
+ * serving for the future `ui/dist` bundle. Node `http` only — no framework
+ * (AGPL-client house rule, no new deps).
  *
  *   brain-serve.mjs [--port N] [--open]
  *
@@ -17,11 +19,16 @@
  *   (c) Origin/Host validation: a present Origin that is not
  *       http://127.0.0.1[:port] / http://localhost[:port] → 403; a Host
  *       header that is not a localhost variant → 403 (DNS-rebinding defense);
- *   (d) the API is READ-ONLY in this milestone — there is no endpoint that
- *       accepts commands or paths to execute, and non-GET methods are 405;
+ *   (d) the ONLY write endpoints are POST /api/runners/start|stop, and the
+ *       runner command is NEVER read from any request — it resolves from
+ *       BRAIN_RUNNER_CMD env, else the `runnerCmd` key in
+ *       .project-brain/config.json; the API references tasks/runner ids
+ *       only. POSTs additionally require Content-Type application/json and
+ *       cap bodies at 16KB (413; malformed JSON → 400). Every other method/
+ *       path combination on /api is 405;
  *   (e) no CORS headers, ever.
  *
- * Endpoints (all GET, all token-gated except the static page):
+ * Endpoints (token-gated except the static page; GET unless noted):
  *   /api/state             workstreams+leases via activeStateJson() —
  *                          guarded read-only: never creates active_state.md
  *   /api/events?limit=N    tail of .project-brain/events.jsonl (absent → [])
@@ -31,9 +38,21 @@
  *                          script itself is never imported)
  *   /api/records?type=decision|grill|finding   record files + frontmatter title
  *   /api/meta              version, root, index-provider availability
+ *   /api/runners           supervised runner records (listRunners; the
+ *                          record's workPackageId is exposed as `task`) +
+ *                          runnerCmdConfigured
+ *   POST /api/runners/start {task, acknowledged?}
+ *                          brief gate: active leases held by a DIFFERENT
+ *                          actor than the task's owner → 409 {briefGate,
+ *                          advisories} unless acknowledged; then startRunner
+ *                          + audit line runner.started → events.jsonl
+ *   POST /api/runners/stop {id}   stopRunner (idempotent) + runner.stopped
+ *   /api/runners/log?id=<id>&lines=N   bounded tailLog
  *   /api/stream            SSE: fs.watch on .project-brain/ (300ms debounce)
  *                          → {type:'state-changed', file}; heartbeat comment
- *                          every 25s
+ *                          every 25s; .project-brain/runners/ is watched
+ *                          explicitly (fs.watch recursion is platform-
+ *                          dependent) so runner record changes always emit
  *
  * Every JSON response carries `state_age`/`stale_warning` freshness metadata
  * (mtime-based; live-computed intel reports age 0) — Praktiken-Katalog:
@@ -56,10 +75,11 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ROOT, PACKAGE_DIR, takeFlag, takeOption } from './common.mjs';
+import { ROOT, PACKAGE_DIR, ensureDir, takeFlag, takeOption } from './common.mjs';
 import { ACTIVE_STATE, activeStateJson } from './active-state.mjs';
 import { gitLogArgs, parseLog, hotspots, coChange, ownership } from './git-intel.mjs';
 import { getIndexProvider } from './index-provider.mjs';
+import { startRunner, listRunners, stopRunner, tailLog } from './runner-supervisor.mjs';
 
 export const DEFAULT_PORT = 4100;
 const PORT_FALLBACK_ATTEMPTS = 20;
@@ -70,6 +90,9 @@ const MAX_EVENT_LIMIT = 1000;
 const DEFAULT_ROW_LIMIT = 50;
 const SSE_DEBOUNCE_MS = 300;
 const SSE_HEARTBEAT_MS = 25_000;
+const MAX_BODY_BYTES = 16 * 1024;
+const DEFAULT_LOG_LINES = 100;
+const MAX_LOG_LINES = 2000;
 const STALE_AFTER_S = Number(process.env.BRAIN_SERVE_STALE_S || 24 * 3600);
 
 const RECORD_DIRS = Object.freeze({
@@ -208,6 +231,102 @@ export function listRecords(root, type) {
 }
 
 // ---------------------------------------------------------------------------
+// runner write API helpers (security model point d — exported for tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the runner command — NEVER from any request (strategy doc security
+ * model point d: a body-supplied command would be drive-by RCE). Resolution
+ * order: BRAIN_RUNNER_CMD env, else the `runnerCmd` key in
+ * .project-brain/config.json (file may be absent or malformed → unconfigured).
+ */
+export function resolveRunnerCmd(root, env = process.env) {
+  if (env.BRAIN_RUNNER_CMD) return String(env.BRAIN_RUNNER_CMD);
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(root, '.project-brain', 'config.json'), 'utf8'));
+    if (cfg && typeof cfg.runnerCmd === 'string') return cfg.runnerCmd.trim();
+  } catch { /* absent/malformed config → '' */ }
+  return '';
+}
+
+/**
+ * PURE. Brief-gate advisories for starting work as `owner`: every active
+ * lease held by a DIFFERENT actor than the workstream's owner. Leases whose
+ * `until` parses to a past timestamp are excluded; empty or unparseable
+ * `until` keeps the lease visible (fail toward caution — mirrors
+ * brain-intel's readLeasesSafe and state-digest's isExpiredLease).
+ */
+export function leaseAdvisories(leases, owner, now = Date.now()) {
+  const advisories = [];
+  const self = String(owner || '').trim();
+  for (const lease of leases || []) {
+    if (!lease || !lease.target) continue;
+    const until = Date.parse(String(lease.until || '').trim());
+    if (Number.isFinite(until) && until < now) continue; // expired → excluded
+    const holder = String(lease.lockedBy || '').trim();
+    if (holder === self) continue; // own lease → no advisory
+    advisories.push({
+      target: lease.target,
+      lockedBy: holder,
+      until: lease.until || '',
+      message: `${lease.target} is leased by ${holder || 'an unknown actor'}` +
+        `${lease.until ? ` until ${lease.until}` : ''}${lease.notes ? ` — ${lease.notes}` : ''}`
+    });
+  }
+  return advisories;
+}
+
+/**
+ * Append one audit line to .project-brain/events.jsonl — the audit IS the
+ * product: every runner start/stop through the API leaves a durable trace.
+ */
+export function appendEvent(root, event) {
+  const file = path.join(root, '.project-brain', 'events.jsonl');
+  ensureDir(path.dirname(file));
+  fs.appendFileSync(file, `${JSON.stringify(event)}\n`);
+}
+
+/**
+ * Read + parse a JSON POST body. Requires Content-Type application/json
+ * (else 415); caps the body at `maxBytes` (else 413 — the remainder is
+ * drained so the response can flush, with a hard cut against floods);
+ * malformed JSON or a non-object top level → 400.
+ * Resolves {ok:true, body} | {ok:false, code, error}; never rejects.
+ */
+function readJsonBody(req, maxBytes = MAX_BODY_BYTES) {
+  return new Promise((resolve) => {
+    const contentType = String(req.headers['content-type'] || '').trim();
+    if (!/^application\/json\b/i.test(contentType)) {
+      req.resume();
+      return resolve({ ok: false, code: 415, error: 'unsupported media type: Content-Type must be application/json' });
+    }
+    const chunks = [];
+    let size = 0;
+    let settled = false;
+    const settle = (r) => { if (!settled) { settled = true; resolve(r); } };
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (settled) {
+        if (size > maxBytes * 8) req.destroy(); // flood guard after the 413
+        return;
+      }
+      if (size > maxBytes) return settle({ ok: false, code: 413, error: `payload too large (max ${maxBytes} bytes)` });
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      let body;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { return settle({ ok: false, code: 400, error: 'malformed JSON body' }); }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return settle({ ok: false, code: 400, error: 'malformed JSON body: expected an object' });
+      }
+      settle({ ok: true, body });
+    });
+    req.on('error', () => settle({ ok: false, code: 400, error: 'request stream error' }));
+  });
+}
+
+// ---------------------------------------------------------------------------
 // git plumbing (the only impure part of the intel endpoints)
 // ---------------------------------------------------------------------------
 
@@ -316,11 +435,14 @@ export function createHandler(ctx) {
   const { root, token } = ctx;
   if (!root || !token) throw new Error('createHandler requires { root, token }');
   const brainDir = path.join(root, '.project-brain');
+  const runnersDir = path.join(brainDir, 'runners');
+  const runnerLogDir = path.join(brainDir, 'runner-logs');
   const uiDist = ctx.uiDist || path.join(PACKAGE_DIR, 'ui', 'dist');
 
-  // --- SSE plumbing (shared watcher, per-connection response set) ---
+  // --- SSE plumbing (shared watchers, per-connection response set) ---
   const sseClients = new Set();
   let watcher = null;
+  let runnersWatcher = null;
   let pendingFiles = new Set();
   let flushTimer = null;
 
@@ -329,19 +451,40 @@ export function createHandler(ctx) {
     for (const res of sseClients) res.write(frame);
   }
 
+  function queueChange(file) {
+    pendingFiles.add(file || '');
+    if (flushTimer) return; // debounce: one flush per quiet window
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      const files = [...pendingFiles];
+      pendingFiles = new Set();
+      for (const f of files) broadcast({ type: 'state-changed', file: f });
+    }, SSE_DEBOUNCE_MS);
+    if (typeof flushTimer.unref === 'function') flushTimer.unref();
+  }
+
+  // fs.watch recursion is platform-dependent (darwin: yes; elsewhere: maybe
+  // not), so runner record changes get their own explicit watcher. Guarded:
+  // the dir may not exist yet — retried on every brainDir event, stream
+  // connection, and successful runner start.
+  function ensureRunnersWatcher() {
+    if (runnersWatcher || !fs.existsSync(runnersDir)) return;
+    try {
+      runnersWatcher = fs.watch(runnersDir, (_event, file) =>
+        queueChange(file ? `runners/${file}` : 'runners'));
+    } catch {
+      runnersWatcher = null;
+    }
+  }
+
   function ensureWatcher() {
+    ensureRunnersWatcher();
     if (watcher || !fs.existsSync(brainDir)) return;
     try {
       watcher = fs.watch(brainDir, { recursive: true }, (_event, file) => {
-        pendingFiles.add(file || '');
-        if (flushTimer) return; // debounce: one flush per quiet window
-        flushTimer = setTimeout(() => {
-          flushTimer = null;
-          const files = [...pendingFiles];
-          pendingFiles = new Set();
-          for (const f of files) broadcast({ type: 'state-changed', file: f });
-        }, SSE_DEBOUNCE_MS);
-        if (typeof flushTimer.unref === 'function') flushTimer.unref();
+        ensureRunnersWatcher(); // runners/ may have appeared after connect
+        // Normalize separators so an event seen by both watchers dedupes.
+        queueChange(file ? String(file).split(path.sep).join('/') : '');
       });
     } catch {
       watcher = null; // watch unsupported → stream still serves heartbeats
@@ -459,6 +602,111 @@ export function createHandler(ctx) {
     });
   }
 
+  // --- runner write API (M2.75; docs/strategy-agent-ops.md security model) ---
+
+  /** Public projection of a supervision record: task/ids only, never the cmd. */
+  function runnerView(r) {
+    return {
+      id: r.id,
+      task: r.workPackageId,
+      pid: r.pid,
+      status: r.status,
+      startedAt: r.startedAt,
+      logFile: r.logFile
+    };
+  }
+
+  /** Read-only state view, same guard as apiState: never creates the file. */
+  function readStateSafe() {
+    if (!fs.existsSync(ACTIVE_STATE)) return { workstreams: [], leases: [], blockers: [], overlaps: [] };
+    return activeStateJson();
+  }
+
+  function apiRunners(res) {
+    const listed = listRunners({ runnersDir });
+    sendJson(res, 200, {
+      runners: listed.runners.map(runnerView),
+      warnings: listed.warnings,
+      runnerCmdConfigured: Boolean(resolveRunnerCmd(root)),
+      ...freshness(runnersDir)
+    });
+  }
+
+  async function apiRunnerStart(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) return sendJson(res, parsed.code, { error: parsed.error });
+    // Security model (d): the runner command is NEVER read from the request —
+    // a body-supplied `runnerCmd`/`command`/anything else is ignored by
+    // construction; only `task` and `acknowledged` are ever consulted.
+    const task = typeof parsed.body.task === 'string' ? parsed.body.task.trim() : '';
+    const acknowledged = parsed.body.acknowledged === true;
+    const runnerCmd = resolveRunnerCmd(root);
+    if (!runnerCmd) {
+      return sendJson(res, 400, {
+        error: 'no-runner-cmd',
+        hint: 'set BRAIN_RUNNER_CMD or a "runnerCmd" key in .project-brain/config.json — the runner command is never accepted via the API'
+      });
+    }
+    const state = readStateSafe();
+    const workstream = state.workstreams.find((w) => w.taskId === task);
+    if (!task || !workstream) return sendJson(res, 400, { error: 'unknown-task' });
+    const running = listRunners({ runnersDir }).runners
+      .find((r) => r.workPackageId === task && r.status === 'running');
+    if (running) return sendJson(res, 409, { error: 'already-running', runner: runnerView(running) });
+    const advisories = leaseAdvisories(state.leases, workstream.owner);
+    if (advisories.length && !acknowledged) {
+      // Brief gate: surface the advisories, spawn NOTHING, record nothing.
+      return sendJson(res, 409, { briefGate: true, advisories });
+    }
+    const started = startRunner({
+      workPackageId: task,
+      runnerCmd,
+      worktreeDir: root,
+      logDir: runnerLogDir,
+      runnersDir,
+      env: {}
+    });
+    if (!started.ok) return sendJson(res, 500, { error: started.error });
+    appendEvent(root, {
+      ts: new Date().toISOString(),
+      verb: 'runner.started',
+      task,
+      actor: 'control-room',
+      acknowledgedBriefGate: acknowledged,
+      advisoryCount: advisories.length
+    });
+    ensureRunnersWatcher(); // the start may have just created runners/
+    sendJson(res, 200, { runner: runnerView({ id: started.id, ...started.record }) });
+  }
+
+  async function apiRunnerStop(req, res) {
+    const parsed = await readJsonBody(req);
+    if (!parsed.ok) return sendJson(res, parsed.code, { error: parsed.error });
+    const id = typeof parsed.body.id === 'string' ? parsed.body.id.trim() : '';
+    if (!id) return sendJson(res, 400, { error: 'bad-request', hint: 'body must be {"id": "<runner id>"}' });
+    const stopped = await stopRunner(id, { runnersDir });
+    if (stopped.status === 'record-not-found') return sendJson(res, 404, { error: 'not-found', id });
+    appendEvent(root, {
+      ts: new Date().toISOString(),
+      verb: 'runner.stopped',
+      id,
+      actor: 'control-room',
+      status: stopped.status
+    });
+    sendJson(res, 200, { ok: stopped.ok, status: stopped.status, id });
+  }
+
+  function apiRunnerLog(res, url) {
+    const id = (url.searchParams.get('id') || '').trim();
+    if (!id) return sendJson(res, 400, { error: 'bad-request', hint: '?id=<runner id> is required' });
+    const rawLines = Number(url.searchParams.get('lines') || DEFAULT_LOG_LINES);
+    const lines = Math.min(Math.max(Number.isFinite(rawLines) ? Math.floor(rawLines) : DEFAULT_LOG_LINES, 1), MAX_LOG_LINES);
+    const tail = tailLog(id, { lines, runnersDir });
+    if (!tail.ok && tail.status === 'record-not-found') return sendJson(res, 404, { error: 'not-found', id });
+    if (!tail.ok) return sendJson(res, 500, { error: tail.status || 'log read failed', id });
+    sendJson(res, 200, { id: tail.id, logFile: tail.logFile, lines: tail.lines, truncated: Boolean(tail.truncated) });
+  }
+
   function apiStream(req, res) {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -527,10 +775,16 @@ export function createHandler(ctx) {
         return sendJson(res, 403, { error: 'forbidden: cross-origin request' });
       }
       if (url.pathname.startsWith('/api/')) {
-        // (d) read-only milestone: the API accepts GET only.
-        if (req.method !== 'GET') {
-          res.setHeader('Allow', 'GET');
-          return sendJson(res, 405, { error: 'method not allowed: API is read-only (GET)' });
+        // (d) writes are confined to the two runner POST endpoints; every
+        // other /api path stays GET-only. The runner command itself is
+        // config-only, so no request can inject a command either way.
+        const isRunnerPostPath = url.pathname === '/api/runners/start' || url.pathname === '/api/runners/stop';
+        const methodOk = isRunnerPostPath ? req.method === 'POST' : req.method === 'GET';
+        if (!methodOk) {
+          res.setHeader('Allow', isRunnerPostPath ? 'POST' : 'GET');
+          return sendJson(res, 405, {
+            error: isRunnerPostPath ? 'method not allowed: use POST' : 'method not allowed: read-only endpoint (GET)'
+          });
         }
         // (b) session token on every API request, constant-time compare.
         if (!checkToken(req, url, token)) {
@@ -543,6 +797,10 @@ export function createHandler(ctx) {
         if (url.pathname === '/api/intel/ownership') return apiIntel(res, url, 'ownership');
         if (url.pathname === '/api/records') return apiRecords(res, url);
         if (url.pathname === '/api/meta') return apiMeta(res);
+        if (url.pathname === '/api/runners') return apiRunners(res);
+        if (url.pathname === '/api/runners/log') return apiRunnerLog(res, url);
+        if (url.pathname === '/api/runners/start') return await apiRunnerStart(req, res);
+        if (url.pathname === '/api/runners/stop') return await apiRunnerStop(req, res);
         if (url.pathname === '/api/stream') return apiStream(req, res);
         return sendJson(res, 404, { error: `no such endpoint: ${url.pathname}` });
       }
@@ -560,6 +818,7 @@ export function createHandler(ctx) {
   handler.close = () => {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     if (watcher) { try { watcher.close(); } catch {} watcher = null; }
+    if (runnersWatcher) { try { runnersWatcher.close(); } catch {} runnersWatcher = null; }
     for (const res of sseClients) { try { res.end(); } catch {} }
     sseClients.clear();
   };

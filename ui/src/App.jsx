@@ -10,13 +10,14 @@ function useData() {
   const [data, setData] = useState({ loading: true });
   const load = async () => {
     try {
-      const [meta, state, events, hotspots, coChange, ownership, records] =
+      const [meta, state, events, hotspots, coChange, ownership, records, runnersInfo] =
         await Promise.all([
           api.meta(), api.state(), api.events(),
           api.hotspots(), api.coChange(), api.ownership(),
-          api.records('decision').catch(() => ({ records: [] }))
+          api.records('decision').catch(() => ({ records: [] })),
+          api.runners().catch(() => ({ runners: [], runnerCmdConfigured: false }))
         ]);
-      setData({ meta, state, events, hotspots, coChange, ownership, records, loading: false });
+      setData({ meta, state, events, hotspots, coChange, ownership, records, runnersInfo, loading: false });
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -25,7 +26,7 @@ function useData() {
     load();
     return subscribe(load);
   }, []);
-  return data;
+  return { ...data, reload: load };
 }
 
 /** Which lease targets clash with another actor's active work — feeds both
@@ -52,7 +53,8 @@ export default function App() {
   const d = useData();
 
   const state = d.state || {};
-  const workstreams = state.workstreams || [];
+  // The state API names the column taskId; the board speaks of a task.
+  const workstreams = (state.workstreams || []).map((w) => ({ ...w, task: w.task || w.taskId || '' }));
   const leases = state.leases || [];
   const { conflictsByTask, conflictTargets } = useMemo(
     () => findConflicts(workstreams, leases), [workstreams, leases]
@@ -118,7 +120,7 @@ export default function App() {
             <>
               <h2>In flight</h2>
               <div className="sheet">
-                <Board workstreams={workstreams} conflictsByTask={conflictsByTask} />
+                <Board workstreams={workstreams} conflictsByTask={conflictsByTask} runnersInfo={d.runnersInfo} onChanged={d.reload} />
               </div>
               <h2>Intel</h2>
               <Intel hotspots={d.hotspots} coChange={d.coChange} ownership={d.ownership} leases={leases} />

@@ -299,3 +299,53 @@
   .skeleton { animation: none; }
   .treemap .cell, .row-target, .record summary::before { transition: none; }
 }
+
+/* ---- runner controls (write API) ---- */
+.card-actions { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
+.btn {
+  font: 11px var(--font-data);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: var(--r-chip);
+  border: 1px solid var(--signal);
+  background: var(--signal);
+  color: var(--signal-ink);
+  cursor: pointer;
+  transition: filter 150ms ease-out;
+}
+.btn:hover:not(:disabled) { filter: brightness(1.1); }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.btn.quiet {
+  background: transparent;
+  color: var(--signal);
+}
+.btn.quiet:hover:not(:disabled) { background: color-mix(in srgb, var(--signal) 10%, transparent); filter: none; }
+.cmd-hint { font: 10.5px var(--font-data); color: var(--ink-3); }
+
+/* inline brief gate — the row itself turns amber; no modal */
+.gate {
+  margin-top: 8px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 8px;
+  font-size: 12.5px;
+}
+.gate-head { margin: 0 0 4px; color: var(--ink); font-weight: 700; }
+.gate ul { margin: 0 0 8px; padding-left: 16px; color: var(--ink-2); }
+.gate li { padding: 1px 0; }
+.gate-actions { display: flex; gap: 8px; }
+
+/* log drawer */
+.logview {
+  margin: 8px 0 2px;
+  padding: 8px 10px;
+  background: var(--rail);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--r-card);
+  font: 11px var(--font-data);
+  color: var(--ink-2);
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.compact .logview { max-height: 120px; }
