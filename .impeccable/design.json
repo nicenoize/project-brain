@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-27T00:00:00Z",
+  "title": "Design System: Control Room",
+  "extensions": {
+    "colorMeta": {
+      "signal": { "role": "primary", "displayName": "Signal Blue", "canonical": "#2b5d8f", "darkValue": "#6ea3d8", "tonalRamp": ["#0c1f31", "#16334e", "#20496e", "#2b5d8f", "#4a7cab", "#6ea3d8", "#9dc1e6", "#d3e4f4"] },
+      "lamp-run": { "role": "secondary", "displayName": "Run Green", "canonical": "#2e7d43", "darkValue": "#4caf6e", "tonalRamp": ["#0e2917", "#1a4a27", "#246336", "#2e7d43", "#3d9a56", "#4caf6e", "#84cc9a", "#cdebd6"] },
+      "lamp-attn": { "role": "secondary", "displayName": "Attention Amber", "canonical": "#b97f16", "darkValue": "#d99a2b", "tonalRamp": ["#3a2705", "#65450b", "#8a5f0f", "#b97f16", "#d99a2b", "#e5b45c", "#efd096", "#f8ecd3"] },
+      "lamp-attn-ink": { "role": "secondary", "displayName": "Text-Safe Amber", "canonical": "#8a5f0f", "darkValue": "#d99a2b" },
+      "lamp-stop": { "role": "secondary", "displayName": "Stop Red", "canonical": "#c0392b", "darkValue": "#e05545", "tonalRamp": ["#3c110c", "#6a1f17", "#952c21", "#c0392b", "#d24537", "#e05545", "#ec8c81", "#f7d0cc"] },
+      "lamp-idle": { "role": "secondary", "displayName": "Idle Grey", "canonical": "#9a9d9f", "darkValue": "#6f7275" },
+      "panel": { "role": "neutral", "displayName": "Board Panel", "canonical": "#e9e7e1", "darkValue": "#232528", "tonalRamp": ["#232528", "#3d3f3e", "#5b5d59", "#7e807a", "#a3a49c", "#c5c4bb", "#dcdad2", "#e9e7e1"] },
+      "rail": { "role": "neutral", "displayName": "Slotted Rail", "canonical": "#dcd9d1", "darkValue": "#1c1e21" },
+      "rail-edge": { "role": "neutral", "displayName": "Rail Edge", "canonical": "#c9c5bb", "darkValue": "#141517" },
+      "card": { "role": "neutral", "displayName": "T-Card Stock", "canonical": "#f7f6f2", "darkValue": "#2e3134" },
+      "card-edge": { "role": "neutral", "displayName": "Card Edge", "canonical": "#d5d2c9", "darkValue": "#3c3f43" },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#26282b", "darkValue": "#e8e7e2", "tonalRamp": ["#26282b", "#3f4144", "#5c5f63", "#6b6e72", "#8b8d8a", "#9c9c96", "#b0b0aa", "#e8e7e2"] },
+      "ink-secondary": { "role": "neutral", "displayName": "Ink 2", "canonical": "#5c5f63", "darkValue": "#b0b0aa" },
+      "ink-tertiary": { "role": "neutral", "displayName": "Ink 3", "canonical": "#6b6e72", "darkValue": "#9c9c96" },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "#c5c2b9", "darkValue": "#3e4145" }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Wordmark", "purpose": "Masthead wordmark only; uppercase, 0.14em tracking. The largest text in the system." },
+      "title": { "displayName": "Card Title", "purpose": "T-card task names and record summaries." },
+      "body": { "displayName": "Body", "purpose": "Base prose, empty-state teaching text." },
+      "label": { "displayName": "Data / Label", "purpose": "B612 Mono for every number, path, timestamp, chip, table header, provenance line. Tabular numerals via .num." }
+    },
+    "derivedColors": [
+      { "name": "wash-run", "value": "color-mix(in srgb, var(--lamp-run) 7%, transparent)", "purpose": "Run row wash over the rail (10% in dark)." },
+      { "name": "wash-attn", "value": "color-mix(in srgb, var(--lamp-attn) 10%, transparent)", "purpose": "Attention row wash (12% in dark)." },
+      { "name": "wash-stop", "value": "color-mix(in srgb, var(--lamp-stop) 9%, transparent)", "purpose": "Stop/conflict row wash; also conflict lease cells (12% in dark)." },
+      { "name": "hairline-interior", "value": "color-mix(in srgb, var(--hairline) 45%, transparent)", "purpose": "Interior table/feed/record row rules." }
+    ],
+    "shadows": [
+      { "name": "shadow-card", "value": "0 1px 2px rgba(38,40,43,0.14), 0 2px 6px rgba(38,40,43,0.08)", "purpose": "Resting T-cards and sheets; deeper rgba(0,0,0) stops in dark theme." },
+      { "name": "shadow-lift", "value": "0 2px 4px rgba(38,40,43,0.16), 0 6px 16px rgba(38,40,43,0.12)", "purpose": "State response only: the card in a stop-washed row." },
+      { "name": "lamp-lens", "value": "inset 0 -1px 1px rgba(0,0,0,0.25)", "purpose": "Inset shading on the 9px lamp dot." }
+    ],
+    "motion": [
+      { "name": "ease-quick", "value": "160ms ease-out", "purpose": "Treemap hover filter, record chevron rotation." },
+      { "name": "ease-flash", "value": "background-color 200ms ease-out", "purpose": "Row-target flash after a treemap jump." },
+      { "name": "shimmer", "value": "1.4s ease-in-out infinite", "purpose": "Loading skeleton. All motion nulls under prefers-reduced-motion and the .no-anim test hook." }
+    ],
+    "breakpoints": [
+      { "name": "single-column", "value": "980px", "purpose": "Right column (leases, feed) drops below the board." },
+      { "name": "narrow", "value": "720px", "purpose": "Repo path hides; density control right-aligns; sheet tables go fixed-layout." }
+    ]
+  },
+  "components": [
+    {
+      "name": "T-Card in Rail Row",
+      "kind": "card",
+      "refersTo": "t-card",
+      "description": "The signature unit: lamp + card hanging in a state-washed rail row.",
+      "html": "<div class=\"ds-rail-row ds-wash-attn\"><span class=\"ds-lamp ds-lamp-attn\"></span><div class=\"ds-tcard\"><div class=\"ds-tcard-head\"><span class=\"ds-task\">refactor lease renewal</span><span class=\"ds-chip ds-chip-attn\">ATTN</span></div><div class=\"ds-tcard-meta\"><span class=\"ds-actor\">claude-opus</span> &middot; lease 12m &middot; brain/leases.json</div></div></div>",
+      "css": ".ds-rail-row { display: flex; align-items: center; gap: 10px; background: linear-gradient(0deg, var(--wash-attn), var(--wash-attn)), var(--rail); border: 1px solid var(--rail-edge); border-radius: var(--r-card); padding: 8px 10px; } .ds-lamp { width: 9px; height: 9px; border-radius: 50%; flex: none; box-shadow: inset 0 -1px 1px rgba(0,0,0,0.25); } .ds-lamp-attn { background: var(--lamp-attn); } .ds-tcard { flex: 1; min-width: 0; background: var(--card); border: 1px solid var(--card-edge); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 8px 12px; } .ds-tcard-head { display: flex; align-items: center; gap: 8px; } .ds-task { font: 700 13px var(--font-ui); color: var(--ink); } .ds-tcard-meta { font: 11px var(--font-data); color: var(--ink-2); margin-top: 3px; } .ds-actor { color: var(--ink); } .ds-chip { display: inline-block; font-family: var(--font-data); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px 2px; border-radius: var(--r-chip); border: 1px solid currentColor; } .ds-chip-attn { color: var(--lamp-attn-ink); }"
+    },
+    {
+      "name": "State Chip",
+      "kind": "chip",
+      "refersTo": "chip-state",
+      "description": "Stamped (not pill) uppercase mono state chip; color = state, attn uses text-safe amber.",
+      "html": "<span class=\"ds-chip2 ds-run\">RUN</span> <span class=\"ds-chip2 ds-attn\">ATTN</span> <span class=\"ds-chip2 ds-stop\">STOP</span> <span class=\"ds-chip2 ds-idle\">IDLE</span>",
+      "css": ".ds-chip2 { display: inline-block; font-family: var(--font-data); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px 2px; border-radius: var(--r-chip); border: 1px solid currentColor; margin-right: 6px; } .ds-run { color: var(--lamp-run); } .ds-attn { color: var(--lamp-attn-ink); } .ds-stop { color: var(--lamp-stop); } .ds-idle { color: var(--ink-3); }"
+    },
+    {
+      "name": "Density Control",
+      "kind": "button",
+      "refersTo": "density-button",
+      "description": "The one control that moves every panel; active segment takes signal blue.",
+      "html": "<div class=\"ds-density\"><button aria-pressed=\"true\">DEPLOYED</button><button aria-pressed=\"false\">PACKET</button></div>",
+      "css": ".ds-density { display: inline-flex; border: 1px solid var(--rail-edge); border-radius: var(--r-chip); overflow: hidden; } .ds-density button { font: 11px var(--font-data); letter-spacing: 0.05em; text-transform: uppercase; padding: 3px 10px; border: 0; background: transparent; color: var(--ink-2); cursor: pointer; } .ds-density button[aria-pressed=\"true\"] { background: var(--signal); color: var(--signal-ink); } .ds-density button:hover:not([aria-pressed=\"true\"]) { color: var(--ink); } .ds-density button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }"
+    },
+    {
+      "name": "Sheet Table",
+      "kind": "custom",
+      "refersTo": "sheet",
+      "description": "Card-surfaced data table: uppercase mono headers over a hairline, 45% hairline row rules.",
+      "html": "<div class=\"ds-sheet\"><table><thead><tr><th>TARGET</th><th>ACTOR</th><th>TTL</th></tr></thead><tbody><tr><td class=\"ds-path\">brain/leases.json</td><td>claude-opus</td><td class=\"ds-ttl ds-expiring\">04:12</td></tr><tr><td class=\"ds-path\">src/index.ts</td><td>seebo</td><td class=\"ds-ttl\">28:40</td></tr></tbody></table></div>",
+      "css": ".ds-sheet { background: var(--card); border: 1px solid var(--card-edge); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 12px 14px; } .ds-sheet table { width: 100%; border-collapse: collapse; } .ds-sheet th { text-align: left; font: 10.5px var(--font-data); letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--hairline); padding: 0 8px 5px 0; } .ds-sheet td { padding: 5px 8px 5px 0; border-bottom: 1px solid color-mix(in srgb, var(--hairline) 45%, transparent); vertical-align: baseline; font: 14px var(--font-ui); color: var(--ink); } .ds-sheet tr:last-child td { border-bottom: 0; } .ds-path { font-family: var(--font-data); font-size: 12px; } .ds-ttl { font-family: var(--font-data); font-size: 11.5px; white-space: nowrap; } .ds-expiring { color: var(--lamp-attn-ink); }"
+    },
+    {
+      "name": "Provenance Line",
+      "kind": "custom",
+      "refersTo": "provenance",
+      "description": "Mandatory mono footer under every measured block: source + freshness over a hairline.",
+      "html": "<div class=\"ds-provenance\">git log &middot; 312 commits &middot; indexed 2m ago</div>",
+      "css": ".ds-provenance { font-family: var(--font-data); font-size: 10.5px; color: var(--ink-3); border-top: 1px solid var(--hairline); padding-top: 6px; margin-top: 10px; }"
+    },
+    {
+      "name": "Action Line",
+      "kind": "custom",
+      "description": "No score without an action: secondary text led by a signal-blue arrow (SVG mask).",
+      "html": "<div class=\"ds-action-line\">Split brain/leases.json before the next multi-agent run</div>",
+      "css": ".ds-action-line { font-size: 12.5px; font-family: var(--font-ui); color: var(--ink-2); } .ds-action-line::before { content: ''; display: inline-block; width: 12px; height: 10px; margin-right: 5px; background: var(--signal); mask: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 10' fill='none'%3E%3Cpath d='M1 5h9M7 1.5L10.5 5 7 8.5' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") center / contain no-repeat; }"
+    },
+    {
+      "name": "Record (read in place)",
+      "kind": "custom",
+      "description": "Details/summary row with rotating masked chevron; body opens as mono text in place.",
+      "html": "<details class=\"ds-record\" open><summary><span class=\"ds-rec-title\">ADR-0017: dispatch routing</span><span class=\"ds-rec-id\">rec_84c2</span></summary><div class=\"ds-rec-body\">Status: accepted. Route brain commands through a single dispatcher...</div></details>",
+      "css": ".ds-record { border-bottom: 1px solid color-mix(in srgb, var(--hairline) 45%, transparent); } .ds-record summary { cursor: pointer; padding: 6px 0; list-style: none; display: flex; gap: 8px; align-items: baseline; } .ds-rec-title { font: 400 13px var(--font-ui); color: var(--ink); } .ds-record summary::before { content: ''; width: 10px; height: 10px; flex: none; align-self: center; background: var(--ink-3); mask: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none'%3E%3Cpath d='M3.5 2l3.5 3-3.5 3' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") center / contain no-repeat; transition: transform 160ms ease-out; } .ds-record[open] summary::before { transform: rotate(90deg); } .ds-rec-body { font: 11.5px var(--font-data); color: var(--ink-2); padding: 0 0 10px 16px; white-space: pre-wrap; } .ds-rec-id { font: 10.5px var(--font-data); color: var(--ink-3); }"
+    },
+    {
+      "name": "Section Label",
+      "kind": "nav",
+      "description": "Bay heading naming each board section; uppercase letterspaced Ink-2.",
+      "html": "<h2 class=\"ds-bay-h\">LEASE BOARD</h2>",
+      "css": ".ds-bay-h { margin: 0; font: 700 12px var(--font-ui); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Andon Board",
+    "overview": "The Control Room is a physical production board rendered on screen, not a dashboard. Work is a T-card hanging in a slotted rail; state is a lamp at the card's head; a conflict pulls the whole row's red light. It deliberately refuses the category default — near-black panel, one neon accent, a grid of stat cards — in favor of warm workshop materials: card stock pinned to a panel in light mode, a graphite board under workshop light in dark mode. Both themes are first-class via prefers-color-scheme; there is no theme toggle.\n\nDensity is the personality: microtype in a cockpit-instrument face (B612), hairline rules, stamped chips, small soft shadows. Structure comes from rails and hairlines, never from a grid of same-size cards. Color is almost entirely reserved for meaning — three andon lamp hues carry state, one signal blue carries interaction, and everything else is warm-grey material.",
+    "keyCharacteristics": [
+      "Warm panel greys as material (card stock / graphite), never pure white or pure black",
+      "Three lamp colors reserved for state only; one blue reserved for interaction only",
+      "State re-lights the row (a tinted wash), not just the badge",
+      "Mono microtype (B612 Mono) for every number, timestamp, path, and label",
+      "Every measured block ends in a provenance footer; every risk carries an action line",
+      "One density control (packet / deployed) moves every panel at once"
+    ],
+    "rules": [
+      { "name": "The Lamp Rule", "body": "Green, amber, and red exist only to say run / attention / stop. They never brand, never decorate, never highlight a heading.", "section": "colors" },
+      { "name": "The One Signal Rule", "body": "Signal blue is the only color that means \"you can act here.\" It is never used to convey state, and no second interaction accent exists.", "section": "colors" },
+      { "name": "The Text-Safe Amber Rule", "body": "Amber as a lamp dot or wash keeps the bright hue; amber as text uses --lamp-attn-ink so it stays legible on light card stock.", "section": "colors" },
+      { "name": "The Mono Data Rule", "body": "If it is measured — a number, a time, a path, an id, a verb in the audit feed — it is set in B612 Mono. Prose stays in B612.", "section": "typography" },
+      { "name": "The One Density Rule", "body": "There is exactly one density control and it moves every panel. No panel grows its own compact toggle.", "section": "layout" },
+      { "name": "The Pulled-Card Rule", "body": "Extra elevation is a state response: only a blocked/conflict row earns the lift shadow. Nothing floats for decoration.", "section": "elevation" },
+      { "name": "The Provenance Rule", "body": "Every measured block ends in a mono provenance footer over a hairline. No number appears without its source and freshness.", "section": "components" }
+    ],
+    "dos": [
+      "Do build structure from rails and hairlines; a new panel is a sheet or a rail row, never a stat card.",
+      "Do wash the whole row with the state tint (7-12% color-mix over rail) when state changes — the badge alone is not enough.",
+      "Do set every number, path, timestamp, and label in B612 Mono, uppercase with 0.05-0.08em tracking when it labels.",
+      "Do use --lamp-attn-ink whenever amber is text.",
+      "Do honor prefers-color-scheme and prefers-reduced-motion; every transition/animation has a reduced-motion off-switch.",
+      "Do end every measured block with a .provenance footer and pair every risk with an .action-line."
+    ],
+    "donts": [
+      "Don't use lamp green/amber/red for anything but state — not headings, not branding, not emphasis.",
+      "Don't introduce a second interaction accent; signal blue (#2b5d8f / #6ea3d8) is the only \"act here\" color.",
+      "Don't render a grid of same-size stat cards, a near-black+neon theme, or a pill-shaped chip; chips are stamped squares (2px radius, 1px currentColor border).",
+      "Don't add per-panel density or theme toggles; the one masthead control and the OS scheme decide.",
+      "Don't exceed the instrument scale: nothing larger than the 15px wordmark; no display typography."
+    ]
+  }
+}

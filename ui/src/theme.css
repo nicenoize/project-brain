@@ -1,0 +1,139 @@
+/* Andon board world — tokens. Lamp colors are STATE ONLY, never decoration.
+   Both themes are first-class (PRODUCT.md): system-follow via color-scheme. */
+@import '@fontsource/b612/400.css';
+@import '@fontsource/b612/700.css';
+@import '@fontsource/b612-mono/400.css';
+@import '@fontsource/b612-mono/700.css';
+
+:root {
+  /* panel world — light: card stock pinned on a workshop panel */
+  --panel: #e9e7e1;        /* board ground */
+  --rail: #dcd9d1;         /* slotted rail */
+  --rail-edge: #c9c5bb;
+  --card: #f7f6f2;         /* T-card stock */
+  --card-edge: #d5d2c9;
+  --ink: #26282b;
+  --ink-2: #5c5f63;        /* secondary text, warm-tinted from ink */
+  --ink-3: #6b6e72;
+  --hairline: #c5c2b9;
+
+  /* andon lamps — state only */
+  --lamp-run: #2e7d43;
+  --lamp-attn: #b97f16;
+  --lamp-attn-ink: #8a5f0f;  /* text-safe amber (chips, TTL) — lamp dot keeps the brighter hue */
+  --lamp-stop: #c0392b;
+  --lamp-idle: #9a9d9f;
+  /* row washes (state re-lights the row — cyclorama raise) */
+  --wash-run: color-mix(in srgb, var(--lamp-run) 7%, transparent);
+  --wash-attn: color-mix(in srgb, var(--lamp-attn) 10%, transparent);
+  --wash-stop: color-mix(in srgb, var(--lamp-stop) 9%, transparent);
+
+  /* one interactive accent — never a state color */
+  --signal: #2b5d8f;
+  --signal-ink: #ffffff;
+
+  --shadow-card: 0 1px 2px rgba(38, 40, 43, 0.14), 0 2px 6px rgba(38, 40, 43, 0.08);
+  --shadow-lift: 0 2px 4px rgba(38, 40, 43, 0.16), 0 6px 16px rgba(38, 40, 43, 0.12);
+
+  --font-ui: 'B612', system-ui, sans-serif;
+  --font-data: 'B612 Mono', ui-monospace, monospace;
+
+  --r-card: 3px;
+  --r-chip: 2px;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* dark: graphite board under workshop light */
+    --panel: #232528;
+    --rail: #1c1e21;
+    --rail-edge: #141517;
+    --card: #2e3134;
+    --card-edge: #3c3f43;
+    --ink: #e8e7e2;
+    --ink-2: #b0b0aa;
+    --ink-3: #9c9c96;
+    --hairline: #3e4145;
+
+    --lamp-run: #4caf6e;
+    --lamp-attn: #d99a2b;
+    --lamp-attn-ink: #d99a2b;
+    --lamp-stop: #e05545;
+    --lamp-idle: #6f7275;
+    --wash-run: color-mix(in srgb, var(--lamp-run) 10%, transparent);
+    --wash-attn: color-mix(in srgb, var(--lamp-attn) 12%, transparent);
+    --wash-stop: color-mix(in srgb, var(--lamp-stop) 12%, transparent);
+
+    --signal: #6ea3d8;
+    --signal-ink: #101214;
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+    --shadow-lift: 0 2px 5px rgba(0, 0, 0, 0.55), 0 8px 20px rgba(0, 0, 0, 0.4);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.45;
+  caret-color: var(--signal);
+}
+
+/* browser surfaces carry the design too (craft floor) */
+::selection { background: color-mix(in srgb, var(--signal) 28%, transparent); }
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; border-radius: var(--r-chip); }
+* { scrollbar-width: thin; scrollbar-color: var(--rail-edge) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--rail-edge); border-radius: 5px; border: 2px solid var(--panel); }
+a { color: var(--signal); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+
+.num { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+
+/* stamped state chip — punched, not pill */
+.chip {
+  display: inline-block;
+  font-family: var(--font-data);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 6px 2px;
+  border-radius: var(--r-chip);
+  border: 1px solid currentColor;
+}
+.chip.run { color: var(--lamp-run); }
+.chip.attn { color: var(--lamp-attn-ink); }
+.chip.stop { color: var(--lamp-stop); }
+.chip.idle { color: var(--ink-3); }
+
+/* andon lamp dot */
+.lamp {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--lamp-idle);
+  box-shadow: inset 0 -1px 1px rgba(0,0,0,0.25);
+  flex: none;
+}
+.lamp.run { background: var(--lamp-run); }
+.lamp.attn { background: var(--lamp-attn); }
+.lamp.stop { background: var(--lamp-stop); }
+
+/* provenance footer line under every measured block */
+.provenance {
+  font-family: var(--font-data);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  border-top: 1px solid var(--hairline);
+  padding-top: 6px;
+  margin-top: 10px;
+}
+
+.no-anim *, .no-anim *::before, .no-anim *::after { animation: none !important; transition: none !important; }
