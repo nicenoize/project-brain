@@ -150,7 +150,11 @@ A warm-grey material world where the only saturated color is meaning: three ando
 State washes are derived, not standalone tokens: `color-mix(in srgb, var(--lamp-*) 7–12%, transparent)` layered over the rail.
 
 ### Named Rules
-**The Lamp Rule.** Green, amber, and red exist only to say run / attention / stop. They never brand, never decorate, never highlight a heading.
+**The Lamp Rule.** Green, amber, and red exist only to say run / attention / stop. They never brand, never decorate, never highlight a heading. This rule has been broken twice by growth and repaired twice, always the same way: a new panel wants to mark something "good" or "severe" and reaches for a lamp. Severity, provenance, freshness and absence all belong to the ink ladder — see The Measurement Rule.
+
+**The Measurement Rule.** A measured quantity climbs in ink density and weight, never in hue: a danger score of 8.8 is `--ink` at 700, a 2.1 is `--ink-3` at 400. The same holds for severity tags, `measured` vs `inferred` provenance, doc drift and "not scanned". If it would still be true in a printout tomorrow, it is a measurement and gets no colour.
+
+**The Lit-Head Rule.** A section head lights only when its content wants a human *now*. A standing inventory — the danger ranking, an archive — never lamps, however large its numbers, because a lamp promises change and an inventory is the same list today as yesterday. Two lit heads read as a ranking; four read as wallpaper. Packet density is where this breaks first: before adding a section that can light, check the packet capture, not the deployed one.
 
 **The One Signal Rule.** Signal blue is the only color that means "you can act here." It is never used to convey state, and no second interaction accent exists.
 
