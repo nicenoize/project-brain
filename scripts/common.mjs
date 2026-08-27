@@ -339,7 +339,18 @@ export function mergePackageScripts(pkg) {
     'brain:grill': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-grill.mjs',
     'brain:route': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-route.mjs',
     'brain:close': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-close.mjs',
-    'brain:reflect': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-reflect.mjs'
+    'brain:reflect': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-reflect.mjs',
+    // The M2.5/M2.75 surfaces. These shipped as scripts but were never
+    // registered, so consuming repos got the files on brain:update-skill and
+    // no way to run them short of the `x` escape hatch — the code arrived and
+    // the product did not. (CONTRIBUTING rule 6.)
+    'brain:intel': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-intel.mjs',
+    'brain:security': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-security.mjs',
+    'brain:lint': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-lint.mjs',
+    'brain:graph-scan': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-graph-scan.mjs',
+    'brain:serve': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-serve.mjs',
+    'brain:draft': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-draft.mjs',
+    'brain:release': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-release.mjs'
   };
   for (const [k, v] of Object.entries(scripts)) {
     if (!pkg.scripts[k] || pkg.scripts[k].includes('skills/project-brain/')) pkg.scripts[k] = v;
