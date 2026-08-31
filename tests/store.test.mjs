@@ -215,3 +215,57 @@ test('mirror: vectors are dropped when a vector backend owns them', async () => 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/* Never destroy more than can be rebuilt.
+   The auto-recovery path dropped the Lance table and recreated it from the
+   CURRENT UPSERT BATCH. On a real repo a background sync carrying 179 records
+   hit a schema mismatch and that "recovery" destroyed 98,690 — silently, from
+   a hook, behind a warning that said "auto-recovering" and never said how much
+   was being deleted. */
+test('canAutoRecover: refuses to drop more than the batch can replace', async () => {
+  const { canAutoRecover } = await import('../scripts/store.mjs');
+
+  // The exact case that happened.
+  const real = canAutoRecover({ existingRows: 98690, batchSize: 179, mirrorCanRestore: false });
+  assert.equal(real.allowed, false);
+  assert.equal(real.wouldLose, 98511);
+  assert.match(real.reason, /would lose 98511/);
+
+  // A mirror that carries vectors CAN rebuild it, so the drop is safe.
+  assert.equal(canAutoRecover({ existingRows: 98690, batchSize: 179, mirrorCanRestore: true }).allowed, true);
+
+  // An unreadable table has nothing provably worth protecting, and refusing
+  // there would deadlock a genuinely broken store.
+  assert.equal(canAutoRecover({ existingRows: null, batchSize: 179 }).allowed, true);
+  assert.equal(canAutoRecover({ existingRows: NaN, batchSize: 179 }).allowed, true);
+
+  // A batch at least as large as the table loses nothing.
+  assert.equal(canAutoRecover({ existingRows: 5, batchSize: 200 }).allowed, true);
+  assert.equal(canAutoRecover({ existingRows: 179, batchSize: 179 }).allowed, true);
+
+  // Degenerate input must not throw.
+  assert.equal(canAutoRecover().allowed, true);
+});
+
+test('a metadata-only mirror is never used to seed the vector store', async () => {
+  const { JsonStore } = await import('../scripts/store.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-seed-guard-'));
+  try {
+    const file = path.join(dir, 'index.json');
+    const store = new JsonStore({ path: file });
+    store.vectorsOwnedElsewhere = true;
+    await store.upsert([{ id: 'a', file: 'a.ts', text: 'x', vector: [1, 2, 3] }]);
+    store.persist({ force: true });
+
+    // Read back: the record exists, the vector does not. Seeding Lance from
+    // this would create the table with a zero-width vector column, the next
+    // real upsert would be a schema mismatch, and auto-recovery would drop the
+    // table — then reseed from the same vector-less mirror. That loop is what
+    // wiped a 98,690-record index.
+    const back = new JsonStore({ path: file }).readRecords();
+    assert.equal(back.length, 1);
+    assert.deepEqual(back[0].vector, [], 'a metadata-only mirror has no vectors to seed with');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
