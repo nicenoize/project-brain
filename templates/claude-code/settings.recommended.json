@@ -5,6 +5,9 @@
       "Bash(npm run brain:*)"
     ]
   },
+  "env": {
+    "BRAIN_USAGE_LOG": "1"
+  },
   "hooks": {
     "SessionStart": [
       {
