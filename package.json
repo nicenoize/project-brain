@@ -66,7 +66,8 @@
     "brain:serve": "node scripts/brain-serve.mjs",
     "brain:draft": "node scripts/brain-draft.mjs",
     "brain:release": "node scripts/brain-release.mjs",
-    "bench": "node scripts/bench.mjs"
+    "bench": "node scripts/bench.mjs",
+    "brain:overview": "node scripts/brain-overview.mjs"
   },
   "dependencies": {
     "fast-glob": "^3.3.2"
