@@ -88,6 +88,7 @@ Full policy, splitting heuristics, and step-by-step operating-mode runbooks: [`r
 - `brain:security` — advisories ordered by REACHABILITY (does our code import it), not severity alone.
 
 **Code intelligence (measured from git + imports, no index needed)**
+- `brain:outline <file>` — the file's functions with line ranges; `--symbol <name>` prints just that one. Read 90 lines instead of 1,300.
 - `brain:overview` — the WHOLE repo in <2k tokens: what it leans on, where it is dangerous, who owns what. Start here on an unfamiliar repo instead of grepping.
 - `brain:intel health` — per-file danger score from churn, co-change scatter and fix density. `--structure` adds size/nesting/coupling; `--plans` names the refactoring move.
 - `brain:intel health-calibrate` — does that ranking predict THIS repo's own next fixes? Prints an AUC and refuses to endorse it below 10 files in the smaller class.

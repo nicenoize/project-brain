@@ -70,7 +70,8 @@
     "brain:overview": "node scripts/brain-overview.mjs",
     "brain:digest": "node scripts/brain-session-digest.mjs",
     "brain:prune": "node scripts/brain-prune.mjs",
-    "brain:state-digest": "node scripts/brain-state-digest.mjs"
+    "brain:state-digest": "node scripts/brain-state-digest.mjs",
+    "brain:outline": "node scripts/brain-outline.mjs"
   },
   "dependencies": {
     "fast-glob": "^3.3.2"
