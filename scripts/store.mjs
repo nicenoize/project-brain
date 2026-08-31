@@ -101,13 +101,16 @@ export class JsonStore extends BrainStore {
     try {
       fd = fs.openSync(tmpPath, 'w');
       fs.writeSync(fd, '{\n');
-      fs.writeSync(fd, '  "version": 2,\n');
+      fs.writeSync(fd, '  "version": 3,\n');
       fs.writeSync(fd, '  "backend": "json",\n');
       fs.writeSync(fd, `  "model": ${JSON.stringify(this.model ?? null)},\n`);
       fs.writeSync(fd, '  "records": [\n');
       for (let i = 0; i < this.records.length; i++) {
+        // Vectors go out as base64 Float32 (v3). normalizeRecord reads both
+        // forms back, so a v2 mirror on disk stays readable without a reindex.
         const record = normalizeRecord(this.records[i]);
-        fs.writeSync(fd, `    ${JSON.stringify(record)}${i < this.records.length - 1 ? ',' : ''}\n`);
+        const wire = { ...record, vector: encodeVector(record.vector) };
+        fs.writeSync(fd, `    ${JSON.stringify(wire)}${i < this.records.length - 1 ? ',' : ''}\n`);
       }
       fs.writeSync(fd, '  ]\n');
       fs.writeSync(fd, '}\n');
@@ -506,6 +509,45 @@ function pointId(id) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
+/**
+ * PURE. Encode an embedding as base64 Float32.
+ *
+ * WHY. The JSON mirror wrote each vector as decimal TEXT: a 384-dimension
+ * embedding became ~7,700 characters, because a value like
+ * `-0.07386847585439682` costs 20 bytes to say what fits in 4. On a real repo
+ * that made the mirror 205 MB, of which 169 MB (83%) was vector text — over its
+ * own 200 MB cap, so the mirror was skipped on every read and that repo had
+ * been running with degraded retrieval for weeks without anyone noticing.
+ *
+ * Float32 is not a new loss: LanceDB, which holds the same vectors beside it,
+ * already stores Float32. The mirror was carrying MORE precision than the
+ * database it mirrors, in the most expensive possible encoding.
+ *
+ * 384 floats: ~7,700 chars → 2,048. On that repo, 169 MB → 44 MB.
+ */
+export function encodeVector(vec) {
+  const arr = vec instanceof Float32Array ? vec : Float32Array.from(vec || []);
+  if (!arr.length) return '';
+  return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength).toString('base64');
+}
+
+/**
+ * PURE. Decode either form: a base64 Float32 string (mirror v3) or a plain
+ * number array (v2 and every mirror written before this change). Reading both
+ * is what lets an existing index keep working without a reindex.
+ */
+export function decodeVector(v) {
+  if (typeof v === 'string') {
+    if (!v) return [];
+    const buf = Buffer.from(v, 'base64');
+    // A truncated or corrupted field must not throw mid-read; an empty vector
+    // simply scores 0 and the record ranks last, which is visible and safe.
+    if (buf.byteLength % 4 !== 0) return [];
+    return Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
+  }
+  return Array.from(v || []);
+}
+
 export function normalizeRecord(record) {
   return {
     id: String(record.id),
@@ -545,7 +587,7 @@ export function normalizeRecord(record) {
     imports: stripLanceSentinel(normalizeList(record.imports)),
     references: stripLanceSentinel(normalizeList(record.references)),
     changedFiles: stripLanceSentinel(normalizeList(record.changedFiles)),
-    vector: Array.from(record.vector || [])
+    vector: decodeVector(record.vector)
   };
 }
 
