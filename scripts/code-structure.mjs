@@ -399,10 +399,20 @@ function braceEnd(lines, start) {
   while (open < limit && !lines[open].includes('{')) open += 1;
   if (open >= limit) return start; // expression body / declaration only
   let depth = 0;
+  let paren = 0;
   let opened = false;
   for (let j = open; j < lines.length; j++) {
     for (const ch of lines[j]) {
-      if (ch === '{') { depth += 1; opened = true; }
+      // Braces inside a parameter list or a call are not the body's braces.
+      // `function f(m = {}) {` opened and closed a brace before the body ever
+      // started, so the old scan ended the function on its own signature line
+      // and reported it as 1 line — which also under-reported
+      // longestFunctionLines, a structural factor in the danger score. Skipping
+      // both the `{` and its `}` keeps the count balanced.
+      if (ch === '(') paren += 1;
+      else if (ch === ')') paren = Math.max(0, paren - 1);
+      else if (paren > 0) continue;
+      else if (ch === '{') { depth += 1; opened = true; }
       else if (ch === '}') {
         depth -= 1;
         if (opened && depth <= 0) return j;
@@ -425,7 +435,17 @@ function indentEnd(lines, depths, start) {
 }
 
 /** All function spans in a blanked file, in source order. */
-function functionSpans(lines, depths, family) {
+/**
+ * PURE. The function outline of a file: every line-anchored declaration with
+ * its name, first line and length.
+ *
+ * Exported for `brain:outline`, which exists so an agent can read ONE function
+ * instead of a whole file. This scanner already walked these spans to report
+ * the longest one; it simply never handed the list over. A FLOOR, like every
+ * count here: line-anchored declarations only, so an arrow assigned inside an
+ * object literal is invisible. Reported as a floor, never as a symbol table.
+ */
+export function functionSpans(lines, depths, family) {
   const patterns = FUNCTION_PATTERNS[family] || [];
   if (!patterns.length) return [];
   const style = NESTING_STYLE[family];
@@ -537,7 +557,10 @@ export function measure(source, opts = {}) {
     longestFunctionStartLine: longest.startLine,
     functionCount: spans.length,
     longLineCount,
-    todoCount
+    todoCount,
+    // The spans this function already walked to find the longest one. Handed
+    // over so brain:outline cannot disagree with the metrics beside it.
+    spans
   };
 }
 
