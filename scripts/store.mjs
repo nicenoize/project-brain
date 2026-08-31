@@ -70,6 +70,20 @@ export class JsonStore extends BrainStore {
     }
   }
 
+  /**
+   * Drop the vectors from the mirror when a vector backend holds them.
+   *
+   * The mirror exists as a portable, human-readable record of WHAT is indexed.
+   * When LanceDB is the backend it also owns the embeddings, and mirroring them
+   * as well costs ~2 KB per record for data that is never read from here —
+   * enough to push a real repo's mirror past its own size cap, at which point
+   * the mirror is skipped on read AND frozen on write, silently diverging from
+   * the live index. That is how one repo ended up with 22,045 records in the
+   * mirror and 106,467 in LanceDB.
+   */
+  set vectorsOwnedElsewhere(v) { this._noVectors = Boolean(v); }
+  get vectorsOwnedElsewhere() { return Boolean(this._noVectors); }
+
   persist(opts = {}) {
     // If the mirror was already disabled at read time (too big / unreadable),
     // skip writes too — keeping the on-disk file frozen is preferable to
@@ -109,7 +123,9 @@ export class JsonStore extends BrainStore {
         // Vectors go out as base64 Float32 (v3). normalizeRecord reads both
         // forms back, so a v2 mirror on disk stays readable without a reindex.
         const record = normalizeRecord(this.records[i]);
-        const wire = { ...record, vector: encodeVector(record.vector) };
+        const wire = this._noVectors
+          ? { ...record, vector: '' }
+          : { ...record, vector: encodeVector(record.vector) };
         fs.writeSync(fd, `    ${JSON.stringify(wire)}${i < this.records.length - 1 ? ',' : ''}\n`);
       }
       fs.writeSync(fd, '  ]\n');
@@ -175,6 +191,10 @@ export class LanceStore extends BrainStore {
     this.model = options.model || null;
     this.mirror = new JsonStore(options);
     this.mirrorEnabled = options.mirror !== false && process.env.BRAIN_JSON_MIRROR !== '0';
+    // LanceDB owns the embeddings; the mirror records WHAT is indexed, not the
+    // numbers. Set BRAIN_JSON_MIRROR_VECTORS=1 to keep them (a fully portable
+    // snapshot that can serve similarity search on its own).
+    this.mirror.vectorsOwnedElsewhere = process.env.BRAIN_JSON_MIRROR_VECTORS !== '1';
     this.mirrorStrict = process.env.BRAIN_JSON_MIRROR_STRICT === '1';
     this.db = null;
     this.table = null;
@@ -268,6 +288,39 @@ export class LanceStore extends BrainStore {
     } catch (error) {
       if (this.mirrorStrict) throw error;
       console.warn(`Project Brain mirror reset failed: ${error.message || error}`);
+    }
+  }
+
+  /**
+   * Compact fragments and drop superseded versions.
+   *
+   * LanceDB appends: every incremental sync writes a new fragment and a new
+   * version, and nothing reclaims the old ones on its own. A repo synced 737
+   * times held 863 MB of data files and 555 fragments for an index whose live
+   * vectors are 34 MB — and `optimize()` was called from nowhere in this
+   * codebase. One call took it to 293 MB in 0.8 seconds.
+   *
+   * Total by construction: compaction is an optimisation, never a correctness
+   * step, so a failure is reported and swallowed rather than failing the sync
+   * that just succeeded.
+   *
+   * @returns {{ran: boolean, ms: number, reason?: string}}
+   */
+  async compact({ keepVersionsNewerThan = null } = {}) {
+    const started = Date.now();
+    try {
+      const table = await this.openTable();
+      if (!table || typeof table.optimize !== 'function') {
+        return { ran: false, ms: 0, reason: 'this lancedb build has no optimize()' };
+      }
+      // Old versions are only safe to drop once nothing is mid-read; the
+      // default keeps the last hour, which covers a concurrent sync.
+      const cleanupOlderThan = keepVersionsNewerThan
+        || new Date(Date.now() - 60 * 60 * 1000);
+      await table.optimize({ cleanupOlderThan });
+      return { ran: true, ms: Date.now() - started };
+    } catch (error) {
+      return { ran: false, ms: Date.now() - started, reason: String(error.message || error) };
     }
   }
 
