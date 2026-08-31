@@ -42,3 +42,33 @@ test('splitEnv on missing env returns empty array', () => {
   delete process.env.__BRAIN_TEST_MISSING;
   assert.deepEqual(splitEnv('__BRAIN_TEST_MISSING'), []);
 });
+
+/* Registration drift.
+   A consumer updates by pulling the skill checkout and the CODE arrives — but
+   package.json only changes when the installer runs. Pull without
+   `brain:update-skill` and the new commands exist on disk and are unreachable:
+   npm answers "Missing script: brain:overview" and names no cause. That
+   happened three times in one week, twice to me. The detector also caught that
+   this repo's OWN package.json was missing three scripts it ships to others. */
+test('missingBrainScripts: names what the host cannot reach', async () => {
+  const { missingBrainScripts, mergePackageScripts } = await import('../scripts/common.mjs');
+
+  // A host that has never been set up is missing everything.
+  const bare = missingBrainScripts({});
+  assert.ok(bare.length > 10, `expected a full list, got ${bare.length}`);
+  assert.ok(bare.includes('brain:overview'), 'the newest command must be reported');
+  assert.deepEqual(bare, [...bare].sort(), 'stable order — a diff of this must be readable');
+
+  // A host the installer has just run is missing nothing.
+  const installed = {};
+  mergePackageScripts(installed);
+  assert.deepEqual(missingBrainScripts(installed), []);
+
+  // Remove one and it is named, alone.
+  const drifted = { scripts: { ...installed.scripts } };
+  delete drifted.scripts['brain:overview'];
+  assert.deepEqual(missingBrainScripts(drifted), ['brain:overview']);
+
+  // Unrelated host scripts are none of our business.
+  assert.deepEqual(missingBrainScripts({ scripts: { ...installed.scripts, dev: 'vite' } }), []);
+});
