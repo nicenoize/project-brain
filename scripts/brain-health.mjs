@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ROOT, BRAIN_DIR, exists, read, JSON_INDEX, USAGE_LOG, staleIndexFromRecords } from './common.mjs';
+import { missingBrainScripts, ROOT, BRAIN_DIR, exists, read, JSON_INDEX, USAGE_LOG, staleIndexFromRecords } from './common.mjs';
 import { parseUsageLog, summarizeUsage, commandUniverseFromPackageScripts } from './usage.mjs';
 import {
   measureFile,
@@ -316,6 +316,18 @@ if (!jsonOut) {
   if (footprint.activeState.exists) fpParts.push(`active_state.md ${footprint.activeState.bytes}B≈${footprint.activeState.tokens}tok`);
   for (const h of footprint.hooks) fpParts.push(`hook:${h.event} ${h.bytes}B≈${h.tokens}tok`);
   fpParts.push(`pack≤${footprint.packDefaults.BRAIN_PACK_MAX_TOKENS}tok`);
+  // Registration drift: the code arrives with a `git pull`, but package.json
+  // only changes when the installer runs. Pull without `brain:update-skill`
+  // and the new commands exist on disk and are unreachable — npm answers
+  // "Missing script" and names no cause. Three times in one week.
+  const drift = missingBrainScripts(readJsonSafe(path.join(ROOT, 'package.json')) ?? {});
+  if (drift.length) {
+    console.warn(
+      `Project Brain: ${drift.length} command(s) shipped by this skill are not in package.json ` +
+      `— run \`npm run brain:update-skill\` to register them: ${drift.slice(0, 8).join(', ')}` +
+      `${drift.length > 8 ? ` (+${drift.length - 8} more)` : ''}`
+    );
+  }
   console.log(`Context footprint (per-session injection, ~len/4 tokens): ${fpParts.join('; ')}`);
   // The neighbours. Without them the brain's own number has no scale — and a
   // 427-byte digest once took the blame for a 12,957-token problem because
