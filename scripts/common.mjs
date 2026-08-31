@@ -285,6 +285,26 @@ export function gitRootOf(dir) {
   } catch { return ''; }
 }
 
+/**
+ * PURE. Which brain scripts does this package.json not know about?
+ *
+ * A consumer updates by pulling the skill checkout, and the code arrives — but
+ * `package.json` only changes when the INSTALLER runs. Pull without
+ * `brain:update-skill` and the new commands exist on disk and are unreachable:
+ * `npm run brain:overview` answers "Missing script". That has now happened
+ * three times in one week, twice to me, and the message names no cause.
+ *
+ * Reported by brain:health so the gap is visible before someone hits it.
+ *
+ * @returns {string[]} script names present in the skill but not in the host
+ */
+export function missingBrainScripts(pkg = {}) {
+  const probe = {};
+  mergePackageScripts(probe);
+  const have = pkg.scripts || {};
+  return Object.keys(probe.scripts || {}).filter((k) => !have[k]).sort();
+}
+
 export function mergePackageScripts(pkg) {
   pkg.scripts ||= {};
   const scripts = {
