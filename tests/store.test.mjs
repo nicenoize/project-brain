@@ -176,3 +176,42 @@ test('JsonStore: a v3 mirror round-trips through disk with usable vectors', asyn
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('mirror: vectors are dropped when a vector backend owns them', async () => {
+  const { JsonStore } = await import('../scripts/store.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-mirror-meta-'));
+  try {
+    const file = path.join(dir, 'index.json');
+    const vec = Array.from({ length: 384 }, (_, i) => i / 384);
+    const store = new JsonStore({ path: file });
+    // This is what the LanceDB store sets: it owns the embeddings, the mirror
+    // records WHAT is indexed. Mirroring the numbers too cost ~2 KB a record
+    // for data never read from here — enough to push a real repo past its own
+    // cap, at which point the mirror is skipped on read AND frozen on write,
+    // silently diverging from the live index (22,045 vs 106,467 records).
+    store.vectorsOwnedElsewhere = true;
+    await store.upsert([{ id: 'a', file: 'a.ts', text: 'x'.repeat(200), vector: vec }]);
+    store.persist({ force: true });
+
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(raw.records[0].vector, '', 'the vector must not be mirrored');
+    assert.equal(raw.records[0].text, 'x'.repeat(200), 'but the metadata must be');
+    // Opt back in for a fully portable snapshot that can serve search alone.
+    const pfile = path.join(dir, 'p.json');
+    const portable = new JsonStore({ path: pfile });
+    portable.vectorsOwnedElsewhere = false;
+    await portable.upsert([{ id: 'a', file: 'a.ts', text: 'x'.repeat(200), vector: vec }]);
+    portable.persist({ force: true });
+    const praw = JSON.parse(fs.readFileSync(pfile, 'utf8'));
+    assert.equal(praw.records[0].vector.length, 2048);
+
+    // The saving is the whole point, and the honest way to assert it is the
+    // comparison rather than a guessed byte threshold: a 384-dim vector is
+    // ~2 KB of every record, several times the metadata beside it.
+    const meta = fs.statSync(file).size;
+    const full = fs.statSync(pfile).size;
+    assert.ok(full > meta * 2, `expected the portable mirror to dwarf the metadata one, got ${full} vs ${meta}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
