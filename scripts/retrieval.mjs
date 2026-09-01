@@ -457,7 +457,7 @@ function metadataBoost(record, context) {
   boost += pathHeuristicAdjust(record, context);
   boost += recencyBoost(record);
   boost += canonicalBrainBoost(record, context);
-  boost += shallowBrainPathBoost(record);
+  boost += shallowBrainPathBoost(record, context);
   boost += slopPenalty(record, context);
   return boost;
 }
@@ -491,7 +491,14 @@ function canonicalBrainBoost(record, context) {
   const base = Number(process.env.BRAIN_CANONICAL_ROOT_BOOST || 0.05);
   let b = 0;
   const baseName = file.split('/').pop() || '';
-  if (CANONICAL_ROOT_NAMES.has(baseName)) b += base * 1.6;
+  // The root plans (master_plan.md, product_plan.md …) answer "what did we
+  // decide", not "where is it implemented". Boosting them on every query put
+  // OUR OWN metadata into 36% of the top-5 slots for code questions on a real
+  // repo, and pushed the actual implementation out of reach: the correct file
+  // for "sending a notification to a user" sat at dense rank 3 and left the
+  // top five at final rank 6, beaten by .project-brain/modules/runner-tasks.md.
+  // Gated on the same architectural signal the rest of this function uses.
+  if (context.architectural && CANONICAL_ROOT_NAMES.has(baseName)) b += base * 1.6;
   if (context.architectural && /\/(decisions|modules|features)\//.test(file)) b += base * 1.1;
   const layer = String(record.layer || '').toLowerCase();
   const status = String(record.docStatus || '').toLowerCase();
@@ -506,11 +513,14 @@ function canonicalBrainBoost(record, context) {
   return b;
 }
 
-function shallowBrainPathBoost(record) {
+function shallowBrainPathBoost(record, context = {}) {
   const file = String(record.file || '');
   if (!file.startsWith('.project-brain/')) return 0;
   const depth = file.split('/').length - 1;
-  if (depth <= 1) return Number(process.env.BRAIN_BRAIN_ROOT_BOOST || 0.03);
+  // Same reasoning as canonicalBrainBoost: a shallow brain doc is the answer to
+  // an architectural question and a distractor to a code one. The deep-path
+  // penalty stays unconditional — it is about depth, not about intent.
+  if (depth <= 1) return context.architectural ? Number(process.env.BRAIN_BRAIN_ROOT_BOOST || 0.03) : 0;
   if (depth >= 5) return -Number(process.env.BRAIN_DEEP_PATH_PENALTY || 0.02);
   return 0;
 }
