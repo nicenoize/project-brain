@@ -23,7 +23,43 @@ const JSON_MIRROR_MAX_BYTES = Number(process.env.BRAIN_JSON_MIRROR_MAX_BYTES || 
 // Skip the per-call write when the in-memory record count exceeds this. A
 // freshly bloated mirror from a botched recovery used to balloon to 60 k+
 // records and hit the string-limit on the next read. Tunable for huge repos.
+//
+// The record cap is a PROXY for the byte cap, and the proxy is only as good as
+// its assumption about record size. 50 k was calibrated when every record
+// carried its 384-dimension vector as decimal text — about 9.3 KB each. A
+// metadata-only mirror stores ~1.6 KB, so the same 200 MB now holds roughly six
+// times as many records, and the old number locks out repos the byte guard
+// would happily accept: a 33-project fleet indexed to 52,255 records had its
+// mirror disabled while the file it would have written was ~84 MB.
+//
+// Derived rather than re-guessed, so the two caps cannot drift apart again.
 const JSON_MIRROR_MAX_RECORDS = Number(process.env.BRAIN_JSON_MIRROR_MAX_RECORDS || 50_000);
+const MIRROR_BYTES_PER_RECORD_WITH_VECTORS = 9_300;
+const MIRROR_BYTES_PER_RECORD_METADATA_ONLY = 1_600;
+
+/**
+ * PURE. How many records may the mirror hold, given what it actually stores?
+ *
+ * An explicit BRAIN_JSON_MIRROR_MAX_RECORDS always wins — someone who set it
+ * meant it. Otherwise the cap follows the payload: the byte guard is the real
+ * protection (Node's ~512 MB string limit), and this keeps the proxy honest.
+ */
+export function mirrorRecordCap({
+  vectorsOwnedElsewhere = false,
+  byteCap = JSON_MIRROR_MAX_BYTES,
+  explicit = process.env.BRAIN_JSON_MIRROR_MAX_RECORDS
+} = {}) {
+  if (explicit) {
+    const n = Number(explicit);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  const perRecord = vectorsOwnedElsewhere
+    ? MIRROR_BYTES_PER_RECORD_METADATA_ONLY
+    : MIRROR_BYTES_PER_RECORD_WITH_VECTORS;
+  // Half the byte cap: the estimate is an average, and a mirror that trips the
+  // byte guard on read is frozen until someone reindexes.
+  return Math.max(1000, Math.floor((byteCap * 0.5) / perRecord));
+}
 
 export class JsonStore extends BrainStore {
   constructor(options = {}) {
@@ -101,9 +137,10 @@ export class JsonStore extends BrainStore {
       console.warn(`Project Brain shrink-guard: ${guard.reason}`);
       return;
     }
-    if (this.records.length > JSON_MIRROR_MAX_RECORDS) {
+    const recordCap = mirrorRecordCap({ vectorsOwnedElsewhere: this.vectorsOwnedElsewhere });
+    if (this.records.length > recordCap) {
       console.warn(`Project Brain: JSON mirror would hold ${this.records.length} records ` +
-        `(cap ${JSON_MIRROR_MAX_RECORDS}). Disabling mirror writes for this run. ` +
+        `(cap ${recordCap}). Disabling mirror writes for this run. ` +
         `Set BRAIN_JSON_MIRROR_MAX_RECORDS to raise, or run \`npm run brain:repair\`.`);
       this.disabled = true;
       return;
