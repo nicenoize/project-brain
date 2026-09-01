@@ -214,6 +214,25 @@ export class LanceStore extends BrainStore {
     } catch {
       const seed = this.mirror.readRecords();
       if (!seed.length) return null;
+      // A metadata-only mirror CANNOT seed Lance, and pretending otherwise
+      // destroys the index: seeding with empty vectors creates the table with a
+      // zero-width vector column, the next real upsert is a schema mismatch,
+      // and auto-recovery drops the table — then reseeds from the same
+      // vector-less mirror. That loop wiped a 98,690-record index on a real
+      // repo within minutes of the change that introduced it.
+      //
+      // The mirror's job is to record WHAT is indexed. It is not a backup, and
+      // it never really was: the one on that repo had been frozen at 22,045
+      // records while Lance held 106,467. Refusing here forces an honest
+      // reindex instead of a silent rebuild from nothing.
+      if (seed.some((r) => !(r.vector || []).length)) {
+        console.warn(
+          'Project Brain: the JSON mirror carries no vectors, so it cannot rebuild the ' +
+          'vector store. Run `npm run brain:index -- --force` to reindex from source. ' +
+          '(Set BRAIN_JSON_MIRROR_VECTORS=1 to keep a mirror that can.)'
+        );
+        return null;
+      }
       const padded = seed.map((record) => padLanceListColumns(normalizeRecord(record)));
       this.table = await this.db.createTable(TABLE_NAME, padded, { mode: 'overwrite' });
     }
@@ -251,7 +270,39 @@ export class LanceStore extends BrainStore {
             console.error('Or: rerun without BRAIN_AUTO_RECOVER=0 to drop+rebuild the Lance table automatically.');
             throw error;
           }
-          console.warn('Project Brain: Lance schema mismatch detected. Auto-recovering — dropping table + clearing JSON mirror.');
+          // NEVER destroy more than we can rebuild.
+          //
+          // This path used to drop the table and recreate it from the CURRENT
+          // UPSERT BATCH. On a real repo a background sync carrying 179 records
+          // hit a schema mismatch and this "recovery" destroyed 98,690 —
+          // silently, from a hook, with a warning that said "auto-recovering"
+          // and never said how much was being deleted. A recovery that loses
+          // 99.8% of the index is a wipe wearing a recovery's name.
+          //
+          // The mirror can only rebuild the table if the mirror carries
+          // vectors. When it cannot, refusing is correct: a reindex from source
+          // is slow, and a silently emptied index is worse than slow.
+          let existingRows = null;
+          try { existingRows = await table.countRows(); } catch { existingRows = null; }
+          const mirrorCanRestore = !this.mirror.vectorsOwnedElsewhere
+            && this.mirror.readRecords().some((r) => (r.vector || []).length);
+          const verdict = canAutoRecover({
+            existingRows, batchSize: forLance.length, mirrorCanRestore
+          });
+          if (!verdict.allowed) {
+            console.error(
+              'Project Brain: Lance schema mismatch, and the JSON mirror cannot rebuild the ' +
+              `table (it carries no vectors). REFUSING — ${verdict.reason}. Nothing was deleted. ` +
+              'Fix: `npm run brain:index -- --force` to reindex from source, or set ' +
+              'BRAIN_AUTO_RECOVER=0 to see the underlying error.'
+            );
+            throw error;
+          }
+          console.warn(
+            'Project Brain: Lance schema mismatch detected. Auto-recovering — dropping ' +
+            `${existingRows === null ? 'an unknown number of' : existingRows} record(s), ` +
+            `rebuilding from ${mirrorCanRestore ? 'the JSON mirror' : `this batch of ${forLance.length}`}.`
+          );
           try {
             await this.db.dropTable(TABLE_NAME);
           } catch {}
@@ -578,6 +629,44 @@ function pointId(id) {
  *
  * 384 floats: ~7,700 chars → 2,048. On that repo, 169 MB → 44 MB.
  */
+/**
+ * PURE. May auto-recovery drop the vector table?
+ *
+ * The path this guards used to drop the table and recreate it from the CURRENT
+ * UPSERT BATCH. On a real repo a background sync carrying 179 records hit a
+ * schema mismatch and that "recovery" destroyed 98,690 — silently, from a hook,
+ * behind a warning that said "auto-recovering" and never said how much was
+ * being deleted. A recovery that loses 99.8% of the index is a wipe wearing a
+ * recovery's name.
+ *
+ * Rule: never destroy more than can be rebuilt. The mirror can rebuild the
+ * table only if it carries vectors; when it cannot and the drop would lose
+ * rows, refuse. A reindex from source is slow, and a silently emptied index is
+ * worse than slow.
+ *
+ * @param {{existingRows: number|null, batchSize: number, mirrorCanRestore: boolean}} i
+ * @returns {{allowed: boolean, wouldLose: number|null, reason: string}}
+ */
+export function canAutoRecover({ existingRows = null, batchSize = 0, mirrorCanRestore = false } = {}) {
+  if (mirrorCanRestore) {
+    return { allowed: true, wouldLose: null, reason: 'the mirror carries vectors and can rebuild the table' };
+  }
+  if (!Number.isFinite(existingRows)) {
+    // Unknown row count: the table is unreadable, so there is nothing provably
+    // worth protecting and refusing would deadlock a genuinely broken store.
+    return { allowed: true, wouldLose: null, reason: 'existing row count unknown — nothing provably at risk' };
+  }
+  const wouldLose = existingRows - batchSize;
+  if (wouldLose > 0) {
+    return {
+      allowed: false,
+      wouldLose,
+      reason: `dropping ${existingRows} record(s) to recreate ${batchSize} would lose ${wouldLose}`
+    };
+  }
+  return { allowed: true, wouldLose, reason: 'the incoming batch is at least as large as the table' };
+}
+
 export function encodeVector(vec) {
   const arr = vec instanceof Float32Array ? vec : Float32Array.from(vec || []);
   if (!arr.length) return '';
