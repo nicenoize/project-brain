@@ -269,3 +269,38 @@ test('a metadata-only mirror is never used to seed the vector store', async () =
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/* The record cap is a PROXY for the byte cap, and a proxy is only as good as
+   its assumption about record size. 50,000 was calibrated when every record
+   carried its 384-dimension vector as decimal text (~9.3 KB). A metadata-only
+   mirror stores ~1.6 KB, so the old number locked out repos the byte guard
+   would have accepted: a 33-project fleet at 52,255 records had its mirror
+   disabled while the file it would have written was ~84 MB. */
+test('mirrorRecordCap: follows what the mirror actually stores', async () => {
+  const { mirrorRecordCap } = await import('../scripts/store.mjs');
+  const byteCap = 200 * 1024 * 1024;
+
+  const withVectors = mirrorRecordCap({ vectorsOwnedElsewhere: false, byteCap, explicit: '' });
+  const metaOnly = mirrorRecordCap({ vectorsOwnedElsewhere: true, byteCap, explicit: '' });
+
+  // Metadata-only records are several times smaller, so several times more fit.
+  assert.ok(metaOnly > withVectors * 4, `${metaOnly} should dwarf ${withVectors}`);
+
+  // Both caps must stay under the byte guard they stand in for — the OLD 50,000
+  // with vectors implied ~465 MB, more than twice the 200 MB it was protecting.
+  assert.ok(withVectors * 9300 < byteCap, 'the with-vectors cap must respect the byte cap');
+  assert.ok(metaOnly * 1600 < byteCap, 'the metadata cap must respect the byte cap');
+
+  // The fleet that prompted this fits; a repo twice its size still does not,
+  // which is the honest answer rather than a number chosen to make it pass.
+  assert.ok(metaOnly > 52255, 'a 52k-record fleet should be mirrorable');
+  assert.ok(metaOnly < 106881, 'a 107k-record repo genuinely does not fit');
+
+  // An explicit setting always wins: someone who set it meant it.
+  assert.equal(mirrorRecordCap({ vectorsOwnedElsewhere: true, explicit: '9000' }), 9000);
+  assert.equal(mirrorRecordCap({ vectorsOwnedElsewhere: true, explicit: 'nonsense' }), metaOnly);
+  assert.equal(mirrorRecordCap({ vectorsOwnedElsewhere: true, explicit: '-5' }), metaOnly);
+
+  // A tiny byte cap still leaves a usable floor rather than zero.
+  assert.ok(mirrorRecordCap({ byteCap: 1000, explicit: '' }) >= 1000);
+});
