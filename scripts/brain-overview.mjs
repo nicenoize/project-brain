@@ -209,6 +209,15 @@ function recordTitles(dir, limit) {
   } catch { return []; }
 }
 
+/**
+ * Gather the measurements the briefing is composed from. Exported so the MCP
+ * server can offer the same answer through the pull surface without shelling
+ * out to the CLI — one implementation, one set of numbers.
+ */
+export async function gatherOverview(root, { budgetBytes = DEFAULT_BUDGET_BYTES } = {}) {
+  return gather(root, { budgetBytes });
+}
+
 async function gather(root, { budgetBytes }) {
   const files = gitFiles(root);
   const commits = gitCommits(root, COMMIT_WINDOW);

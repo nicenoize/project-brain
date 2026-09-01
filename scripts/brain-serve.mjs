@@ -283,7 +283,7 @@ function buildRoutes(api, sse) {
     ['/api/risk', (req, res, url) => apiRisk(api, res, url)],
     ['/api/blast', (req, res, url) => apiBlast(api, res, url)],
     ['/api/graph', (req, res) => apiGraph(api, res)],
-    ['/api/security', (req, res) => apiSecurity(api, res)],
+    ['/api/security', (req, res, url) => apiSecurity(api, res, url)],
     ['/api/next', (req, res) => apiNext(api, res)],
     ['/api/brief', (req, res, url) => apiBrief(api, res, url)],
     ['/api/map', (req, res) => apiMap(api, res)],
