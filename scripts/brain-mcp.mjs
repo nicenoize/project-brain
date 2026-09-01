@@ -583,6 +583,37 @@ const TOOLS = [
     handler: toolDanger
   },
   {
+    name: 'brain_overview',
+    description:
+      'What IS this repository? The whole repo in under 2,000 tokens: what it leans on (import ' +
+      'fan-in), where it is dangerous, who owns which area, its documented modules and decisions. ' +
+      'Read this FIRST on an unfamiliar repo instead of grepping — it is composed from git history ' +
+      'and the import graph, needs no index, and states every omission the budget made.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    },
+    handler: toolOverview
+  },
+  {
+    name: 'brain_outline',
+    description:
+      "A file's functions with their line ranges — so you can read ONE function instead of the " +
+      'whole file. Pass `symbol` to get just that function\'s source. Line-anchored declarations ' +
+      'only, so the list is a FLOOR: an arrow assigned inside an object literal is invisible to it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'Repo-relative path to outline.' },
+        symbol: { type: 'string', description: 'Return just this function\'s source.' }
+      },
+      required: ['file'],
+      additionalProperties: false
+    },
+    handler: toolOutline
+  },
+  {
     name: 'brain_leases',
     description:
       'Who is already working on this? Active file leases with holder and remaining TTL, plus ' +
@@ -901,6 +932,60 @@ function toolDanger(args = {}) {
   lines.push('');
   lines.push(provenanceLine({ basis: health.basis, source: health.source, window: health.window }));
   return say(lines);
+}
+
+// --- brain_overview ---------------------------------------------------------
+
+/**
+ * The pull-side twin of `brain:overview`. An agent meeting an unfamiliar repo
+ * burns its tokens searching and discarding; this is the briefing that makes
+ * that unnecessary, and it belongs behind a socket the agent can reach without
+ * a human typing a command.
+ */
+async function toolOverview() {
+  try {
+    const { composeOverview, gatherOverview } = await import('./brain-overview.mjs');
+    const measured = await gatherOverview(ROOT);
+    return say([composeOverview(measured).text]);
+  } catch (error) {
+    return say([`overview unavailable: ${error.message || error}`]);
+  }
+}
+
+// --- brain_outline ----------------------------------------------------------
+
+/** Read one function instead of a whole file. */
+async function toolOutline(args = {}) {
+  const file = String(args.file || '').trim();
+  if (!file) return say(['outline: `file` is required.']);
+  const symbol = String(args.symbol || '').trim();
+  try {
+    const { outlineOf } = await import('./brain-outline.mjs');
+    const abs = path.isAbsolute(file) ? file : path.join(ROOT, file);
+    const source = fs.readFileSync(abs, 'utf8');
+    const out = outlineOf(source, file);
+    if (!symbol) {
+      const lines = [`${file} — ${out.lines} lines, ${out.functionCount} function(s):`];
+      for (const sym of out.symbols) lines.push(`- ${sym.name}  ${sym.lines} lines  ${sym.startLine}-${sym.endLine}`);
+      lines.push('');
+      lines.push('Line-anchored declarations only — a FLOOR, not a symbol table. Pass `symbol` to read one.');
+      return say(lines);
+    }
+    const hit = out.symbols.find((sy) => sy.name === symbol)
+      || out.symbols.find((sy) => sy.name.toLowerCase() === symbol.toLowerCase());
+    if (!hit) {
+      // Never imply absence: this scanner sees line-anchored declarations only.
+      return say([
+        `no line-anchored declaration named "${symbol}" in ${file}. It may still exist — ` +
+        'an arrow assigned inside an object literal is invisible here.',
+        `known: ${out.symbols.map((sy) => sy.name).slice(0, 20).join(', ') || '(none)'}`
+      ]);
+    }
+    const body = source.split('\n').slice(hit.startLine - 1, hit.endLine).join('\n');
+    return say([`${file}:${hit.startLine}-${hit.endLine} (${hit.lines} of ${out.lines} lines)`, '', body]);
+  } catch (error) {
+    return say([`outline unavailable for ${file}: ${error.message || error}`]);
+  }
 }
 
 // --- brain_leases -----------------------------------------------------------

@@ -90,6 +90,17 @@ execSync('git config user.email t@example.com', { cwd: FIXTURE });
 execSync('git config user.name Tester', { cwd: FIXTURE });
 fs.writeFileSync(path.join(FIXTURE, 'app.mjs'), 'export const x = 1;\n');
 fs.writeFileSync(path.join(FIXTURE, 'lib.mjs'), 'export const y = 2;\n');
+// A file with real function spans, for brain_outline.
+fs.writeFileSync(path.join(FIXTURE, 'shapes.mjs'), [
+  'export function alpha(a, b) {',
+  '  return a + b;',
+  '}',
+  '',
+  'export function beta(root, { budget }) {',   // braces in the parameter list
+  '  const inner = { a: 1 };',
+  '  return inner;',
+  '}'
+].join('\n') + '\n');
 execSync('git add .', { cwd: FIXTURE });
 execSync('git -c commit.gpgsign=false commit -q -m "feat: seed"', { cwd: FIXTURE });
 fs.appendFileSync(path.join(FIXTURE, 'app.mjs'), 'export const z = 3;\n');
@@ -222,13 +233,16 @@ test('notifications get no response at all', async () => {
   assert.equal(server.stdoutLines.length - before, 1, 'exactly one frame: the ping response');
 });
 
-test('tools/list returns all 8 tools with valid JSON schemas', async () => {
+test('tools/list returns every tool with valid JSON schemas', async () => {
   const r = await withTimeout(server.call(3, 'tools/list'), 10_000, 'tools/list');
   const tools = r.result.tools;
-  assert.equal(tools.length, 8);
+  // Named rather than counted: a bare count tells the next reader nothing about
+  // what was added, and the failure it produces ("expected 8, got 10") points
+  // at the number instead of the change.
   assert.deepEqual(tools.map((t) => t.name).sort(), [
     'brain_blast', 'brain_danger', 'brain_leases', 'brain_next',
-    'brain_risk', 'brain_search', 'brain_status', 'brain_why'
+    'brain_outline', 'brain_overview', 'brain_risk', 'brain_search',
+    'brain_status', 'brain_why'
   ]);
   for (const t of tools) {
     assert.ok(t.description && t.description.length > 20, `${t.name} needs a real description`);
@@ -384,4 +398,54 @@ test('--print-config prints a paste-ready MCP host snippet on stdout', async () 
   } finally {
     try { child.kill('SIGKILL'); } catch { /* already exited */ }
   }
+});
+
+/* The pull half of the two commands that exist to save an agent's tokens.
+   An agent meeting an unfamiliar repo burns them searching and discarding, and
+   an agent that needs one function reads the whole file. Both answers belong
+   behind a socket the agent can reach without a human typing a command — and
+   MCP tool schemas are deferred, so offering them costs nothing until used. */
+test('brain_outline: returns one function, not the file', async () => {
+  const r = await withTimeout(
+    server.call(40, 'tools/call', {
+      name: 'brain_outline',
+      arguments: { file: 'shapes.mjs', symbol: 'beta' }
+    }), 30_000, 'brain_outline');
+  const text = r.result.content[0].text;
+  assert.match(text, /shapes\.mjs:\d+-\d+ \(\d+ of \d+ lines\)/);
+  assert.match(text, /export function beta/);
+  // A destructured parameter must not end the function on its signature line.
+  assert.match(text, /return inner;/);
+  // The whole point: the answer is a fraction of the file.
+  const m = text.match(/\((\d+) of (\d+) lines\)/);
+  assert.ok(Number(m[1]) < Number(m[2]), 'a symbol read that returns the whole file saves nothing');
+});
+
+test('brain_outline: a missing symbol never implies absence', async () => {
+  const r = await withTimeout(
+    server.call(41, 'tools/call', {
+      name: 'brain_outline',
+      arguments: { file: 'shapes.mjs', symbol: 'noSuchFunction' }
+    }), 30_000, 'brain_outline missing');
+  const text = r.result.content[0].text;
+  // This scanner sees line-anchored declarations only, so "not found" is not
+  // "does not exist" — and it lists what it does know instead of stopping.
+  assert.match(text, /It may still exist/);
+  assert.match(text, /known: /);
+});
+
+test('brain_outline: a bad path degrades, never throws', async () => {
+  const r = await withTimeout(
+    server.call(42, 'tools/call', { name: 'brain_outline', arguments: { file: 'does/not/exist.mjs' } }),
+    30_000, 'brain_outline bad path');
+  assert.match(r.result.content[0].text, /outline unavailable for does\/not\/exist\.mjs/);
+});
+
+test('brain_overview: the whole repo, inside its budget', async () => {
+  const r = await withTimeout(
+    server.call(43, 'tools/call', { name: 'brain_overview', arguments: {} }), 120_000, 'brain_overview');
+  const text = r.result.content[0].text;
+  assert.match(text, /— overview/);
+  assert.match(text, /No model, no network/);
+  assert.ok(Buffer.byteLength(text, 'utf8') <= 8000, `over budget: ${Buffer.byteLength(text, 'utf8')} B`);
 });
