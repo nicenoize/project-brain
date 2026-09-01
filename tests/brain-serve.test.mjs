@@ -1850,3 +1850,68 @@ test('fleet pure core: fleetAttention weights, message numbers, and the quiet ca
   });
   assert.equal(everything.attention, 100, 'score is clamped to 100');
 });
+
+/* Output budgets.
+   Measured on a real repo: /api/security returned 17,065 B, of which
+   `transitiveOnly` was 12,845 — 75% of the payload spent on the advisories the
+   report itself calls "triage after the reachable ones". Each carried
+   `advisories: []`, `vulnerableVia`, `importers` and a full `fix` object; the
+   panel renders two fields from them. We shipped 12.8 KB to draw 300 bytes. */
+test('budgetSecurityReport: trims the de-prioritized half, never the answer', async () => {
+  const { budgetSecurityReport, SECURITY_TRANSITIVE_SHOWN } = await import('../scripts/serve/intel.mjs');
+
+  const transitive = (i) => ({
+    package: `pkg-${i}`, severity: 'high', direct: true, range: '>=1.0.0',
+    fix: { available: true, name: `pkg-${i}`, version: '1.0.1', semverMajor: true },
+    advisories: [], advisoryCount: 0, vulnerableVia: ['a', 'b'],
+    reachability: 'transitive-only', importers: ['x.ts', 'y.ts', 'z.ts']
+  });
+  const report = {
+    vulnerabilities: {
+      reachable: [{ package: 'sharp', severity: 'high', importers: ['a.ts'], why: 'imported by 1 file' }],
+      transitiveOnly: Array.from({ length: 17 }, (_, i) => transitive(i)),
+      total: 18
+    },
+    secrets: { findings: [] }
+  };
+
+  const out = budgetSecurityReport(report);
+  const v = out.vulnerabilities;
+
+  // Reachable is the answer and is never touched.
+  assert.deepEqual(v.reachable, report.vulnerabilities.reachable);
+
+  assert.equal(v.transitiveOnly.length, SECURITY_TRANSITIVE_SHOWN);
+  assert.equal(v.transitiveTotal, 17);
+  assert.equal(v.budget.omitted, 17 - SECURITY_TRANSITIVE_SHOWN);
+  // A truncated list that does not say it is truncated is worse than a long one.
+  assert.equal(v.budget.applied, true);
+  assert.match(v.budget.note, /\?full=1/);
+
+  // What a triage decision needs survives; what nobody reads does not.
+  const kept = v.transitiveOnly[0];
+  assert.deepEqual(Object.keys(kept).sort(), ['fixAvailable', 'package', 'reachability', 'severity']);
+  assert.equal(kept.fixAvailable, true);
+  assert.ok(!('importers' in kept) && !('vulnerableVia' in kept) && !('advisories' in kept));
+
+  // The saving is the point, and the comparison is the honest way to assert it.
+  assert.ok(
+    JSON.stringify(report).length > JSON.stringify(out).length * 2,
+    'the budgeted report should be several times smaller'
+  );
+});
+
+test('budgetSecurityReport: a degraded or empty report passes through untouched', async () => {
+  const { budgetSecurityReport } = await import('../scripts/serve/intel.mjs');
+  // A scan that did not run must not be reshaped into something that looks
+  // like a clean result.
+  const degraded = { vulnerabilities: { degraded: true, scanned: false, reason: 'npm audit failed' } };
+  assert.deepEqual(budgetSecurityReport(degraded), degraded);
+  assert.deepEqual(budgetSecurityReport({}), {});
+  assert.equal(budgetSecurityReport(null), null);
+
+  const empty = { vulnerabilities: { reachable: [], transitiveOnly: [] } };
+  const out = budgetSecurityReport(empty);
+  assert.equal(out.vulnerabilities.transitiveTotal, 0);
+  assert.equal(out.vulnerabilities.budget.omitted, 0);
+});

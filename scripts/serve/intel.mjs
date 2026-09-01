@@ -473,13 +473,63 @@ export async function apiGraph(api, res) {
  * with a TTL and the answer states its own age rather than pretending to be
  * live.
  */
-export async function apiSecurity(api, res) {
+/** Transitive advisories listed in the default (budgeted) response. */
+export const SECURITY_TRANSITIVE_SHOWN = 8;
+
+/**
+ * PURE. Trim the security report to what a reader actually uses.
+ *
+ * Measured on a real repo: 17,065 B, of which `transitiveOnly` was 12,845 —
+ * 75% of the payload spent on the advisories the report itself calls "triage
+ * after the reachable ones". Each carried `advisories: []`, `vulnerableVia`,
+ * `importers` and a full `fix` object; the panel renders two fields from them.
+ * We shipped 12.8 KB to draw 300 bytes.
+ *
+ * `reachable` is never trimmed — it is the answer. Transitive entries keep the
+ * package, the severity and whether a fix exists, which is everything a triage
+ * decision needs, and the rest is one `?full=1` away. The count of what was
+ * dropped travels with the payload: a truncated list that does not say it is
+ * truncated is worse than a long one.
+ *
+ * @returns {object} the report with a `budget` block describing what it cut
+ */
+export function budgetSecurityReport(report, { shown = SECURITY_TRANSITIVE_SHOWN } = {}) {
+  const v = report && report.vulnerabilities;
+  if (!v || !Array.isArray(v.transitiveOnly)) return report;
+  const all = v.transitiveOnly;
+  const kept = all.slice(0, Math.max(0, shown)).map((a) => ({
+    package: a.package,
+    severity: a.severity,
+    fixAvailable: Boolean(a.fix && a.fix.available),
+    reachability: a.reachability
+  }));
+  return {
+    ...report,
+    vulnerabilities: {
+      ...v,
+      transitiveOnly: kept,
+      transitiveTotal: all.length,
+      budget: {
+        applied: true,
+        shown: kept.length,
+        omitted: Math.max(0, all.length - kept.length),
+        droppedFields: ['advisories', 'vulnerableVia', 'importers', 'fix.details', 'range'],
+        note: 'transitive advisories are trimmed to package/severity/fixAvailable — ' +
+          'reachable ones are never trimmed. Add ?full=1 for the untrimmed report.'
+      }
+    }
+  };
+}
+
+export async function apiSecurity(api, res, url) {
   const { root } = api;
   const now = Date.now();
   const { report, ageMs, cached } = await cachedSecurityReport(root, now);
   const ageSeconds = Math.max(0, Math.round(ageMs / 1000));
+  const full = url && url.searchParams.get('full') === '1';
+  const body = full ? report : budgetSecurityReport(report);
   sendJson(res, 200, {
-    ...report,
+    ...body,
     cache: {
       cached,
       ageSeconds,
