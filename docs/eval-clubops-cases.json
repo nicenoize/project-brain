@@ -1,0 +1,83 @@
+[
+  {
+    "query": "where do we decide whether a user may see this venue",
+    "expectedFiles": [
+      "lib/auth/membership.ts",
+      "lib/auth/session.ts"
+    ],
+    "note": "Hard: authorization, no shared vocabulary with the path"
+  },
+  {
+    "query": "how does someone get checked in at the door",
+    "expectedFiles": [
+      "app/(authed)/[venue]/check-in/page.tsx",
+      "app/(authed)/[venue]/check-in/board/board-display.tsx",
+      "components/ui/count-tile.tsx"
+    ],
+    "note": "door check-in"
+  },
+  {
+    "query": "adding a person to a guest list",
+    "expectedFiles": [
+      "lib/actions/guestlists.ts",
+      "lib/actions/guests.ts",
+      "lib/db/guestlists.ts"
+    ],
+    "note": "guestlists"
+  },
+  {
+    "query": "sending a notification to a user",
+    "expectedFiles": [
+      "lib/actions/notifications.ts",
+      "lib/db/notifications.ts"
+    ],
+    "note": "notifications"
+  },
+  {
+    "query": "planning who works which shift",
+    "expectedFiles": [
+      "lib/actions/shifts.ts",
+      "lib/db/shifts.ts"
+    ],
+    "note": "shifts"
+  },
+  {
+    "query": "rounding money without floating point errors",
+    "expectedFiles": [
+      "lib/expenses/money.ts"
+    ],
+    "note": "money — vocabulary aligns, the easy case"
+  },
+  {
+    "query": "validating what a notification is allowed to contain",
+    "expectedFiles": [
+      "lib/validation/notification.ts"
+    ],
+    "note": "Hard: validation layer"
+  },
+  {
+    "query": "how do we talk to the database from the server",
+    "expectedFiles": [
+      "lib/supabase/server.ts",
+      "lib/supabase/browser.ts"
+    ],
+    "note": "Hard: infrastructure, generic phrasing"
+  },
+  {
+    "query": "translating the interface into another language",
+    "expectedFiles": [
+      "lib/i18n/t.ts",
+      "lib/i18n/locale-provider.tsx"
+    ],
+    "note": "i18n"
+  },
+  {
+    "query": "which artists are booked for an event",
+    "expectedFiles": [
+      "lib/actions/bookings.ts",
+      "lib/db/bookings.ts",
+      "lib/db/artists.ts"
+    ],
+    "note": "artists and bookings"
+  }
+]
