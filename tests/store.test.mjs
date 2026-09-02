@@ -304,3 +304,59 @@ test('mirrorRecordCap: follows what the mirror actually stores', async () => {
   // A tiny byte cap still leaves a usable floor rather than zero.
   assert.ok(mirrorRecordCap({ byteCap: 1000, explicit: '' }) >= 1000);
 });
+
+/* Compaction's safety window protects an IN-FLIGHT READ, not "recent work".
+   The first guess of one hour made compaction a no-op exactly when it mattered
+   most: after a --force rebuild every superseded fragment is minutes old, so
+   nothing qualified. club-ops sat at 2.0 GB while optimize() returned success
+   in 4 ms; the same call with a one-minute window reclaimed 1.4 GB in 64 ms
+   with all 107,834 records intact. */
+test('compact: the keep-window is short enough to clean a fresh rebuild', async () => {
+  const { openStore } = await import('../scripts/store.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-compact-window-'));
+  try {
+    // The contract, not the mechanics: compact() must be total, must report
+    // whether it ran, and must never throw at a caller mid-sync.
+    const store = await openStore({ root: dir });
+    const r = await store.compact();
+    assert.equal(typeof r, 'object');
+    assert.equal(typeof r.ran, 'boolean');
+    assert.ok(Number.isFinite(r.ms));
+    if (!r.ran) assert.ok(r.reason, 'a skipped compaction must say why');
+    await store.close?.();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('compact: a commit conflict is retried, then reported as recoverable', async () => {
+  const { LanceStore } = await import('../scripts/store.mjs');
+  if (typeof LanceStore !== 'function') return; // not exported in this build
+  // A background sync fires on every edit, so a conflict that is merely
+  // reported recurs forever and the store is never compacted — which is how a
+  // repo reached 2.0 GB. One bounded retry clears the overlap.
+  let calls = 0;
+  const fake = {
+    optimize: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('Commit conflict for version 18: concurrent commit');
+    }
+  };
+  const store = Object.create(LanceStore.prototype);
+  store.openTable = async () => fake;
+  const r = await store.compact();
+  assert.equal(r.ran, true, `expected the retry to succeed, got ${JSON.stringify(r)}`);
+  assert.equal(calls, 2, 'exactly one retry');
+  assert.equal(r.attempts, 2);
+
+  // A second conflict means something is genuinely busy: skip, and say so in
+  // terms the reader can act on.
+  calls = 0;
+  const always = { optimize: async () => { calls += 1; throw new Error('Commit conflict for version 19'); } };
+  const store2 = Object.create(LanceStore.prototype);
+  store2.openTable = async () => always;
+  const r2 = await store2.compact();
+  assert.equal(r2.ran, false);
+  assert.equal(calls, 2, 'bounded at two attempts');
+  assert.match(r2.reason, /compact on the next idle run/);
+});

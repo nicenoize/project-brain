@@ -34,6 +34,18 @@ const JSON_MIRROR_MAX_BYTES = Number(process.env.BRAIN_JSON_MIRROR_MAX_BYTES || 
 //
 // Derived rather than re-guessed, so the two caps cannot drift apart again.
 const JSON_MIRROR_MAX_RECORDS = Number(process.env.BRAIN_JSON_MIRROR_MAX_RECORDS || 50_000);
+/**
+ * How long a superseded LanceDB version is kept before compaction may drop it.
+ *
+ * It exists to protect a reader that is mid-read, not to preserve history —
+ * Lance versions are superseded data, and git is where history lives. Every
+ * read in this codebase is a short-lived process finishing in seconds, so two
+ * minutes is a hundredfold margin. See the reasoning at the call site: the
+ * first guess of one hour silently disabled compaction after a rebuild, which
+ * is the moment there is most to reclaim.
+ */
+const COMPACTION_KEEP_VERSIONS_MS = Number(process.env.BRAIN_COMPACT_KEEP_MS || 120_000);
+
 const MIRROR_BYTES_PER_RECORD_WITH_VECTORS = 9_300;
 const MIRROR_BYTES_PER_RECORD_METADATA_ONLY = 1_600;
 
@@ -401,14 +413,44 @@ export class LanceStore extends BrainStore {
       if (!table || typeof table.optimize !== 'function') {
         return { ran: false, ms: 0, reason: 'this lancedb build has no optimize()' };
       }
-      // Old versions are only safe to drop once nothing is mid-read; the
-      // default keeps the last hour, which covers a concurrent sync.
+      // The window protects an IN-FLIGHT READ, not "recent work". A reader that
+      // opened version N keeps reading version N until it closes, and every
+      // reader here is a short-lived process that finishes in seconds.
+      //
+      // One hour was the first guess and it made compaction a no-op exactly
+      // when it mattered most. After a `--force` rebuild every superseded
+      // fragment is MINUTES old, so nothing qualified: club-ops sat at 2.0 GB
+      // while `optimize()` returned success in 4 ms. The same call with a
+      // one-minute window reclaimed 1.4 GB in 64 ms, with all 107,834 records
+      // intact. Two minutes is ~100x the longest read this code performs.
       const cleanupOlderThan = keepVersionsNewerThan
-        || new Date(Date.now() - 60 * 60 * 1000);
-      await table.optimize({ cleanupOlderThan });
-      return { ran: true, ms: Date.now() - started };
+        || new Date(Date.now() - COMPACTION_KEEP_VERSIONS_MS);
+      // A background sync committing at the same instant loses the race with a
+      // "Commit conflict for version N". That is not a failure to report and
+      // forget: sync fires on every edit, so on an active repo the conflict
+      // recurs and the store is never compacted at all — which is how one repo
+      // reached 2.0 GB. One bounded retry clears the overlap; a second conflict
+      // means something is genuinely busy and skipping is right.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await table.optimize({ cleanupOlderThan });
+          return { ran: true, ms: Date.now() - started, attempts: attempt + 1 };
+        } catch (error) {
+          const conflict = /commit conflict/i.test(String(error?.message || error));
+          if (!conflict || attempt === 1) throw error;
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      }
+      return { ran: false, ms: Date.now() - started, reason: 'unreachable' };
     } catch (error) {
-      return { ran: false, ms: Date.now() - started, reason: String(error.message || error) };
+      const msg = String(error.message || error);
+      return {
+        ran: false,
+        ms: Date.now() - started,
+        reason: /commit conflict/i.test(msg)
+          ? `${msg} — a concurrent sync held the store; it will compact on the next idle run`
+          : msg
+      };
     }
   }
 
