@@ -60,8 +60,32 @@ export function staleBanner(records = [], opts = {}) {
   return `⚠ index stale for ${stale.length} file(s): ${stale.join(', ')} — read those files directly or run npm run brain:sync`;
 }
 
+/**
+ * Results a search returns by default.
+ *
+ * Raised from 8 to 12 on measurement, not taste. Ten questions against a real
+ * 14,145-record repo, ground truth authored by that repo's own module records:
+ *
+ *   top-8    recall 0.50
+ *   top-12   recall 0.60     +0.10 for four more results
+ *   top-16   recall 0.60     nothing
+ *   top-24   recall 0.70     +0.10 for twelve more
+ *
+ * Twelve is the knee. It costs 261 tokens (474 -> 735 on a real query), which
+ * is far less than a missed search costs: the agent falls back to grep, reads
+ * wrong files, and pays for all of them.
+ *
+ * The cases live in docs/eval-clubops-cases.json; `brain:eval --top-k N`
+ * re-derives this table on any repo. Six attempts to lift recall by TUNING
+ * (metadata boosts, the TS symbol graph on and off, removing 94k junk records,
+ * disabling keyword scoring, widening the candidate pool 40->800) moved it by
+ * zero. The files that miss rank 39 to 90; no weight lifts a rank-90 result
+ * into the top eight. Widening the window was the only thing that worked.
+ */
+export const DEFAULT_TOP_K = Number(process.env.BRAIN_TOP_K || 12);
+
 export async function retrieve(query, store, embedder, opts = {}) {
-  const topK = Number(opts.topK || process.env.BRAIN_TOP_K || 8);
+  const topK = Number(opts.topK || DEFAULT_TOP_K);
   const candidates = Number(opts.candidates || process.env.BRAIN_CANDIDATES || Math.max(topK * 8, 32));
   const filter = opts.filter || {};
   const queryVector = await embedder.embed(query);

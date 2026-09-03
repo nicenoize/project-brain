@@ -490,7 +490,7 @@ console.log(`Indexed ${records.length} new records, deleted ${deleteIds.length},
 // run and never prunes on its own: a repo synced 737 times carried 863 MB of
 // data files for an index whose live vectors are 34 MB. Optimisation only —
 // a failure is reported, never fatal to a sync that already succeeded.
-if (typeof store.compact === 'function') {
+{
   const c = await store.compact();
   if (c.ran) console.log(`Compacted the vector store in ${(c.ms / 1000).toFixed(1)}s.`);
   else if (c.reason) console.warn(`Project Brain: vector-store compaction skipped — ${c.reason}`);

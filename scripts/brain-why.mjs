@@ -352,7 +352,7 @@ function cmdIngest(args) {
 async function cmdQuery(args, query) {
   const json = takeFlag(args, '--json');
   const topRaw = takeOption(args, '--top');
-  const topK = topRaw && Number(topRaw) > 0 ? Number(topRaw) : Number(process.env.BRAIN_TOP_K || 8);
+  const topK = topRaw && Number(topRaw) > 0 ? Number(topRaw) : Number(process.env.BRAIN_TOP_K || 12);
 
   if (!exists(JSON_INDEX) && !exists(MANIFEST)) {
     // No index yet → tell the user how to build one (don't crash on a fresh repo).
