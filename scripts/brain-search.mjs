@@ -47,7 +47,7 @@ if (provider.name === 'builtin' && manifest.model && manifest.model !== provider
 const taskId = String(taskOpt || process.env.BRAIN_TASK || '').trim();
 const actor = String(actorOpt || process.env.BRAIN_ACTOR || '').trim();
 const { results, warning } = await provider.search(query, {
-  topK: Number(process.env.BRAIN_TOP_K || 8),
+  topK: Number(process.env.BRAIN_TOP_K || 12),
   symbol,
   model: manifest.model,
   dims: manifest.dims,

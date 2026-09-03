@@ -14,6 +14,20 @@ export class BrainStore {
   async search() { throw new Error('BrainStore.search is not implemented'); }
   async getAll() { throw new Error('BrainStore.getAll is not implemented'); }
   async close() {}
+
+  /**
+   * Reclaim storage the backend no longer needs. TOTAL and uniform: a backend
+   * with nothing to compact says so instead of not existing.
+   *
+   * It was added only to LanceStore, so callers had to write
+   * `typeof store.compact === 'function'` — and a test that forgot the guard
+   * failed in CI, where no LanceDB is installed and openStore returns the JSON
+   * store. A method that exists on some backends is an API the caller has to
+   * remember; one that exists everywhere is one they can use.
+   */
+  async compact() {
+    return { ran: false, ms: 0, reason: `${this.constructor.name} has nothing to compact` };
+  }
 }
 
 // Default 200 MB — well below Node's ~512 MB string limit and big enough
