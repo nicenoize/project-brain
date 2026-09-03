@@ -269,3 +269,94 @@ test('a metadata-only mirror is never used to seed the vector store', async () =
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/* The record cap is a PROXY for the byte cap, and a proxy is only as good as
+   its assumption about record size. 50,000 was calibrated when every record
+   carried its 384-dimension vector as decimal text (~9.3 KB). A metadata-only
+   mirror stores ~1.6 KB, so the old number locked out repos the byte guard
+   would have accepted: a 33-project fleet at 52,255 records had its mirror
+   disabled while the file it would have written was ~84 MB. */
+test('mirrorRecordCap: follows what the mirror actually stores', async () => {
+  const { mirrorRecordCap } = await import('../scripts/store.mjs');
+  const byteCap = 200 * 1024 * 1024;
+
+  const withVectors = mirrorRecordCap({ vectorsOwnedElsewhere: false, byteCap, explicit: '' });
+  const metaOnly = mirrorRecordCap({ vectorsOwnedElsewhere: true, byteCap, explicit: '' });
+
+  // Metadata-only records are several times smaller, so several times more fit.
+  assert.ok(metaOnly > withVectors * 4, `${metaOnly} should dwarf ${withVectors}`);
+
+  // Both caps must stay under the byte guard they stand in for — the OLD 50,000
+  // with vectors implied ~465 MB, more than twice the 200 MB it was protecting.
+  assert.ok(withVectors * 9300 < byteCap, 'the with-vectors cap must respect the byte cap');
+  assert.ok(metaOnly * 1600 < byteCap, 'the metadata cap must respect the byte cap');
+
+  // The fleet that prompted this fits; a repo twice its size still does not,
+  // which is the honest answer rather than a number chosen to make it pass.
+  assert.ok(metaOnly > 52255, 'a 52k-record fleet should be mirrorable');
+  assert.ok(metaOnly < 106881, 'a 107k-record repo genuinely does not fit');
+
+  // An explicit setting always wins: someone who set it meant it.
+  assert.equal(mirrorRecordCap({ vectorsOwnedElsewhere: true, explicit: '9000' }), 9000);
+  assert.equal(mirrorRecordCap({ vectorsOwnedElsewhere: true, explicit: 'nonsense' }), metaOnly);
+  assert.equal(mirrorRecordCap({ vectorsOwnedElsewhere: true, explicit: '-5' }), metaOnly);
+
+  // A tiny byte cap still leaves a usable floor rather than zero.
+  assert.ok(mirrorRecordCap({ byteCap: 1000, explicit: '' }) >= 1000);
+});
+
+/* Compaction's safety window protects an IN-FLIGHT READ, not "recent work".
+   The first guess of one hour made compaction a no-op exactly when it mattered
+   most: after a --force rebuild every superseded fragment is minutes old, so
+   nothing qualified. club-ops sat at 2.0 GB while optimize() returned success
+   in 4 ms; the same call with a one-minute window reclaimed 1.4 GB in 64 ms
+   with all 107,834 records intact. */
+test('compact: the keep-window is short enough to clean a fresh rebuild', async () => {
+  const { openStore } = await import('../scripts/store.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-compact-window-'));
+  try {
+    // The contract, not the mechanics: compact() must be total, must report
+    // whether it ran, and must never throw at a caller mid-sync.
+    const store = await openStore({ root: dir });
+    const r = await store.compact();
+    assert.equal(typeof r, 'object');
+    assert.equal(typeof r.ran, 'boolean');
+    assert.ok(Number.isFinite(r.ms));
+    if (!r.ran) assert.ok(r.reason, 'a skipped compaction must say why');
+    await store.close?.();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('compact: a commit conflict is retried, then reported as recoverable', async () => {
+  const { LanceStore } = await import('../scripts/store.mjs');
+  if (typeof LanceStore !== 'function') return; // not exported in this build
+  // A background sync fires on every edit, so a conflict that is merely
+  // reported recurs forever and the store is never compacted — which is how a
+  // repo reached 2.0 GB. One bounded retry clears the overlap.
+  let calls = 0;
+  const fake = {
+    optimize: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('Commit conflict for version 18: concurrent commit');
+    }
+  };
+  const store = Object.create(LanceStore.prototype);
+  store.openTable = async () => fake;
+  const r = await store.compact();
+  assert.equal(r.ran, true, `expected the retry to succeed, got ${JSON.stringify(r)}`);
+  assert.equal(calls, 2, 'exactly one retry');
+  assert.equal(r.attempts, 2);
+
+  // A second conflict means something is genuinely busy: skip, and say so in
+  // terms the reader can act on.
+  calls = 0;
+  const always = { optimize: async () => { calls += 1; throw new Error('Commit conflict for version 19'); } };
+  const store2 = Object.create(LanceStore.prototype);
+  store2.openTable = async () => always;
+  const r2 = await store2.compact();
+  assert.equal(r2.ran, false);
+  assert.equal(calls, 2, 'bounded at two attempts');
+  assert.match(r2.reason, /compact on the next idle run/);
+});

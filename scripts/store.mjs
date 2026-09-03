@@ -23,7 +23,55 @@ const JSON_MIRROR_MAX_BYTES = Number(process.env.BRAIN_JSON_MIRROR_MAX_BYTES || 
 // Skip the per-call write when the in-memory record count exceeds this. A
 // freshly bloated mirror from a botched recovery used to balloon to 60 k+
 // records and hit the string-limit on the next read. Tunable for huge repos.
+//
+// The record cap is a PROXY for the byte cap, and the proxy is only as good as
+// its assumption about record size. 50 k was calibrated when every record
+// carried its 384-dimension vector as decimal text — about 9.3 KB each. A
+// metadata-only mirror stores ~1.6 KB, so the same 200 MB now holds roughly six
+// times as many records, and the old number locks out repos the byte guard
+// would happily accept: a 33-project fleet indexed to 52,255 records had its
+// mirror disabled while the file it would have written was ~84 MB.
+//
+// Derived rather than re-guessed, so the two caps cannot drift apart again.
 const JSON_MIRROR_MAX_RECORDS = Number(process.env.BRAIN_JSON_MIRROR_MAX_RECORDS || 50_000);
+/**
+ * How long a superseded LanceDB version is kept before compaction may drop it.
+ *
+ * It exists to protect a reader that is mid-read, not to preserve history —
+ * Lance versions are superseded data, and git is where history lives. Every
+ * read in this codebase is a short-lived process finishing in seconds, so two
+ * minutes is a hundredfold margin. See the reasoning at the call site: the
+ * first guess of one hour silently disabled compaction after a rebuild, which
+ * is the moment there is most to reclaim.
+ */
+const COMPACTION_KEEP_VERSIONS_MS = Number(process.env.BRAIN_COMPACT_KEEP_MS || 120_000);
+
+const MIRROR_BYTES_PER_RECORD_WITH_VECTORS = 9_300;
+const MIRROR_BYTES_PER_RECORD_METADATA_ONLY = 1_600;
+
+/**
+ * PURE. How many records may the mirror hold, given what it actually stores?
+ *
+ * An explicit BRAIN_JSON_MIRROR_MAX_RECORDS always wins — someone who set it
+ * meant it. Otherwise the cap follows the payload: the byte guard is the real
+ * protection (Node's ~512 MB string limit), and this keeps the proxy honest.
+ */
+export function mirrorRecordCap({
+  vectorsOwnedElsewhere = false,
+  byteCap = JSON_MIRROR_MAX_BYTES,
+  explicit = process.env.BRAIN_JSON_MIRROR_MAX_RECORDS
+} = {}) {
+  if (explicit) {
+    const n = Number(explicit);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  const perRecord = vectorsOwnedElsewhere
+    ? MIRROR_BYTES_PER_RECORD_METADATA_ONLY
+    : MIRROR_BYTES_PER_RECORD_WITH_VECTORS;
+  // Half the byte cap: the estimate is an average, and a mirror that trips the
+  // byte guard on read is frozen until someone reindexes.
+  return Math.max(1000, Math.floor((byteCap * 0.5) / perRecord));
+}
 
 export class JsonStore extends BrainStore {
   constructor(options = {}) {
@@ -101,9 +149,10 @@ export class JsonStore extends BrainStore {
       console.warn(`Project Brain shrink-guard: ${guard.reason}`);
       return;
     }
-    if (this.records.length > JSON_MIRROR_MAX_RECORDS) {
+    const recordCap = mirrorRecordCap({ vectorsOwnedElsewhere: this.vectorsOwnedElsewhere });
+    if (this.records.length > recordCap) {
       console.warn(`Project Brain: JSON mirror would hold ${this.records.length} records ` +
-        `(cap ${JSON_MIRROR_MAX_RECORDS}). Disabling mirror writes for this run. ` +
+        `(cap ${recordCap}). Disabling mirror writes for this run. ` +
         `Set BRAIN_JSON_MIRROR_MAX_RECORDS to raise, or run \`npm run brain:repair\`.`);
       this.disabled = true;
       return;
@@ -364,14 +413,44 @@ export class LanceStore extends BrainStore {
       if (!table || typeof table.optimize !== 'function') {
         return { ran: false, ms: 0, reason: 'this lancedb build has no optimize()' };
       }
-      // Old versions are only safe to drop once nothing is mid-read; the
-      // default keeps the last hour, which covers a concurrent sync.
+      // The window protects an IN-FLIGHT READ, not "recent work". A reader that
+      // opened version N keeps reading version N until it closes, and every
+      // reader here is a short-lived process that finishes in seconds.
+      //
+      // One hour was the first guess and it made compaction a no-op exactly
+      // when it mattered most. After a `--force` rebuild every superseded
+      // fragment is MINUTES old, so nothing qualified: club-ops sat at 2.0 GB
+      // while `optimize()` returned success in 4 ms. The same call with a
+      // one-minute window reclaimed 1.4 GB in 64 ms, with all 107,834 records
+      // intact. Two minutes is ~100x the longest read this code performs.
       const cleanupOlderThan = keepVersionsNewerThan
-        || new Date(Date.now() - 60 * 60 * 1000);
-      await table.optimize({ cleanupOlderThan });
-      return { ran: true, ms: Date.now() - started };
+        || new Date(Date.now() - COMPACTION_KEEP_VERSIONS_MS);
+      // A background sync committing at the same instant loses the race with a
+      // "Commit conflict for version N". That is not a failure to report and
+      // forget: sync fires on every edit, so on an active repo the conflict
+      // recurs and the store is never compacted at all — which is how one repo
+      // reached 2.0 GB. One bounded retry clears the overlap; a second conflict
+      // means something is genuinely busy and skipping is right.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await table.optimize({ cleanupOlderThan });
+          return { ran: true, ms: Date.now() - started, attempts: attempt + 1 };
+        } catch (error) {
+          const conflict = /commit conflict/i.test(String(error?.message || error));
+          if (!conflict || attempt === 1) throw error;
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      }
+      return { ran: false, ms: Date.now() - started, reason: 'unreachable' };
     } catch (error) {
-      return { ran: false, ms: Date.now() - started, reason: String(error.message || error) };
+      const msg = String(error.message || error);
+      return {
+        ran: false,
+        ms: Date.now() - started,
+        reason: /commit conflict/i.test(msg)
+          ? `${msg} — a concurrent sync held the store; it will compact on the next idle run`
+          : msg
+      };
     }
   }
 

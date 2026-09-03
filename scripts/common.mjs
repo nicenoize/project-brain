@@ -495,6 +495,18 @@ export function chunkText(text, maxChars = 1800, overlap = 250) {
     const lastBreak = slice.lastIndexOf('\n## ');
     if (lastBreak > 400 && end < clean.length) slice = slice.slice(0, lastBreak);
     chunks.push(slice.trim());
+    // Once this slice reached the end of the text, the text is consumed.
+    //
+    // Without this, the tail of EVERY file was emitted one character at a time:
+    // with fewer than `overlap` characters left, `slice.length - overlap` goes
+    // negative, `Math.max(1, …)` clamps the step to 1, and the loop crawls to
+    // the end producing a chunk per character. A 28 KB document yielded 270
+    // chunks averaging 103 characters, of which 250 were tail crumbs — the
+    // shortest were ".", ")." and "7).". Every indexed file carried ~250 junk
+    // records, they competed for space in the dense candidate pool, and they
+    // are the reason a repo of 3,456 files held 108,159 records where chunking
+    // predicts ~9,850.
+    if (end >= clean.length) break;
     i += Math.max(1, slice.length - overlap);
   }
   return chunks.filter(Boolean);
