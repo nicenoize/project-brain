@@ -315,8 +315,10 @@ test('compact: the keep-window is short enough to clean a fresh rebuild', async 
   const { openStore } = await import('../scripts/store.mjs');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-compact-window-'));
   try {
-    // The contract, not the mechanics: compact() must be total, must report
-    // whether it ran, and must never throw at a caller mid-sync.
+    // The contract, not the mechanics: compact() must be total on EVERY
+    // backend, must report whether it ran, and must never throw at a caller
+    // mid-sync. It existed only on LanceStore until CI — which has no LanceDB
+    // and gets the JSON store — failed with "store.compact is not a function".
     const store = await openStore({ root: dir });
     const r = await store.compact();
     assert.equal(typeof r, 'object');
@@ -359,4 +361,20 @@ test('compact: a commit conflict is retried, then reported as recoverable', asyn
   assert.equal(r2.ran, false);
   assert.equal(calls, 2, 'bounded at two attempts');
   assert.match(r2.reason, /compact on the next idle run/);
+});
+
+test('compact: every backend answers, none throws', async () => {
+  const { JsonStore } = await import('../scripts/store.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-compact-total-'));
+  try {
+    // The JSON store has nothing to compact and must SAY so rather than not
+    // having the method — the shape that broke CI.
+    const js = new JsonStore({ path: path.join(dir, 'i.json') });
+    const r = await js.compact();
+    assert.equal(r.ran, false);
+    assert.match(r.reason, /nothing to compact/);
+    assert.equal(typeof r.ms, 'number');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

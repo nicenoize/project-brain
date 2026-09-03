@@ -118,7 +118,7 @@ export async function lexicalSearch(query, opts = {}) {
   const pool = all.filter(record => matchesFilter(record, filter));
   const scores = tfidfScore(query, pool);
   const maxScore = Math.max(1, ...scores.values());
-  const topK = Number(opts.topK || process.env.BRAIN_TOP_K || 8);
+  const topK = Number(opts.topK || process.env.BRAIN_TOP_K || 12);
   const results = pool
     .filter(record => (scores.get(record.id) || 0) > 0)
     .map(record => {
