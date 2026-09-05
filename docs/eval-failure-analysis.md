@@ -201,3 +201,109 @@ itself; C1/C6 likely need to be evaluated as a combined change set
 | 2 | 14 | 47 | .project-brain/modules/coordination.md | picking up where a teammate's chat left off |
 | 2 | 19 | 40 | scripts/edges/grpc-client.mjs | linking stub-call site to remote contract |
 | 2 | 23 | 18 | .project-brain/modules/indexing.md | end-to-end walk from file list to vector store |
+
+---
+
+# Follow-up: the class-1/class-2 fix, and what is left (2026-09-05)
+
+The taxonomy above named two mechanisms, and the codebase already carried a
+lever for each — both shipped default-OFF because each cost more than it was
+worth at the time. Both were re-measured on club-ops (10 cases) and on our own
+138, and the cost of the expensive one turned out to be a defect rather than a
+property.
+
+## What was measured
+
+Same corpus, back to back, `--top-k 12`:
+
+| configuration | recall | hard | MRR | 138 cases |
+|---|---|---|---|---|
+| lexical union OFF, ≤2 chunks/file (old default) | 0.775 | 0.706 | 0.663 | 31.3 s |
+| lexical union ON, 1 chunk/file (new default) | **0.841** | **0.784** | 0.695 | 38.9 s |
+
+Independently on club-ops: recall 0.60 → 0.70, MRR 0.217 → 0.329.
+
+Read the way ADR 0031 requires — paired, by sign, on the metric that matters:
+
+- **hits gained 10, lost 1** (sign test p = 0.006)
+- reciprocal rank better 19, worse 14; ΔMRR +0.033 at **t = 1.68 — not
+  significant**
+
+So the honest claim is **"the file is found more often"**, not "results are
+ranked better". Rank order inside the top-K reshuffles in both directions.
+
+## Why the union, and not a bigger candidate pool
+
+The cheap alternative was tested first, because it would have been free:
+
+| | recall | MRR | 138 cases |
+|---|---|---|---|
+| candidates 256 | 0.812 | 0.643 | 72.8 s |
+| candidates 512 | 0.819 | 0.657 | 148.8 s |
+| candidates 1024 | 0.826 | 0.658 | 298.0 s |
+| **lexical union** | **0.841** | **0.695** | **38.9 s** |
+
+A bigger pool buys recall by adding distractors, so MRR *falls*. The union adds
+records selected for being on-topic. It wins on both axes at an eighth of the
+cost.
+
+## The cross-encoder reranker is measurably harmful
+
+`BRAIN_RERANK=1` was the obvious candidate for class 2 and makes things worse:
+club-ops recall 0.60 → 0.50, MRR 0.235 → 0.178, and it cancels the per-file cap
+gain (0.70 → 0.50). It stays off, now for a recorded reason rather than because
+nobody tried it.
+
+## The cost was a defect, not a property
+
+The union shipped OFF because it cost **1.03 s per query** on a 14k-record
+index. Split: 741 ms reading the corpus, 523 ms tokenizing it for BM25 — both
+entirely query-independent, both recomputed on every single query.
+
+`buildBm25Index`/`bm25Score` separate the corpus half of BM25 from the query
+half, and `corpusFor` memoizes it per store, keyed on `store.corpusVersion()`
+(row count; a backend that cannot report one is never cached — an unknown
+corpus is a changed one). Warm query on club-ops: **1261 ms → 209 ms**, i.e.
++20 ms over the dense-only path instead of +1034 ms.
+
+A one-shot CLI search still pays the build once: `brain:search` cold went
+1.44 s → 2.63 s. Long-lived readers — the MCP server, `serve`, `brain:eval` —
+pay it once per process. That trade is the reason the flag exists:
+`BRAIN_LEXICAL_UNION=0`.
+
+## Per-file cap 2 → 1
+
+club-ops' "sending a notification to a user" spent two of twelve slots on two
+chunks of the same `mark-read.tsx` while the file that answered it sat at rank
+15. Across 138 cases the change improved 4 and degraded 0 — it can only ever
+free a slot for a file not yet in the list.
+
+## What is left, stated precisely
+
+Class 0 (target not indexed) is gone as an explanation for the remaining
+club-ops misses — every one of the expected files *is* in the index, and every
+code file has a summary record. The residue is **vocabulary**, and it is
+structural rather than a ranking accident:
+
+> "how do we talk to the database from the server" expects
+> `lib/supabase/server.ts`. That file, and its summary record, contain
+> `supabase`, `server`, `client`, `cookies`, `createSupabaseServerClient` — and
+> the word **database** nowhere. The summary record is a symbol-and-import
+> manifest, not a description of what the file is for.
+
+The records that *do* carry the human vocabulary are the hand-written
+`.project-brain/modules/*.md` notes — which is why nine of twelve results for
+that query are brain prose. The prose is bridging the gap and then answering in
+its own name, because nothing links it back to the files it describes.
+
+That is the next investigation, and it is a chunking/authoring question, not a
+model or ranking one: **give each file's summary record the vocabulary a human
+would use for it.** It has an obvious cheap form (fold the owning module note's
+terms into the file summary) and an obvious expensive one, and per ADR 0031 the
+cases that must improve are named in advance:
+
+- *how do we talk to the database from the server* → `lib/supabase/server.ts`
+- *where do we decide whether a user may see this venue* → `lib/auth/membership.ts`
+- *how does someone get checked in at the door* → the check-in route
+
+If a change lifts recall without moving those three, it did something else.

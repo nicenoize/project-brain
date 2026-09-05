@@ -574,6 +574,29 @@ export function peekOption(args, name) {
   return args[i + 1] || '';
 }
 
+/**
+ * Flags in `args` that `known` does not list — so a misspelt or invented flag
+ * is refused instead of ignored. `peekOption` reads the flags it wants and is
+ * blind to the rest, which is silent until it is not: `--cases` instead of
+ * `--file` ran a whole eval against the wrong case file and reported a
+ * plausible number for a question nobody asked. Values are skipped, so
+ * `--file x.json` does not report `x.json` as a flag; `--` ends the scan.
+ */
+export function unknownFlags(args, known = []) {
+  const takesValue = new Set(known.filter((k) => typeof k === 'string' && k.endsWith('=')).map((k) => k.slice(0, -1)));
+  const names = new Set(known.map((k) => (k.endsWith('=') ? k.slice(0, -1) : k)));
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--') break;
+    if (!a.startsWith('--')) continue;
+    const name = a.includes('=') ? a.slice(0, a.indexOf('=')) : a;
+    if (!names.has(name)) { out.push(name); continue; }
+    if (takesValue.has(name) && !a.includes('=')) i++;
+  }
+  return out;
+}
+
 /** Split a comma/newline-delimited env var into trimmed non-empty entries. */
 export function splitEnv(name) {
   return (process.env[name] || '').split(/[,\n]/).map(s => s.trim()).filter(Boolean);

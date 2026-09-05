@@ -106,7 +106,7 @@ test('retrieve populates opts.trace without changing results', async () => {
   }
 });
 
-test('lexical union pulls a dense-absent but lexically-relevant record into results (flag-gated)', async () => {
+test('lexical union pulls a dense-absent but lexically-relevant record into results (default on)', async () => {
   const { retrieve } = await import('../scripts/retrieval.mjs');
   const target = { id: 'target', file: 'scripts/target.mjs', chunk: 0, text: 'lease lock coordination exclusive', vector: [0.7, 0.7] };
   const noise = Array.from({ length: 3 }, (_, i) => ({
@@ -119,8 +119,13 @@ test('lexical union pulls a dense-absent but lexically-relevant record into resu
   };
   const embedder = { async embed() { return [1, 0]; } };
 
-  const without = await retrieve('lease lock', store, embedder, { topK: 4 });
-  assert.ok(!without.some(r => r.id === 'target'), 'target must be absent without the flag');
+  // The union is the default since 2026-09-05; opting OUT must still work,
+  // and is the only way a dense-absent record stays absent.
+  const without = await retrieve('lease lock', store, embedder, { topK: 4, lexicalUnion: false });
+  assert.ok(!without.some(r => r.id === 'target'), 'lexicalUnion:false must restore dense-only candidates');
+
+  const byDefault = await retrieve('lease lock', store, embedder, { topK: 4 });
+  assert.ok(byDefault.some(r => r.id === 'target'), 'the union is on by default');
 
   const withUnion = await retrieve('lease lock', store, embedder, { topK: 4, lexicalUnion: true });
   const hit = withUnion.find(r => r.id === 'target');
