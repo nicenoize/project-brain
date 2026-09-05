@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { takeFlag, takeOption, peekOption, splitEnv } from '../scripts/common.mjs';
+import { takeFlag, takeOption, peekOption, splitEnv, unknownFlags } from '../scripts/common.mjs';
 
 test('takeFlag removes the flag and returns true when present', () => {
   const args = ['--a', '--b', 'val'];
@@ -114,4 +114,26 @@ test('chunkText: degenerate input, and overlap larger than the text', async () =
   const c = chunkText('a'.repeat(100), 1800, 250);
   assert.equal(c.length, 1);
   assert.equal(c[0].length, 100);
+});
+
+const EVAL_FLAGS = ['--file=', '--top-k=', '--out=', '--hard-only', '--diagnose'];
+
+test('unknownFlags accepts every known flag, with values in both forms', () => {
+  assert.deepEqual(unknownFlags(['--file', 'cases.json', '--top-k=12', '--hard-only'], EVAL_FLAGS), []);
+});
+
+test('unknownFlags reports the misspelling that silently ran the wrong eval', () => {
+  assert.deepEqual(unknownFlags(['--cases', 'cases.json'], EVAL_FLAGS), ['--cases']);
+});
+
+test('unknownFlags does not mistake an option value for a flag', () => {
+  assert.deepEqual(unknownFlags(['--file', '--weird-looking-name.json'], EVAL_FLAGS), []);
+});
+
+test('unknownFlags ignores positionals and stops at --', () => {
+  assert.deepEqual(unknownFlags(['run', '--diagnose', '--', '--passed-through'], EVAL_FLAGS), []);
+});
+
+test('unknownFlags reports each stray once, in order', () => {
+  assert.deepEqual(unknownFlags(['--nope', '--file', 'x', '--alsoNope=1'], EVAL_FLAGS), ['--nope', '--alsoNope']);
 });
