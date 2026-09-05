@@ -23,7 +23,7 @@
  * entirely.)
  */
 import fs from 'node:fs';
-import { BRAIN_DIR, read, write, peekOption } from './common.mjs';
+import { BRAIN_DIR, read, write, peekOption, unknownFlags } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
@@ -34,6 +34,16 @@ const topK = Number(peekOption(process.argv, '--top-k') || process.env.BRAIN_EVA
 const hardOnly = process.argv.includes('--hard-only');
 const diagnose = process.argv.includes('--diagnose');
 const outPath = peekOption(process.argv, '--out');
+
+// A misspelt flag must not be read as "run with defaults": `--cases` instead
+// of `--file` silently evaluated a different case file and printed a confident
+// number for a question nobody asked.
+const strays = unknownFlags(process.argv.slice(2), ['--file=', '--top-k=', '--out=', '--hard-only', '--diagnose']);
+if (strays.length) {
+  console.error(`brain:eval: unknown flag${strays.length > 1 ? 's' : ''}: ${strays.join(', ')}\n` +
+    'Known: --file <path> --top-k <n> --out <path> --hard-only --diagnose');
+  process.exit(2);
+}
 
 const allCases = loadCases(file);
 const cases = hardOnly ? allCases.filter(isHardCase) : allCases;
