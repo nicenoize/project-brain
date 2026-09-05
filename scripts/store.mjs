@@ -28,6 +28,18 @@ export class BrainStore {
   async compact() {
     return { ran: false, ms: 0, reason: `${this.constructor.name} has nothing to compact` };
   }
+
+  /**
+   * A cheap token that changes when the corpus changes, so a caller can reuse
+   * derived state (a tokenized BM25 index) across queries without re-reading
+   * every record. TOTAL, like compact(): a backend that cannot answer cheaply
+   * returns null, which callers must read as "assume changed" — never as "the
+   * corpus is empty". Row count is a coarse key: it catches every insert and
+   * delete, and misses an in-place edit that keeps the count identical. That is
+   * acceptable only because indexing and querying are separate processes; a
+   * long-lived process that both writes and reads must invalidate explicitly.
+   */
+  async corpusVersion() { return null; }
 }
 
 // Default 200 MB — well below Node's ~512 MB string limit and big enough
@@ -244,6 +256,8 @@ export class JsonStore extends BrainStore {
   async getAll() {
     return this.records.map(normalizeRecord);
   }
+
+  async corpusVersion() { return `json:${this.records.length}`; }
 }
 
 export class LanceStore extends BrainStore {
@@ -505,6 +519,16 @@ export class LanceStore extends BrainStore {
     const limit = Number.isFinite(total) ? Math.max(pageSize, total + pageSize) : 100000;
     const rows = await table.query().limit(limit).toArray();
     return rows.map(normalizeRecord);
+  }
+
+  async corpusVersion() {
+    try {
+      const table = await this.openTable();
+      if (!table) return 'lance:0';
+      return `lance:${await table.countRows()}`;
+    } catch {
+      return null;   // unreadable count → callers must assume the corpus moved
+    }
   }
 
   /** Rewrite JSON mirror from the Lance table so health/search_index stay consistent after deletes. */

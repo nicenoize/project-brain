@@ -128,17 +128,26 @@ export async function retrieve(query, store, embedder, opts = {}) {
 
   const denseScores = new Map(dense.map(record => [record.id, record.score]));
 
-  // BRAIN_LEXICAL_UNION=1 (default OFF): merge the BM25 top-N over the full
-  // corpus into the candidate pool, so records that are lexically on-topic but
-  // outside the dense top-`candidates` neighborhood can still be scored.
-  // Unlike broad mode, union records get a REAL dense score (cosine against
-  // their stored vector) — with denseScore 0 the α=0.7 weighting buries them,
-  // which is exactly the class-1 failure mode in docs/eval-failure-analysis.md.
-  const lexicalUnion = opts.lexicalUnion ?? (process.env.BRAIN_LEXICAL_UNION === '1');
+  // Merge the BM25 top-N over the full corpus into the candidate pool, so
+  // records that are lexically on-topic but outside the dense top-`candidates`
+  // neighborhood can still be scored. Union records get a REAL dense score
+  // (cosine against their stored vector) — with denseScore 0 the alpha=0.7
+  // weighting buries them, the class-1 failure mode in
+  // docs/eval-failure-analysis.md.
+  //
+  // DEFAULT ON since 2026-09-05. It shipped off because it cost 1.03 s per
+  // query; with the corpus cached per process that is now ~20 ms on a warm
+  // reader. Measured on 138 own cases, same corpus back to back: recall
+  // 0.775 -> 0.841, hard cases 0.706 -> 0.784, and on the hit metric 10 cases
+  // gained against 1 lost (sign test p = 0.006). MRR moves +0.033 at t = 1.68,
+  // i.e. not significant — rank order inside the top-K reshuffles both ways.
+  // The claim is therefore "the file is found more often", not "ranked better".
+  // Set BRAIN_LEXICAL_UNION=0 to restore dense-only candidate generation.
+  const lexicalUnion = opts.lexicalUnion ?? (process.env.BRAIN_LEXICAL_UNION !== '0');
   if (lexicalUnion && !broad) {
     const unionTop = Number(opts.lexicalUnionTop || process.env.BRAIN_LEXICAL_UNION_TOP || 24);
-    const allRecords = (await store.getAll()).filter(record => recordMatches(record, filter));
-    const lexical = tfidfScore(query, allRecords);
+    const { records: allRecords, index: bm25 } = await corpusFor(store, filter);
+    const lexical = tfidfScore(query, allRecords, bm25);
     const inPool = new Set(pool.map(record => record.id));
     const unionRecords = allRecords
       .filter(record => (lexical.get(record.id) || 0) > 0 && !inPool.has(record.id))
@@ -223,14 +232,20 @@ export async function retrieve(query, store, embedder, opts = {}) {
 /**
  * Cap non-summary chunks per file so a single long file can't occupy
  * multiple top-K slots with near-duplicate content. Summaries (chunk: -1)
- * are always kept. Default 2; override via opts.maxChunksPerFile or
- * BRAIN_MAX_CHUNKS_PER_FILE. Set to 0 or Infinity to disable.
+ * are always kept. Override via opts.maxChunksPerFile or
+ * BRAIN_MAX_CHUNKS_PER_FILE; 0 or Infinity disables the cap.
+ *
+ * Default 1 since 2026-09-05, down from 2. A second chunk of a file already in
+ * the list answers a question nobody asked twice: club-ops' notification query
+ * spent two of twelve slots on two chunks of the same mark-read.tsx while the
+ * file that actually answered it sat at rank 15. Across 138 own cases the
+ * change improved 4 and degraded 0 — it only ever frees a slot.
  */
 function limitChunksPerFile(records, opts) {
   const limit = Number(
     opts.maxChunksPerFile ??
     process.env.BRAIN_MAX_CHUNKS_PER_FILE ??
-    2
+    1
   );
   if (!Number.isFinite(limit) || limit <= 0) return records;
   const seen = new Map();
@@ -255,38 +270,98 @@ function limitChunksPerFile(records, opts) {
  * normalization (default 0.75, full length normalization). Pluses one to
  * the idf term to keep all scores non-negative even when df > N/2.
  */
-export function tfidfScore(query, records) {
-  const queryTokens = tokenize(query);
-  if (!records.length || !queryTokens.length) return new Map();
+/**
+ * Corpus + its tokenized BM25 index, reused across queries in one process.
+ *
+ * The lexical union scores BM25 over every record, and both halves of that —
+ * reading the corpus and tokenizing it — are query-independent. Recomputing
+ * them per query cost 1.03 s of the 1.26 s a union search took on a 14k-record
+ * index, for a result that cannot differ between two queries.
+ *
+ * Keyed on the store instance AND its corpusVersion(), so a backend that cannot
+ * report a version (null) is never cached — an unknown corpus is a changed one.
+ * The cache is per-process and holds one corpus per store; a one-shot CLI search
+ * still pays full price, which is why the union stays a measured trade rather
+ * than a free lunch. Long-lived readers (MCP server, `serve`, eval) pay once.
+ */
+const corpusCache = new WeakMap();
+
+async function corpusFor(store, filter) {
+  const version = await store.corpusVersion?.().catch(() => null) ?? null;
+  const filterKey = JSON.stringify(filter ?? null);
+  const hit = corpusCache.get(store);
+  if (version !== null && hit && hit.version === version && hit.filterKey === filterKey) return hit;
+  const records = (await store.getAll()).filter(record => recordMatches(record, filter));
+  const entry = { version, filterKey, records, index: buildBm25Index(records) };
+  if (version !== null) corpusCache.set(store, entry);
+  return entry;
+}
+
+/**
+ * PURE. The query-independent half of BM25: tokenize every document once and
+ * derive df / avg length / per-doc term frequencies.
+ *
+ * It was inlined in `tfidfScore`, which meant the whole corpus was re-tokenized
+ * on every single query. On the lexical-union path (BM25 over all records) that
+ * was 523 ms per search on a 14k-record index — for work whose result cannot
+ * change between two queries against the same corpus.
+ */
+export function buildBm25Index(records) {
+  const docTokens = records.map(record => tokenize(recordText(record)));
+  const df = new Map();
+  for (const tokens of docTokens) {
+    for (const token of new Set(tokens)) df.set(token, (df.get(token) || 0) + 1);
+  }
+  const tf = docTokens.map(tokens => {
+    const counts = new Map();
+    for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1);
+    return counts;
+  });
+  const totalLen = docTokens.reduce((sum, tokens) => sum + tokens.length, 0);
+  return {
+    ids: records.map(record => record.id),
+    tf,
+    dl: docTokens.map(tokens => tokens.length || 1),
+    df,
+    avgdl: totalLen / (docTokens.length || 1) || 1,
+    N: records.length,
+  };
+}
+
+/** PURE. Score a tokenized query against a prebuilt index. */
+export function bm25Score(queryTokens, index) {
+  const scores = new Map();
+  if (!index || !index.N || !queryTokens.length) return scores;
   const k1 = Number(process.env.BRAIN_BM25_K1 || 1.2);
   const b = Number(process.env.BRAIN_BM25_B || 0.75);
-  const df = new Map();
-  const docTokens = records.map(record => tokenize(recordText(record)));
-  for (const tokens of docTokens) {
-    const seen = new Set(tokens);
-    for (const token of seen) df.set(token, (df.get(token) || 0) + 1);
-  }
-  const totalLen = docTokens.reduce((sum, tokens) => sum + tokens.length, 0);
-  const avgdl = totalLen / docTokens.length || 1;
-  const N = records.length;
-  const scores = new Map();
-  for (let i = 0; i < records.length; i++) {
-    const tokens = docTokens[i];
-    const dl = tokens.length || 1;
+  const { N, df, avgdl } = index;
+  for (let i = 0; i < index.N; i++) {
+    const counts = index.tf[i];
+    const dl = index.dl[i];
     let score = 0;
-    const tfCache = new Map();
-    for (const token of tokens) tfCache.set(token, (tfCache.get(token) || 0) + 1);
     for (const token of queryTokens) {
-      const tf = tfCache.get(token) || 0;
-      if (!tf) continue;
+      const termFreq = counts.get(token) || 0;
+      if (!termFreq) continue;
       const dfT = df.get(token) || 0;
       const idf = Math.log(1 + (N - dfT + 0.5) / (dfT + 0.5));
-      const norm = tf + k1 * (1 - b + b * (dl / avgdl));
-      score += idf * (tf * (k1 + 1)) / norm;
+      const norm = termFreq + k1 * (1 - b + b * (dl / avgdl));
+      score += idf * (termFreq * (k1 + 1)) / norm;
     }
-    scores.set(records[i].id, score);
+    scores.set(index.ids[i], score);
   }
   return scores;
+}
+
+/**
+ * BM25 keyword score with document-length normalization.
+ * k1 controls term-frequency saturation (default 1.2); b controls length
+ * normalization (default 0.75). Pass `index` (from buildBm25Index) to reuse
+ * a corpus already tokenized; the result is identical either way.
+ */
+export function tfidfScore(query, records, index = null) {
+  const queryTokens = tokenize(query);
+  if (!records.length || !queryTokens.length) return new Map();
+  return bm25Score(queryTokens, index || buildBm25Index(records));
 }
 
 export function symbolScore(query, records, opts = {}) {
