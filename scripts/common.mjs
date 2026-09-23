@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { execSync, spawnSync } from 'node:child_process';
@@ -608,6 +609,39 @@ export function cosine(a, b) {
     dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i];
   }
   return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+}
+
+// --- Sync → index hash handoff ---------------------------------------------
+// brain:sync hashes every indexable file to find what changed, then spawns
+// brain-index, which hashed every file again for its manifest. On club-ops
+// that is 4,291 files / 22 MB — ~4 s per pass, twice per sync. The sync now
+// hands its hashes over in a temp file (BRAIN_SYNC_HASHES). Safe if a file
+// changes in between: the manifest then carries the older hash, and the next
+// sync sees a mismatch and re-indexes it. One extra pass, never a missed one.
+
+/** Write `hashes` ({file: sha256}) to a fresh temp file; returns its path, or '' on failure. */
+export function writeHashHandoff(hashes, dir = os.tmpdir()) {
+  try {
+    const file = path.join(dir, `brain-sync-hashes-${process.pid}-${Date.now()}.json`);
+    fs.writeFileSync(file, JSON.stringify(hashes));
+    return file;
+  } catch {
+    return '';
+  }
+}
+
+/** Read and delete a handoff file. Returns a Map, or null when absent/unreadable (callers hash themselves). */
+export function readHashHandoff(file) {
+  if (!file) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    return new Map(Object.entries(data).filter(([, v]) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v)));
+  } catch {
+    return null;
+  } finally {
+    try { fs.unlinkSync(file); } catch { /* already gone */ }
+  }
 }
 
 // --- Usage ledger (issue #32) -----------------------------------------------
