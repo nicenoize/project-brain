@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexableFiles, parseDoc, isFastMode, truthyFrontmatter, filterGitignoredRelativePaths, splitEnv } from './common.mjs';
+import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexableFiles, parseDoc, isFastMode, truthyFrontmatter, filterGitignoredRelativePaths, splitEnv, readHashHandoff } from './common.mjs';
 import { dispatchChunker } from './chunk.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
@@ -114,7 +114,8 @@ try {
 }
 const fileSet = new Set(files);
 const currentHashes = new Map();
-for (const file of files) currentHashes.set(file, sha256(read(path.join(ROOT, file))));
+const handedOver = readHashHandoff(process.env.BRAIN_SYNC_HASHES);
+for (const file of files) currentHashes.set(file, handedOver?.get(file) ?? sha256(read(path.join(ROOT, file))));
 
 let changedFiles = files.filter(file => forceRebuild || oldManifest.files?.[file]?.hash !== currentHashes.get(file));
 let deletedFiles = Object.keys(oldManifest.files || {}).filter(file => !fileSet.has(file));

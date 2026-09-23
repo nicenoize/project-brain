@@ -24,7 +24,8 @@ import {
   gitBranchSafe,
   listIndexableFiles,
   readDirtyFiles,
-  clearDirtyFiles
+  clearDirtyFiles,
+  writeHashHandoff
 } from './common.mjs';
 
 const SYNC_BG_LOCK = path.join(BRAIN_DIR, '.sync-bg.lock');
@@ -165,6 +166,9 @@ const env = {
   BRAIN_CHANGED_FILES: changed.join('\n'),
   BRAIN_DELETED_FILES: deleted.join('\n')
 };
+// brain-index would hash every file again for its manifest (common.mjs).
+// Written only right before a spawn, so the skip/debounce exits leave no file.
+const withHashes = () => ({ ...env, BRAIN_SYNC_HASHES: writeHashHandoff(current) });
 
 if (decision.action === 'background' && allowBackground) {
   ensureDir(BRAIN_DIR);
@@ -203,7 +207,7 @@ if (decision.action === 'background' && allowBackground) {
   const child = spawn(cmd, spawnArgs, {
     detached: true,
     stdio: ['ignore', out, out],
-    env: { ...env, BRAIN_SYNC_LOCK: SYNC_BG_LOCK }
+    env: { ...withHashes(), BRAIN_SYNC_LOCK: SYNC_BG_LOCK }
   });
   child.unref();
   writeLock(child.pid);
@@ -220,7 +224,7 @@ if (decision.action === 'background' && allowBackground) {
   process.exit(0);
 }
 
-const result = spawnSync(process.execPath, [indexScript, ...indexArgs], { stdio: 'inherit', env });
+const result = spawnSync(process.execPath, [indexScript, ...indexArgs], { stdio: 'inherit', env: withHashes() });
 writeSyncState({
   action: decision.action === 'background' ? 'foreground-fallback' : decision.action,
   reason: decision.reason,
