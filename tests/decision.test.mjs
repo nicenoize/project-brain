@@ -62,3 +62,73 @@ test('logDecisions: appends records, silent under the test runner unless forced,
   assert.deepEqual(lines[0], { ts: '2026-09-23T00:00:00Z', signal: 'answer.danger', target: 'a.mjs', value: 7,
     action: 'emit', threshold: 6, reason: '', session: '' });
 });
+
+import { calibrateDecisions, valueBins } from '../scripts/decision.mjs';
+
+const DAY = 24 * 60 * 60 * 1000;
+const T0 = Date.parse('2026-09-01T00:00:00Z');
+const iso = (ms) => new Date(ms).toISOString();
+const dec = (signal, target, action, value, session, at = T0) =>
+  ({ ts: iso(at), signal, target, value, action, threshold: 6, reason: '', session });
+const commit = (at, subject, files) => ({ dateIso: iso(at), subject, files });
+
+test('calibrateDecisions: danger counts a LATER fix, not the change being made', () => {
+  const decisions = [dec('answer.danger', 'a.mjs', 'emit', 8, 's1'), dec('answer.danger', 'b.mjs', 'emit', 8, 's1')];
+  const commits = [
+    commit(T0 + 1 * DAY, 'fix: the bug the agent was fixing', ['a.mjs']),   // the edit itself
+    commit(T0 + 1 * DAY, 'feat: something', ['b.mjs']),                     // the edit itself
+    commit(T0 + 3 * DAY, 'fix: it broke again', ['b.mjs'])                  // a later fix
+  ];
+  const [danger] = calibrateDecisions(decisions, commits, { now: T0 + 30 * DAY, minN: 1 });
+  assert.equal(danger.emitted.n, 2);
+  assert.equal(danger.emitted.hits, 1, 'only b.mjs needed a later fix');
+});
+
+test('calibrateDecisions: one call per (signal, target, session); pending until the horizon passes', () => {
+  const decisions = [
+    dec('answer.danger', 'a.mjs', 'emit', 8, 's1'),
+    dec('answer.danger', 'a.mjs', 'emit', 8, 's1', T0 + 1000),            // same session → same call
+    dec('answer.danger', 'c.mjs', 'log', 3, 's2', T0 + 29 * DAY)           // horizon not over at now
+  ];
+  const [danger] = calibrateDecisions(decisions, [], { now: T0 + 30 * DAY, minN: 1 });
+  assert.equal(danger.emitted.n, 1);
+  assert.equal(danger.held.n, 0);
+  assert.equal(danger.pending, 1);
+});
+
+test('calibrateDecisions: separates when emitted are right more often than held back', () => {
+  const decisions = [];
+  const commits = [];
+  for (let i = 0; i < 10; i++) {
+    decisions.push(dec('answer.danger', `hot${i}.mjs`, 'emit', 8, `s${i}`));
+    commits.push(commit(T0 + DAY, 'feat: edit', [`hot${i}.mjs`]));
+    if (i < 6) commits.push(commit(T0 + 2 * DAY, 'fix: again', [`hot${i}.mjs`]));
+    decisions.push(dec('answer.danger', `cold${i}.mjs`, 'log', 2, `s${i}`));
+    commits.push(commit(T0 + DAY, 'feat: edit', [`cold${i}.mjs`]));
+    if (i < 1) commits.push(commit(T0 + 2 * DAY, 'fix: once', [`cold${i}.mjs`]));
+  }
+  const [danger] = calibrateDecisions(decisions, commits, { now: T0 + 30 * DAY });
+  assert.equal(danger.emitted.rate, 0.6);
+  assert.equal(danger.held.rate, 0.1);
+  assert.ok(Math.abs(danger.lift - 6) < 1e-9);
+  assert.match(danger.verdict, /separates/);
+});
+
+test('calibrateDecisions: an ungated signal says so and yields value bins', () => {
+  const decisions = [];
+  const commits = [];
+  for (let i = 0; i < 12; i++) {
+    const conf = 0.1 + i * 0.07;
+    decisions.push(dec('answer.partner', `p${i}.mjs`, 'emit', conf, `s${i}`));
+    if (conf > 0.5) commits.push(commit(T0 + DAY, 'feat: together', [`p${i}.mjs`]));
+  }
+  const [partner] = calibrateDecisions(decisions, commits, { now: T0 + 30 * DAY });
+  assert.match(partner.verdict, /not gated yet/);
+  assert.equal(partner.bins.length, 4);
+  assert.equal(partner.bins[0].rate, 0, 'low confidence partners were not co-committed');
+  assert.equal(partner.bins[3].rate, 1);
+});
+
+test('valueBins: too few values → no bins', () => {
+  assert.deepEqual(valueBins([{ value: 1, hit: true }]), []);
+});
