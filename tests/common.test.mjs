@@ -137,3 +137,21 @@ test('unknownFlags ignores positionals and stops at --', () => {
 test('unknownFlags reports each stray once, in order', () => {
   assert.deepEqual(unknownFlags(['--nope', '--file', 'x', '--alsoNope=1'], EVAL_FLAGS), ['--nope', '--alsoNope']);
 });
+
+test('hash handoff: round-trips, deletes its file, rejects garbage', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const { writeHashHandoff, readHashHandoff } = await import('../scripts/common.mjs');
+  const dir = fs.mkdtempSync(`${os.tmpdir()}/brain-handoff-`);
+  const h = 'a'.repeat(64);
+  const file = writeHashHandoff({ 'a.mjs': h, 'b.md': 'not-a-hash' }, dir);
+  assert.ok(file && fs.existsSync(file));
+  const map = readHashHandoff(file);
+  assert.equal(map.get('a.mjs'), h);
+  assert.equal(map.has('b.md'), false, 'a malformed hash is dropped, so the index hashes that file itself');
+  assert.equal(fs.existsSync(file), false, 'read once, then gone');
+  assert.equal(readHashHandoff(file), null, 'a missing handoff means: hash yourself');
+  assert.equal(readHashHandoff(''), null);
+  fs.writeFileSync(`${dir}/bad.json`, '[1,2]');
+  assert.equal(readHashHandoff(`${dir}/bad.json`), null);
+});
