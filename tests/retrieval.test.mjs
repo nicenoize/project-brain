@@ -171,3 +171,22 @@ test('spec-kit BRAIN_SPEC_BOOST lifts spec records over docs on architectural qu
   const result = await retrieve('how does the auth feature work', store, embedder, { topK: 2 });
   assert.equal(result[0].id, 'spec', `expected spec record to rank first, got: ${result.map(r => r.id).join(',')}`);
 });
+
+test('retrieve with dense:false never touches the embedder or the vector index', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { retrieve } = await import('../scripts/retrieval.mjs');
+  const { JsonStore, normalizeRecord } = await import('../scripts/store.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-dense-off-'));
+  const store = new JsonStore({ path: path.join(dir, 'idx.json') });
+  const rec = (id, text) => normalizeRecord({ id, file: `${id}.md`, text, vector: [1, 0] });
+  await store.upsert([rec('roster', 'shift roster planning for staff'), rec('money', 'rounding money in cents')]);
+  store.search = async () => { throw new Error('vector search must not run'); };
+  const embedder = { embed: async () => { throw new Error('embedder must not load'); } };
+
+  const hits = await retrieve('shift planning', store, embedder, { dense: false, topK: 5 });
+  assert.equal(hits[0].file, 'roster.md');
+  assert.equal(hits[0].denseScore, 0);
+  assert.ok(!hits.some(h => h.file === 'money.md'), 'no BM25 match, not in the lexical pool');
+});
