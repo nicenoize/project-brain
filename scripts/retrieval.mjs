@@ -88,6 +88,14 @@ export async function retrieve(query, store, embedder, opts = {}) {
   const topK = Number(opts.topK || DEFAULT_TOP_K);
   const candidates = Number(opts.candidates || process.env.BRAIN_CANDIDATES || Math.max(topK * 8, 32));
   const filter = opts.filter || {};
+  // BRAIN_DENSE=0 (default ON): lexical-only retrieval — no query embedding,
+  // no vector search; the candidate pool is the BM25 top-`candidates` over the
+  // whole corpus and the hybrid weight goes entirely to keyword/symbol. An
+  // ablation switch first: it answers "what do the vectors add over BM25?",
+  // which decides whether the embedder has to run at all (the plan's System 1
+  // → System 2 cascade).
+  const useDense = opts.dense ?? (process.env.BRAIN_DENSE !== '0');
+  if (!useDense) return retrieveLexical(query, store, { ...opts, topK, candidates, filter });
   const queryVector = await embedder.embed(query);
   const dense = (await store.search(queryVector, candidates, filter))
     .filter(record => recordMatches(record, filter));
@@ -226,6 +234,59 @@ export async function retrieve(query, store, embedder, opts = {}) {
     }));
   }
 
+  return limitChunksPerFile(ranked, opts).slice(0, topK);
+}
+
+/**
+ * The lexical-only path behind BRAIN_DENSE=0: identical scoring to the hybrid
+ * path (pool-level BM25, symbol boost, metadata, per-file cap) with the dense
+ * term removed — so an eval run against it isolates exactly what the vectors
+ * contribute. Candidates come from BM25 over the whole corpus instead of from
+ * the vector neighbourhood.
+ */
+async function retrieveLexical(query, store, opts) {
+  const { topK, candidates, filter } = opts;
+  const { records: allRecords, index: bm25 } = await corpusFor(store, filter);
+  // broadCandidates scores the whole corpus, as the hybrid path does, so
+  // symbol-only matches (zero BM25) can still rank.
+  const broad = opts.broadCandidates ?? (process.env.BRAIN_BROAD_CANDIDATES === '1');
+  const lexical = tfidfScore(query, allRecords, bm25);
+  const pool = broad ? allRecords.slice() : allRecords
+    .filter(record => (lexical.get(record.id) || 0) > 0)
+    .sort((a, b) => (lexical.get(b.id) || 0) - (lexical.get(a.id) || 0))
+    .slice(0, Math.max(0, candidates));
+
+  const keyword = tfidfScore(query, pool);
+  const symbol = symbolScore(query, pool, opts);
+  const maxKeyword = Math.max(1, ...keyword.values());
+  const context = retrievalContext({ ...opts, query });
+  const keywordScale = keywordScaleForContext(context);
+  const ranked = pool
+    .map(record => {
+      const keywordScore = ((keyword.get(record.id) || 0) / maxKeyword) * keywordScale;
+      const symbolMatchScore = symbol.get(record.id) || 0;
+      const metadataScore = metadataBoost(record, context);
+      return {
+        ...record,
+        denseScore: 0,
+        keywordScore,
+        symbolScore: symbolMatchScore,
+        metadataScore,
+        score: hybridScore(0, keywordScore, symbolMatchScore, metadataScore, 0)
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  if (opts.trace && typeof opts.trace === 'object') {
+    opts.trace.queryVector = null;
+    opts.trace.broad = broad;
+    opts.trace.poolSize = pool.length;
+    opts.trace.denseCandidates = [];
+    opts.trace.scored = ranked.map(record => ({
+      id: record.id, file: record.file, chunk: record.chunk, type: record.type, score: record.score,
+      denseScore: 0, keywordScore: record.keywordScore, symbolScore: record.symbolScore, metadataScore: record.metadataScore
+    }));
+  }
   return limitChunksPerFile(ranked, opts).slice(0, topK);
 }
 
