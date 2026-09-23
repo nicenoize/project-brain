@@ -59,7 +59,8 @@ one surface (the hook) that runs on every single turn.*
    exported and unit-tested (the applyRules/buildGraph house pattern).
 
 2. **A hard byte cap on the hook injection** (`BRAIN_HOOK_MAX_BYTES`, default
-   ~4000) in `brain-route.mjs`. The cap truncates the **injected text before**
+   ~4000; since 2026-09 `BUDGETS.routeHookBytes` = 1500, CI-enforced against
+   the worst case, see ADR 0033) in `brain-route.mjs`. The cap truncates the **injected text before**
    `JSON.stringify` — never the JSON envelope — and appends
    `… truncated — run npm run brain:route`. The envelope therefore always stays
    valid JSON, and the hook path still **exits 0 on all errors**. This is a safety

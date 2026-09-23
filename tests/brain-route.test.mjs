@@ -218,8 +218,8 @@ test('buildHookPayload: SessionStart emits capped plain stdout; empty text → n
   assert.match(payload, /… truncated/);
 });
 
-test('HOOK_MAX_BYTES_DEFAULT: documents the ~4000-byte cap', () => {
-  assert.equal(HOOK_MAX_BYTES_DEFAULT, 4000);
+test('HOOK_MAX_BYTES_DEFAULT: documents the 1500-byte cap (BUDGETS.routeHookBytes)', () => {
+  assert.equal(HOOK_MAX_BYTES_DEFAULT, 1500);
 });
 
 // ---------------------------------------------------------------------------
@@ -352,4 +352,22 @@ test('prCacheLookup: reuses an answer only for the same branch, same HEAD, withi
   assert.equal(prCacheLookup({ ...cache, hasPr: 'yes' }, { branch: 'feature/x', head: 'abc', now: 2_000 }), null,
     'a malformed answer is not trusted');
   assert.equal(prCacheLookup(cache, { branch: 'feature/x', head: '', now: 2_000 }), null, 'unknown HEAD → re-ask');
+});
+
+test('budget: the route hook worst case fits BUDGETS.routeHookBytes untruncated', async () => {
+  const { BUDGETS } = await import('../scripts/footprint.mjs');
+  assert.equal(HOOK_MAX_BYTES_DEFAULT, BUDGETS.routeHookBytes, 'one number, from BUDGETS');
+  // Every rule that can fire at once, on a long branch name.
+  const LOUD = {
+    ...QUIET, branch: 'feature/a-rather-long-branch-name-for-the-worst-case-measurement',
+    changedFiles: 40, stagedFiles: 40, changeBand: 'large', riskKeyword: 'migration',
+    recommendedPackages: 4, backlog: { open: 9, planned: 9, plans: 9 }, ungrilledPlanned: 9,
+    leaseConflicts: 9, commitsAhead: 12, commitsAheadNoPr: true, base: 'main',
+    indexStale: { deleted: 50, changed: 50 }, gaps: { high: 9 }
+  };
+  const text = renderHookText(applyRules(LOUD, { top: 3 }));
+  assert.ok(text.length > 0, 'the loud state produces a hook text');
+  assert.equal(capHookText(text, BUDGETS.routeHookBytes), text, 'no truncation at the budget');
+  assert.ok(Buffer.byteLength(text, 'utf8') <= BUDGETS.routeHookBytes,
+    `worst case ${Buffer.byteLength(text, 'utf8')} B > ${BUDGETS.routeHookBytes} B`);
 });

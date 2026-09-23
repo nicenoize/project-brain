@@ -39,6 +39,7 @@ export const GITIGNORE_ENTRIES = [
   // Local, per-machine state. None of it belongs in a commit, and one repo
   // already committed a 180 KB .answer-cache.json because nothing said so.
   '.project-brain/.usage.jsonl',
+  '.project-brain/.decisions.jsonl',
   '.project-brain/.answer-cache.json',
   '.project-brain/.route-hook-state.json',
   '.project-brain/.sync-state.json',
