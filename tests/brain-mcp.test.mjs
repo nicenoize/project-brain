@@ -449,3 +449,34 @@ test('brain_overview: the whole repo, inside its budget', async () => {
   assert.match(text, /No model, no network/);
   assert.ok(Buffer.byteLength(text, 'utf8') <= 8000, `over budget: ${Buffer.byteLength(text, 'utf8')} B`);
 });
+
+test('brain_outline: refuses files outside the repository', async () => {
+  for (const [i, file] of ['/etc/hosts', '../../../../etc/hosts'].entries()) {
+    const r = await withTimeout(
+      server.call(60 + i, 'tools/call', { name: 'brain_outline', arguments: { file } }),
+      30_000, `brain_outline outside ${file}`);
+    const text = r.result.content[0].text;
+    assert.match(text, /outside this repository/, file);
+    assert.doesNotMatch(text, /localhost/, 'no file content leaks');
+  }
+});
+
+test('insideRoot / capBody: the pure guards behind brain_outline', async () => {
+  const { insideRoot, capBody } = await import('../scripts/brain-mcp.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-root-'));
+  fs.writeFileSync(path.join(root, 'a.mjs'), 'x');
+  assert.equal(insideRoot('a.mjs', root), path.join(root, 'a.mjs'));
+  assert.equal(insideRoot('sub/../a.mjs', root), path.join(root, 'a.mjs'));
+  assert.equal(insideRoot('../a.mjs', root), null);
+  assert.equal(insideRoot('/etc/hosts', root), null);
+  assert.equal(insideRoot('', root), null, 'the root itself is not a file');
+  fs.symlinkSync('/etc', path.join(root, 'escape'));
+  assert.equal(insideRoot('escape/hosts', root), null, 'a symlink out of the repo is outside');
+
+  const body = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n');
+  assert.deepEqual(capBody('short', 100), { text: 'short', cut: false, keptLines: 1 });
+  const c = capBody(body, 50);
+  assert.equal(c.cut, true);
+  assert.ok(Buffer.byteLength(c.text) <= 50);
+  assert.equal(c.text.split('\n').length, c.keptLines, 'cut on whole lines');
+});

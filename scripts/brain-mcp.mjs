@@ -111,7 +111,12 @@ const CAP = Object.freeze({
   searchMax: 15,
   snippet: 200,
   conflicts: 8,
-  actions: 5
+  actions: 5,
+  // brain_outline had no cap at all: a generated file lists every symbol, and
+  // one long function returned its whole body. ~3k tok for a body, and the
+  // list stops at 60 entries with a count of the rest.
+  outlineSymbols: 60,
+  outlineBodyBytes: 12000
 });
 
 // ---------------------------------------------------------------------------
@@ -954,6 +959,40 @@ async function toolOverview() {
 
 // --- brain_outline ----------------------------------------------------------
 
+/**
+ * PURE. The absolute path of `file` if it resolves inside `root`, else null.
+ * The tool took absolute paths and `../` as given, so a prompt-injected
+ * request could read any file the user can (keys, other repos) through a
+ * server documented as a view of THIS repo.
+ */
+export function insideRoot(file, root = ROOT) {
+  const base = path.resolve(root);
+  const abs = path.resolve(base, String(file || ''));
+  const rel = path.relative(base, abs);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  // A symlink inside the repo that points out of it is outside too.
+  try {
+    const real = fs.realpathSync(abs);
+    const realRel = path.relative(fs.realpathSync(base), real);
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) return null;
+  } catch { /* missing file: let the read fail with its own error */ }
+  return abs;
+}
+
+/** PURE. Cut `text` at whole lines to at most `maxBytes`. */
+export function capBody(text, maxBytes) {
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return { text, cut: false, keptLines: text.split('\n').length };
+  const kept = [];
+  let used = 0;
+  for (const line of text.split('\n')) {
+    const cost = Buffer.byteLength(line, 'utf8') + 1;
+    if (used + cost > maxBytes) break;
+    kept.push(line);
+    used += cost;
+  }
+  return { text: kept.join('\n'), cut: true, keptLines: kept.length };
+}
+
 /** Read one function instead of a whole file. */
 async function toolOutline(args = {}) {
   const file = String(args.file || '').trim();
@@ -961,12 +1000,14 @@ async function toolOutline(args = {}) {
   const symbol = String(args.symbol || '').trim();
   try {
     const { outlineOf } = await import('./brain-outline.mjs');
-    const abs = path.isAbsolute(file) ? file : path.join(ROOT, file);
+    const abs = insideRoot(file);
+    if (!abs) return say([`outline: ${file} is outside this repository — only repo files can be outlined.`]);
     const source = fs.readFileSync(abs, 'utf8');
     const out = outlineOf(source, file);
     if (!symbol) {
       const lines = [`${file} — ${out.lines} lines, ${out.functionCount} function(s):`];
-      for (const sym of out.symbols) lines.push(`- ${sym.name}  ${sym.lines} lines  ${sym.startLine}-${sym.endLine}`);
+      for (const sym of out.symbols.slice(0, CAP.outlineSymbols)) lines.push(`- ${sym.name}  ${sym.lines} lines  ${sym.startLine}-${sym.endLine}`);
+      if (out.symbols.length > CAP.outlineSymbols) lines.push(`- …+${out.symbols.length - CAP.outlineSymbols} more (pass \`symbol\` for any of them)`);
       lines.push('');
       lines.push('Line-anchored declarations only — a FLOOR, not a symbol table. Pass `symbol` to read one.');
       return say(lines);
@@ -982,7 +1023,11 @@ async function toolOutline(args = {}) {
       ]);
     }
     const body = source.split('\n').slice(hit.startLine - 1, hit.endLine).join('\n');
-    return say([`${file}:${hit.startLine}-${hit.endLine} (${hit.lines} of ${out.lines} lines)`, '', body]);
+    const capped = capBody(body, CAP.outlineBodyBytes);
+    const note = capped.cut
+      ? [``, `… truncated after line ${hit.startLine + capped.keptLines - 1} of ${hit.endLine} (${CAP.outlineBodyBytes} B cap) — read the rest from the file directly.`]
+      : [];
+    return say([`${file}:${hit.startLine}-${hit.endLine} (${hit.lines} of ${out.lines} lines)`, '', capped.text, ...note]);
   } catch (error) {
     return say([`outline unavailable for ${file}: ${error.message || error}`]);
   }
