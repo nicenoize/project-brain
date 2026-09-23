@@ -66,6 +66,7 @@ import {
   DEFAULT_MIN_CONFIDENCE
 } from './git-intel.mjs';
 import { buildImportGraph, cycles } from './import-graph.mjs';
+import { DECISIONS_LOG, calibrateDecisions } from './decision.mjs';
 import { measureFiles, refactorPlan, STRUCTURE_NOTE } from './code-structure.mjs';
 
 const DEFAULT_COMMIT_WINDOW = 500;
@@ -85,6 +86,7 @@ function usage() {
     '  calibrate    Validate the risk weights against this repo\'s own fix/revert history.',
     '  health       Per-file 0-10 danger score (churn × coupling × bus factor × fix density).',
     '  health-calibrate  Validate the health score: do today\'s scores predict near-future fixes?',
+    '  calibrate-signals Were the ambient hook\'s decisions right? Emitted vs held back, from .decisions.jsonl.',
     '',
     'Flags:',
     '  --json            Parseable JSON on stdout, nothing else.',
@@ -577,6 +579,33 @@ async function cmdHealth(commits, { json, limit, nowMs, halfLifeDays, structure,
   out(withAction.nextAction);
 }
 
+/**
+ * calibrate-signals (ADR 0033): join the hook's recorded decisions with what
+ * git says happened to each target afterwards, per signal.
+ */
+function cmdCalibrateSignals(commits, { json, nowMs }) {
+  let decisions = [];
+  try {
+    decisions = fs.readFileSync(DECISIONS_LOG, 'utf8').split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  } catch { /* no log yet */ }
+  const report = calibrateDecisions(decisions, commits, { now: nowMs });
+  if (json) return out(JSON.stringify({ decisions: decisions.length, signals: report }, null, 2));
+  if (!decisions.length) {
+    return out('No decisions recorded yet (.project-brain/.decisions.jsonl). The answer hook writes them; ' +
+      'come back after a few sessions of real edits.');
+  }
+  out(`Signal calibration over ${decisions.length} recorded decision(s):`);
+  for (const r of report) {
+    const fmt = (x) => (x.rate === null ? 'n/a' : `${Math.round(x.rate * 100)}%`);
+    out(`\n${r.signal}  (right = ${r.outcome} within ${r.horizonDays}d)`);
+    out(`  emitted   n=${r.emitted.n}  right ${fmt(r.emitted)}`);
+    out(`  held back n=${r.held.n}  right ${fmt(r.held)}   pending ${r.pending}`);
+    for (const b of r.bins) out(`  value ${b.min}–${b.max}: ${b.hits}/${b.n} right`);
+    out(`  → ${r.verdict}`);
+  }
+}
+
 async function cmdHealthCalibrate(commits, { json, window, horizonDays, halfLifeDays, structure }) {
   const ctx = structure ? await structuralContext() : null;
   const result = calibrateFileHealth(commits, {
@@ -681,7 +710,7 @@ async function main() {
   }
 
   const sub = args.shift();
-  if (!sub || !['hotspots', 'co-change', 'ownership', 'risk', 'calibrate', 'health', 'health-calibrate'].includes(sub)) {
+  if (!sub || !['hotspots', 'co-change', 'ownership', 'risk', 'calibrate', 'health', 'health-calibrate', 'calibrate-signals'].includes(sub)) {
     process.stderr.write(usage() + '\n');
     process.exit(1);
   }
@@ -695,6 +724,7 @@ async function main() {
     if (sub === 'calibrate') return cmdCalibrate(commits, opts);
     if (sub === 'health') return await cmdHealth(commits, opts);
     if (sub === 'health-calibrate') return await cmdHealthCalibrate(commits, opts);
+    if (sub === 'calibrate-signals') return cmdCalibrateSignals(commits, opts);
     // risk
     const files = filesRaw
       ? filesRaw.split(',').map((s) => s.trim().replace(/^\.\//, '')).filter(Boolean)
