@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { missingBrainScripts, ROOT, BRAIN_DIR, exists, read, JSON_INDEX, USAGE_LOG, staleIndexFromRecords } from './common.mjs';
+import { missingBrainScripts, ROOT, BRAIN_DIR, exists, read, JSON_INDEX, USAGE_LOG, usageLogEnabled, staleIndexFromRecords } from './common.mjs';
 import { parseUsageLog, summarizeUsage, commandUniverseFromPackageScripts } from './usage.mjs';
 import {
   measureFile,
@@ -111,7 +111,7 @@ function settingsDriftReport(root) {
 /**
  * Usage-ledger audit (issue #32): the QUANTITY/footprint instrument that sits
  * next to the context-footprint (#21) and settings-drift (#34) sections above.
- * When BRAIN_USAGE_LOG=1, every brain:* invocation appends one JSONL line to
+ * Unless BRAIN_USAGE_LOG=0, every brain:* invocation appends one JSONL line to
  * `.project-brain/.usage.jsonl` (the choke point in common.mjs). Here we read
  * it back read-only — per-command counts over a trailing 30d window and the
  * never-used list (commands in package.json that the ledger has never seen).
@@ -127,7 +127,7 @@ function usageReport(windowDays = 30) {
   const records = logExists ? parseUsageLog(read(USAGE_LOG)) : [];
   const summary = summarizeUsage(records, { windowDays, commands: universe });
   return {
-    enabledNow: process.env.BRAIN_USAGE_LOG === '1',
+    enabledNow: usageLogEnabled(),
     logExists,
     ...summary
   };
@@ -358,7 +358,7 @@ if (!jsonOut) {
         (usage.neverUsed.length ? `; never used (${usage.neverUsed.length}): ${usage.neverUsed.slice(0, 8).join(', ')}${usage.neverUsed.length > 8 ? ', …' : ''}` : '')
     );
   } else if (usage.enabledNow) {
-    console.log('Usage ledger (#32): BRAIN_USAGE_LOG=1 but no invocations recorded yet.');
+    console.log('Usage ledger (#32): on, but no invocations recorded yet.');
   }
 }
 
