@@ -42,20 +42,30 @@ export async function loadTsSemanticContext(root, indexableFiles) {
   const core = await createBrainProgram(root, indexableFiles);
   if (!core) return null;
   const { ts, program, checker, rootNorm, indexable } = core;
-  const byRel = new Map();
+  const sourceByRel = new Map();
   for (const sf of program.getSourceFiles()) {
     if (sf.fileName.includes(`${path.sep}node_modules${path.sep}`)) continue;
     const rel = posixPath(path.relative(rootNorm, sf.fileName));
-    if (!indexable.has(rel)) continue;
-    try {
-      byRel.set(rel, analyzeSourceFile(ts, program, checker, sf, rootNorm));
-    } catch (error) {
-      console.warn(`Project Brain: TS graph skipped for ${rel}: ${error.message || error}`);
-    }
+    if (indexable.has(rel)) sourceByRel.set(rel, sf);
   }
+  // Analysed on first ask, not up front: an incremental index chunks a
+  // handful of changed files, and analysing all ~4k source files of a real
+  // repo for them was most of the cost.
+  const analysed = new Map();
   return {
     get(relPath) {
-      return byRel.get(relPath) || null;
+      if (analysed.has(relPath)) return analysed.get(relPath);
+      const sf = sourceByRel.get(relPath);
+      let result = null;
+      if (sf) {
+        try {
+          result = analyzeSourceFile(ts, program, checker, sf, rootNorm);
+        } catch (error) {
+          console.warn(`Project Brain: TS graph skipped for ${relPath}: ${error.message || error}`);
+        }
+      }
+      analysed.set(relPath, result);
+      return result;
     }
   };
 }
