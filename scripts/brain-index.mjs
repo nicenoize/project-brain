@@ -100,17 +100,26 @@ if (fleetMode) {
 }
 
 const indexableSet = new Set(files);
-let tsContext = null;
-try {
-  // In fleet mode, ts-graph is invoked per-project lazily by brain:impact
-  // when --cross-project is requested. The single-program initial load only
-  // makes sense for a single tsconfig root.
-  if (!fleetMode) {
-    tsContext = await loadTsSemanticContext(ROOT, indexableSet);
-    if (tsContext) console.log('Project Brain: TypeScript semantic graph enabled for indexing.');
-  }
-} catch (error) {
-  console.warn(`Project Brain: TS graph disabled (${error.message || error}).`);
+// The TypeScript program is built on the first JS/TS file this run actually
+// chunks, not at start-up. Building it (plus analysing every source file) took
+// 52 s and +564 MB on club-ops, on every sync, including syncs that only
+// touched markdown. In fleet mode, ts-graph is invoked per-project lazily by
+// brain:impact when --cross-project is requested; the single-program load only
+// makes sense for a single tsconfig root.
+const TS_SOURCE_RE = /\.[cm]?[jt]sx?$/;
+let tsContextLoad = null;
+function tsContextFor(file) {
+  if (fleetMode || !TS_SOURCE_RE.test(file)) return null;
+  tsContextLoad ||= loadTsSemanticContext(ROOT, indexableSet)
+    .then((ctx) => {
+      if (ctx) console.log('Project Brain: TypeScript semantic graph enabled for indexing.');
+      return ctx;
+    })
+    .catch((error) => {
+      console.warn(`Project Brain: TS graph disabled (${error.message || error}).`);
+      return null;
+    });
+  return tsContextLoad;
 }
 const fileSet = new Set(files);
 const currentHashes = new Map();
@@ -169,7 +178,7 @@ for (const file of changedFiles) {
   const stat = fs.statSync(path.join(ROOT, file));
   const doc = parseDoc(file, content);
   if (truthyFrontmatter(doc.data.noindex)) continue;
-  const chunks = await dispatchChunker(file, doc.body, doc.data, { tsContext });
+  const chunks = await dispatchChunker(file, doc.body, doc.data, { tsContext: await tsContextFor(file) });
   // Per-file inferred metadata is identical across this file's chunks; compute
   // once and reuse for both the record build and the contextual situating.
   const fileModule = inferModule(file, doc.data);
