@@ -787,18 +787,36 @@ function splitList(value) {
   return String(value).split(/[,\n]/).map(item => item.trim()).filter(Boolean);
 }
 
+// Both git reads run on every retrieve(). In a long-lived reader (the MCP
+// server, eval) that is two subprocesses per query for state that changes on
+// human time, so they are memoised for a few seconds. A one-shot CLI calls
+// each once either way.
+const GIT_CONTEXT_TTL_MS = 5000;
+const gitMemo = new Map();
+function memoGit(key, compute, now = Date.now()) {
+  const hit = gitMemo.get(key);
+  if (hit && now - hit.at < GIT_CONTEXT_TTL_MS && now >= hit.at) return hit.value;
+  const value = compute();
+  gitMemo.set(key, { at: now, value });
+  return value;
+}
+
 function gitBranch() {
-  try { return execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
-  catch { return ''; }
+  return memoGit(`branch:${process.cwd()}`, () => {
+    try { return execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
+    catch { return ''; }
+  });
 }
 
 function gitChangedFiles() {
-  try {
-    return execSync('git status --porcelain', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-      .split('\n')
-      .filter(Boolean)
-      .map(line => line.slice(3).trim());
-  } catch {
-    return [];
-  }
+  return memoGit(`status:${process.cwd()}`, () => {
+    try {
+      return execSync('git status --porcelain', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        .split('\n')
+        .filter(Boolean)
+        .map(line => line.slice(3).trim());
+    } catch {
+      return [];
+    }
+  }).slice();
 }
