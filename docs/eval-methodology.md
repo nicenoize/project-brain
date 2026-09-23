@@ -126,7 +126,7 @@ experiments ran with ~16% dead weight in the denominator.
 The retrieval eval above answers *relevance* ("did ranking get better?"). It says
 nothing about **cost**: how many tokens the brain injects into a real session, and
 how often each command is actually run. Those are a separate instrument — the
-**usage ledger** (`.project-brain/.usage.jsonl`, gated by `BRAIN_USAGE_LOG=1`, one
+**usage ledger** (`.project-brain/.usage.jsonl`, on by default since 2026-09, `BRAIN_USAGE_LOG=0` opts out, one
 JSONL line per `brain:*` invocation) plus the context-footprint audit in
 `brain:health --json`. Ranking stays eval-gated; footprint/usage stays ledger-gated.
 Two instruments, no overlap.

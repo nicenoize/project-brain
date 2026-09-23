@@ -611,15 +611,32 @@ export function cosine(a, b) {
 }
 
 // --- Usage ledger (issue #32) -----------------------------------------------
-// A QUANTITY/footprint instrument, distinct from #28's quality events. Gated
-// behind BRAIN_USAGE_LOG=1: zero writes and zero overhead when off. Append-only,
-// fail-silent, sidecar — it must never break or slow a command.
+// A QUANTITY/footprint instrument, distinct from #28's quality events. On by
+// default (usageLogEnabled); BRAIN_USAGE_LOG=0 means zero writes and zero
+// overhead. Append-only, fail-silent, sidecar — it must never break or slow a
+// command.
+
+/**
+ * Size at which the ledger drops its older half. Default-on means the ambient
+ * hooks append a line per edit; ~100 B a line and a few hundred a day would
+ * grow without end. 1 MB holds roughly a quarter of a year of heavy use, which
+ * is more than the 30-day window the report reads.
+ */
+export const USAGE_LOG_MAX_BYTES = 1024 * 1024;
 
 /** Append one usage record as a JSONL line. Fail-silent, append-only, sidecar. */
-export function appendUsageRecord(record, logPath = USAGE_LOG) {
+export function appendUsageRecord(record, logPath = USAGE_LOG, maxBytes = USAGE_LOG_MAX_BYTES) {
   try {
     ensureDir(path.dirname(logPath));
     fs.appendFileSync(logPath, JSON.stringify(record) + '\n');
+    try {
+      if (fs.statSync(logPath).size > maxBytes) {
+        const lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
+        const tmp = `${logPath}.tmp.${process.pid}`;
+        fs.writeFileSync(tmp, lines.slice(Math.floor(lines.length / 2)).join('\n') + '\n');
+        fs.renameSync(tmp, logPath);
+      }
+    } catch { /* trimming is housekeeping; the record is already written */ }
     return true;
   } catch {
     // The ledger is measurement, never load-bearing — swallow all I/O errors.
@@ -628,6 +645,21 @@ export function appendUsageRecord(record, logPath = USAGE_LOG) {
 }
 
 let usageInstrumented = false;
+
+/**
+ * The ledger is ON by default since 2026-09 (opt out: BRAIN_USAGE_LOG=0).
+ * Opt-in never collected anything: after a month the only ledger in any repo
+ * held one line, so "which of the ~48 commands is anyone using" had no answer
+ * and the planned 30-day kill list could not be drawn up. What it records is
+ * local and gitignored: the command name, exit code, stdout byte count and
+ * duration. No arguments, no output, no paths. It stays off under the test
+ * runner, so fixtures never grow a ledger.
+ */
+export function usageLogEnabled(env = process.env) {
+  if (env.BRAIN_USAGE_LOG === '0') return false;
+  if (env.BRAIN_USAGE_LOG === '1') return true;
+  return !env.NODE_TEST_CONTEXT;
+}
 
 /**
  * THE single choke point. When BRAIN_USAGE_LOG=1, instrument the current
@@ -640,7 +672,7 @@ let usageInstrumented = false;
  * (so embed/aggregate workers and test runners are never logged as commands).
  */
 export function instrumentUsage(argv = process.argv) {
-  if (process.env.BRAIN_USAGE_LOG !== '1') return false;
+  if (!usageLogEnabled()) return false;
   if (usageInstrumented) return false;
   const cmd = usageCmdFromScript(argv && argv[1]);
   if (!cmd) return false;
@@ -672,7 +704,7 @@ export function instrumentUsage(argv = process.argv) {
   return true;
 }
 
-// Arm the ledger at import time (the choke point). No-op unless BRAIN_USAGE_LOG=1.
+// Arm the ledger at import time (the choke point). On by default; BRAIN_USAGE_LOG=0 opts out.
 instrumentUsage();
 
 // Arm the friction sensors at import time (issue #28) — the QUALITY-event
