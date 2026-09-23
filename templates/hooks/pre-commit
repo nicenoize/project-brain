@@ -17,8 +17,12 @@ npm run brain:guard
 # indexer processes that each consume ~60% CPU + thrash the on-disk
 # Lance table; the dev server starves. Single in-flight indexer is
 # enough — it picks up every change in the next sweep.
-if pgrep -f "skills/project-brain/scripts/brain-index\.mjs" >/dev/null 2>&1; then
+# --no-block: a commit never waits for the indexer, not even for a small
+# code change (that used to run a model load + index in the foreground).
+# The pattern matches both the vendored (skills/project-brain/scripts/) and
+# the in-repo (scripts/) layout; the old one missed the latter.
+if pgrep -f "scripts/brain-index\.mjs" >/dev/null 2>&1; then
   echo "Brain sync already in flight; skipping spawn (will be picked up on next sweep)."
 else
-  BRAIN_BACKGROUND=1 npm run brain:sync || true
+  BRAIN_BACKGROUND=1 npm run brain:sync -- --no-block || true
 fi

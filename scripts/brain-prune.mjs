@@ -178,10 +178,18 @@ function runCaveman(filePath) {
   }
 }
 
-function maybeSync() {
+// This runs from the Stop hook, i.e. after EVERY agent turn. It used to be a
+// blocking `npm run brain:sync`: npm + node startup, a sha256 over every
+// indexable file and, for a small code change, a foreground model load and
+// index — all before the agent could continue. Now: node directly, never
+// blocking, and a near-free no-op (--if-stale) unless the PostToolUse hook
+// staged edits or this run archived bullets.
+function maybeSync(moved) {
   if (!APPLY) return
+  const syncScript = new URL('./brain-sync.mjs', import.meta.url).pathname
+  const args = moved > 0 ? [syncScript, '--no-block'] : [syncScript, '--if-stale', '--no-block']
   try {
-    execFileSync('npm', ['run', 'brain:sync'], { cwd: ROOT, stdio: 'inherit' })
+    execFileSync(process.execPath, args, { cwd: ROOT, stdio: 'inherit' })
   } catch {
     log('brain:sync failed — run manually with `npm run brain:sync`')
   }
@@ -195,7 +203,7 @@ function main() {
     runCaveman(ACTIVE)
     runCaveman(join(BRAIN, 'context_index.md'))
   }
-  maybeSync()
+  maybeSync(moved)
 }
 
 main()
