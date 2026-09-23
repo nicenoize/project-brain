@@ -472,3 +472,32 @@ test('LanceStore.getAll({ vectors: false }): every field but the vector', async 
   assert.equal(mirror.records.length, 1);
   assert.equal(mirror.records[0].text, 'alpha');
 });
+
+test('filterIsActive: only a set key can reject a record', async () => {
+  const { filterIsActive, matchesFilter } = await import('../scripts/store.mjs');
+  for (const f of [{}, null, undefined, { type: '', file: undefined, summaryOnly: false }]) {
+    assert.equal(filterIsActive(f), false, JSON.stringify(f));
+    assert.equal(matchesFilter(record('x', [1]), f || {}), true, 'an inactive filter rejects nothing');
+  }
+  assert.equal(filterIsActive({ type: 'code' }), true);
+  assert.equal(filterIsActive({ summaryOnly: true }), true);
+  assert.equal(filterIsActive({ type: [] }), true, 'an empty type list rejects everything, so it is active');
+});
+
+test('LanceStore.search: unfiltered top-k equals the old over-fetched top-k', async (t) => {
+  const lancedb = await lanceOrSkip(t);
+  if (!lancedb) return;
+  const { LanceStore } = await import('../scripts/store.mjs');
+  const dir = tmpDir();
+  const store = await lanceStoreAt(LanceStore, lancedb, dir).open();
+  const rows = [];
+  for (let i = 0; i < 60; i++) rows.push(record(`r${i}`, [Math.cos(i / 10), Math.sin(i / 10), (i % 7) / 7, 0.1]));
+  await store.upsert(rows);
+  const q = [1, 0.2, 0.3, 0.1];
+  const exact = await store.search(q, 5, {});
+  const table = await store.openTable();
+  const overFetched = (await table.search(q).limit(50).toArray()).slice(0, 5).map(r => r.id);
+  assert.deepEqual(exact.map(r => r.id), overFetched);
+  const filtered = await store.search(q, 3, { file: 'r7.md' });
+  assert.deepEqual(filtered.map(r => r.id), ['r7'], 'a filter still over-fetches and finds its row');
+});
