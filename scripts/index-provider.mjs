@@ -55,8 +55,28 @@ export async function getIndexProvider(options = {}) {
   return builtinProvider(embedder);
 }
 
-/** Today's semantic stack: embed the query, hit the store, hybrid-rescore. */
+/**
+ * Today's semantic stack: embed the query, hit the store, hybrid-rescore.
+ *
+ * The store is opened once per provider and reused across searches. Opening
+ * one per search threw away retrieval.mjs's per-store corpus cache (a WeakMap
+ * keyed on the store object) on every call, so the MCP server — the one
+ * long-lived caller — rebuilt the BM25 corpus for every query. A search never
+ * writes, so there is nothing to close; the Lance store reopens its table
+ * itself when another process commits (LanceStore#tableSignature).
+ */
 function builtinProvider(embedder) {
+  const stores = new Map();
+  const storeFor = (model, dims) => {
+    const key = `${model}|${dims}`;
+    if (!stores.has(key)) {
+      const opening = openStore({ model, dims });
+      // A failed open must not poison the cache for the rest of the process.
+      opening.catch(() => stores.delete(key));
+      stores.set(key, opening);
+    }
+    return stores.get(key);
+  };
   return {
     name: 'builtin',
     modelName: embedder.modelName,
@@ -66,10 +86,7 @@ function builtinProvider(embedder) {
       return runIndexScript(opts);
     },
     async search(query, opts = {}) {
-      const store = await openStore({
-        model: opts.model || embedder.modelName,
-        dims: opts.dims || embedder.dims
-      });
+      const store = await storeFor(opts.model || embedder.modelName, opts.dims || embedder.dims);
       try {
         const results = await retrieve(query, store, embedder, opts);
         return { results, warning: '' };
@@ -80,8 +97,6 @@ function builtinProvider(embedder) {
           return lexicalSearch(query, opts);
         }
         throw error;
-      } finally {
-        try { await store.close(); } catch { /* mirror flush is best-effort */ }
       }
     }
   };
