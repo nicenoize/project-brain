@@ -82,7 +82,12 @@ const dryRun = args.includes('--dry-run');
 // hook — clean tree ⇒ instant exit, no listIndexableFiles hash-scan. When the
 // dirty list is non-empty the normal hash-diff sync runs and drains it.
 const ifStale = args.includes('--if-stale');
-const allowBackground = process.env.BRAIN_BACKGROUND === '1';
+// --no-block: for hooks. A hook sits between the developer and their next
+// action (a commit, the agent's next turn), so a sync there must never run the
+// indexer in the foreground — not even for "only 3 code files", which still
+// means a model load and a table scan while the commit waits.
+const noBlock = args.includes('--no-block');
+const allowBackground = process.env.BRAIN_BACKGROUND === '1' || noBlock;
 
 if (isFastMode() && !force) {
   console.log('Project Brain sync: fast mode skip (BRAIN_FAST=1).');
@@ -135,7 +140,7 @@ if (!changed.length && !deleted.length && !force) {
   process.exit(0);
 }
 
-const decision = decideSync(changed, deleted, { force });
+const decision = decideSync(changed, deleted, { force, noBlock });
 console.log(`Project Brain sync: ${decision.action} — ${decision.reason} (changed=${changed.length}, deleted=${deleted.length})`);
 
 if (dryRun) {
@@ -239,5 +244,6 @@ function decideSync(changedFiles, deletedFiles, opts = {}) {
   if (counts.code > 10) {
     return { action: 'background', reason: `${counts.code} code files changed (>10)` };
   }
+  if (opts.noBlock) return { action: 'background', reason: `${counts.code} code file(s), --no-block` };
   return { action: 'foreground', reason: `${counts.code} code file(s)` };
 }

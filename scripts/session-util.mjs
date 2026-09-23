@@ -115,3 +115,22 @@ export function buildSessionMarkdown({ branch, taskId, actor, tool, parentRun, c
   ];
   return lines.join('\n');
 }
+
+/** Minimum gap between two `stop`-triggered auto-compact snapshots on one branch. */
+export const AUTO_COMPACT_STOP_DEBOUNCE_MS = 30 * 60 * 1000;
+
+/**
+ * PURE. Whether a `stop`-hook snapshot can be skipped because this branch got
+ * one recently. Cursor's `stop` fires after EVERY agent turn, and each snapshot
+ * is a full brain:pack (embedder load + search) — this repo holds snapshots
+ * written minutes apart. A resume slice from 20 minutes ago serves a resume
+ * as well as one from 20 seconds ago. `preCompact` is never debounced: that is
+ * the moment the context is actually about to be lost.
+ *
+ * @param {{name: string, mtimeMs: number}[]} entries  files in the sessions dir
+ */
+export function recentAutoCompact(entries, branchSlug, now, windowMs = AUTO_COMPACT_STOP_DEBOUNCE_MS) {
+  const prefix = `${branchSlug}__auto-compact__`;
+  return (entries || []).some((e) => e.name.startsWith(prefix) && e.name.endsWith('.md')
+    && now - e.mtimeMs >= 0 && now - e.mtimeMs < windowMs);
+}
