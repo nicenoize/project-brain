@@ -190,3 +190,60 @@ test('retrieve with dense:false never touches the embedder or the vector index',
   assert.equal(hits[0].denseScore, 0);
   assert.ok(!hits.some(h => h.file === 'money.md'), 'no BM25 match, not in the lexical pool');
 });
+
+test('identifierParts: camelCase, acronyms, snake/kebab/path — plain words add nothing', async () => {
+  const { identifierParts } = await import('../scripts/retrieval.mjs');
+  assert.deepEqual(identifierParts('getUserSession'), ['get', 'user', 'session']);
+  assert.deepEqual(identifierParts('HTTPServer'), ['http', 'server']);
+  assert.deepEqual(identifierParts('brain_search-index'), ['brain', 'search', 'index']);
+  assert.deepEqual(identifierParts('plain words only'), []);
+});
+
+test('lexicalTokens: identifier parts only with the split flag', async () => {
+  const { lexicalTokens } = await import('../scripts/retrieval.mjs');
+  assert.deepEqual(lexicalTokens('getUserSession', { split: false }), ['getusersession']);
+  assert.deepEqual(lexicalTokens('getUserSession', { split: true }), ['getusersession', 'get', 'user', 'session']);
+});
+
+test('expandQueryTokens: only tokens that exist in the corpus vocabulary, capped, deterministic', async () => {
+  const { expandQueryTokens, tokenize } = await import('../scripts/retrieval.mjs');
+  const df = new Map(['validate', 'validation', 'notification', 'usersession', 'plan', 'shifts'].map(t => [t, 1]));
+  const q = tokenize('validating notifications user session planning shift');
+  const added = expandQueryTokens(q, df);
+  assert.deepEqual(added, ['validate', 'validation', 'notification', 'plan', 'shifts', 'usersession']);
+  for (const t of added) assert.ok(df.has(t), `${t} is in the vocabulary`);
+  assert.deepEqual(expandQueryTokens(q, new Map()), [], 'nothing in the vocabulary → nothing added');
+  assert.equal(expandQueryTokens(q, df, { max: 2 }).length, 2);
+  assert.deepEqual(expandQueryTokens(q, df), added, 'same input, same expansion');
+  assert.deepEqual(expandQueryTokens(['brain_search', 'v2'], new Map([['brain_searches', 1]])), [],
+    'identifiers and short tokens are left alone');
+});
+
+test('retrieve: BRAIN_QUERY_EXPAND off is byte-identical; on, a word-form variant finds its record', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { retrieve } = await import('../scripts/retrieval.mjs');
+  const { JsonStore, normalizeRecord } = await import('../scripts/store.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-expand-'));
+  const store = new JsonStore({ path: path.join(dir, 'idx.json') });
+  await store.upsert([
+    normalizeRecord({ id: 'v', file: 'validate.mjs', text: 'validation of payloads', vector: [0, 1] }),
+    normalizeRecord({ id: 'm', file: 'money.mjs', text: 'rounding money in cents', vector: [0, 1] })
+  ]);
+  const embedder = { embed: async () => [0, 1] };
+  const prevQuiet = process.env.BRAIN_QUIET;
+  process.env.BRAIN_QUIET = '1';
+  try {
+    const trace = {};
+    const off = await retrieve('validating', store, embedder, { dense: false, topK: 5, trace });
+    assert.deepEqual(trace.expansion, []);
+    assert.equal(off.length, 0, 'no word-form match without expansion');
+    const traceOn = {};
+    const on = await retrieve('validating', store, embedder, { dense: false, topK: 5, queryExpand: true, trace: traceOn });
+    assert.deepEqual(traceOn.expansion, ['validate', 'validation'], 'both are in the vocabulary (file name + text)');
+    assert.equal(on[0].file, 'validate.mjs');
+  } finally {
+    if (prevQuiet === undefined) delete process.env.BRAIN_QUIET; else process.env.BRAIN_QUIET = prevQuiet;
+  }
+});
