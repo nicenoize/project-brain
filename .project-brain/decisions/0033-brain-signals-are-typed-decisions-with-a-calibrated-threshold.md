@@ -62,3 +62,19 @@ it acts; below it, it holds back. Silence is a valid output.
   different defect rhythm should re-run `health-calibrate` and set
   `BRAIN_ANSWER_DANGER_MIN` accordingly, until per-repo calibration from the
   log replaces the constant.
+
+## Follow-up: the calibration exists (2026-09-23)
+
+`project-brain x intel calibrate-signals` (`calibrateDecisions` in
+`scripts/decision.mjs`) joins the log with git. Each (signal, target,
+session) counts once, and only after its horizon has passed. It reports the
+hit rate of emitted vs held-back decisions, the lift between them, and
+value quartiles.
+
+- danger is "right" if a LATER fix or revert touches the file within 7 days.
+  The first commit after the warning is skipped because it is the change the
+  agent was making; otherwise every bug fix would confirm its own warning.
+- co-change is "right" if the partner file is committed within 2 days. It is
+  not gated, so the verdict points at the quartiles to choose a threshold
+  from.
+- Nothing is reported as evidence below 10 decisions per side.
