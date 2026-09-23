@@ -30,6 +30,7 @@ import {
   staleIndexFromRecords, isFastMode
 } from './common.mjs';
 import { noteFriction } from './friction.mjs';
+import { BUDGETS } from './footprint.mjs';
 
 const CONTEXT_INDEX = path.join(BRAIN_DIR, 'context_index.md');
 const JSON_INDEX = path.join(BRAIN_DIR, 'search_index.json');
@@ -438,10 +439,10 @@ export function renderHookText(result) {
   return lines.join('\n');
 }
 
-// Hard cap on the TEXT the hook injects (decisions/0024). A safety net, not a
-// behaviour change — measured payloads are ~10× under this. The cap applies to
-// the injected text BEFORE JSON.stringify, so the envelope always stays valid.
-export const HOOK_MAX_BYTES_DEFAULT = 4000;
+// Hard cap on the TEXT the hook injects (decisions/0024), from the CI-enforced
+// BUDGETS (footprint.mjs). The cap applies to the injected text BEFORE
+// JSON.stringify, so the envelope always stays valid.
+export const HOOK_MAX_BYTES_DEFAULT = BUDGETS.routeHookBytes;
 const TRUNC_NOTE = '\n… truncated — run npm run brain:route';
 
 function hookMaxBytes() {

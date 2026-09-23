@@ -43,6 +43,7 @@ import { ROOT, atomicWrite, takeFlag, takeOption } from './common.mjs';
 import { BUDGETS } from './footprint.mjs';
 import { gitLogArgs, parseLog, fileHealth, coChange } from './git-intel.mjs';
 import { applyRules, scoreChange } from './brain-route.mjs';
+import { gateDanger, DANGER_EMIT_MIN } from './decision.mjs';
 // Doc-Navigator matching, reused VERBATIM from /api/why so the ambient answer
 // and the Control Room can never disagree about which ADR governs a file.
 // brain-serve.mjs is import-side-effect-free (isMain guard, asserted by its own
@@ -211,8 +212,15 @@ export function foreignLeases(files = [], leases = [], { actor = '', now = 0 } =
 // Pure renderer + budget
 // ---------------------------------------------------------------------------
 
-/** PURE. Section lines, keyed and already in truncation-priority order. */
-function renderSections(inputs = {}) {
+/**
+ * PURE. Section lines, keyed and already in truncation-priority order.
+ *
+ * `inputs.gate` (the ambient hook sets it; the CLI does not, because someone
+ * who asks explicitly gets everything) holds the decision thresholds. Each
+ * gated signal is pushed onto `decisions`, emitted or held back, so the hook
+ * can record both sides (scripts/decision.mjs).
+ */
+function renderSections(inputs = {}, decisions = []) {
   const files = (inputs.files || []).map(relPath).filter(Boolean);
   const now = Number(inputs.now) || 0;
 
@@ -234,7 +242,23 @@ function renderSections(inputs = {}) {
     sections.push({ key: 'leases', lines, data: leases });
   }
 
-  if (danger) {
+  let showDanger = Boolean(danger);
+  if (danger && inputs.gate) {
+    const verdict = gateDanger(danger, inputs.gate.dangerMin ?? DANGER_EMIT_MIN);
+    decisions.push({ signal: 'answer.danger', target: danger.file, value: danger.score,
+      action: verdict.action, threshold: inputs.gate.dangerMin ?? DANGER_EMIT_MIN, reason: verdict.reason });
+    showDanger = verdict.action === 'emit';
+  }
+  if (inputs.gate) {
+    // Not gated yet — no calibration exists for co-change confidence. Logged so
+    // that one can be derived (ADR 0033), instead of guessing a cut-off now.
+    for (const p of partners) {
+      decisions.push({ signal: 'answer.partner', target: p.file, value: p.confidence,
+        action: 'emit', threshold: null, reason: `together ${p.together}` });
+    }
+  }
+
+  if (showDanger) {
     const ev = danger.factor ? ` — ${clip(danger.factor.evidence, MAX_EVIDENCE_CHARS)}` : '';
     const lc = danger.lowConfidence ? ' (low confidence: thin history)' : '';
     sections.push({
@@ -276,7 +300,8 @@ export function buildAnswer(inputs = {}, opts = {}) {
     ? Math.floor(opts.budgetBytes)
     : answerBudgetBytes();
 
-  const sections = renderSections(inputs);
+  const decisions = [];
+  const sections = renderSections(inputs, decisions);
   const lines = [];
   const dropped = [];
   const kept = {};
@@ -305,7 +330,16 @@ export function buildAnswer(inputs = {}, opts = {}) {
     }
   }
 
-  return { lines, truncated: dropped.length > 0, dropped, sections: kept, bytes: used, budgetBytes: budget };
+  // A decision marked 'emit' whose section the budget then dropped was not
+  // seen by anyone — record it as held back, or calibration would credit a
+  // warning that never reached the agent.
+  const shown = new Set(Object.keys(kept));
+  for (const d of decisions) {
+    const key = d.signal === 'answer.danger' ? 'danger' : d.signal === 'answer.partner' ? 'partners' : null;
+    if (d.action === 'emit' && key && !shown.has(key)) { d.action = 'log'; d.reason = `${d.reason}; dropped by budget`; }
+  }
+
+  return { lines, truncated: dropped.length > 0, dropped, sections: kept, bytes: used, budgetBytes: budget, decisions };
 }
 
 /** PURE. Rendered text for an answer (empty when there is nothing to say). */
@@ -518,8 +552,9 @@ export async function collectAnswerInputs(files, { root = ROOT, now = Date.now()
 }
 
 /** One-call convenience used by both the CLI and the hook wrapper. */
-export async function answerFor(files, { root = ROOT, now = Date.now(), budgetBytes, actor } = {}) {
+export async function answerFor(files, { root = ROOT, now = Date.now(), budgetBytes, actor, gate = null } = {}) {
   const inputs = await collectAnswerInputs(files, { root, now, actor });
+  if (gate) inputs.gate = gate;
   return { inputs, answer: buildAnswer(inputs, { budgetBytes }) };
 }
 
