@@ -16,7 +16,7 @@ import { BRAIN_DIR, ROOT, ensureDir, read, sha256, slugify, write, takeOption } 
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
 import { packPrompt } from './brain-pack.mjs';
-import { newSessionFilePath, readSessionMeta, sessionTimestampSlug } from './session-util.mjs';
+import { newSessionFilePath, readSessionMeta, sessionTimestampSlug, recentAutoCompact, AUTO_COMPACT_STOP_DEBOUNCE_MS } from './session-util.mjs';
 
 const DEFAULT_QUERY =
   'Resume workstream: goals, architecture, open decisions, next concrete implementation steps, key file paths and symbols.';
@@ -145,6 +145,14 @@ async function main() {
   const branchSlug = slugify(branch);
   const sessionsDir = path.join(BRAIN_DIR, 'sessions');
   ensureDir(sessionsDir);
+
+  if (cursorHook && trigger === 'stop') {
+    const windowMs = Number(process.env.BRAIN_COMPACT_STOP_DEBOUNCE_MS ?? AUTO_COMPACT_STOP_DEBOUNCE_MS);
+    const entries = fs.readdirSync(sessionsDir).map((name) => {
+      try { return { name, mtimeMs: fs.statSync(path.join(sessionsDir, name)).mtimeMs }; } catch { return { name, mtimeMs: 0 }; }
+    });
+    if (windowMs > 0 && recentAutoCompact(entries, branchSlug, Date.now(), windowMs)) return;
+  }
 
   const packed = await packPrompt(query, {
     maxTokens,
