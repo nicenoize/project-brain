@@ -49,6 +49,13 @@ export const BUDGETS = {
   // digest above. 700 B ≈ 175 tok. Enforced by tests/brain-answer.test.mjs;
   // BRAIN_ANSWER_BUDGET_BYTES overrides it per process.
   answerBytes: 700,
+  // The prompt-time route hook (brain-route.mjs --hook): SessionStart AND every
+  // UserPromptSubmit whose state changed. Its worst case is three
+  // recommendations plus header and footer, about 1 kB, while measured
+  // payloads sit near 400 B. Until 2026-09 its only cap was a local 4000 B
+  // constant that no test enforced, four times what it can legitimately
+  // produce and the largest per-prompt allowance the brain had.
+  routeHookBytes: 1500,
 
   // --- LATENCY budgets (milliseconds) -------------------------------------
   // The byte budgets above are exact: a file either is or is not 12001 bytes.

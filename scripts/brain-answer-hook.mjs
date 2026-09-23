@@ -39,6 +39,7 @@ import { fileURLToPath } from 'node:url';
 import { BRAIN_DIR, ROOT, exists, read, atomicWrite, sha256 } from './common.mjs';
 import { buildPreToolPayload } from './brain-route-tool.mjs';
 import { answerFor, renderAnswer, answerBudgetBytes } from './brain-answer.mjs';
+import { dangerEmitMin, decisionRecord, logDecisions } from './decision.mjs';
 
 /** Short banner so the agent knows WHY this text appeared mid-turn. Counted against the budget. */
 export const ANSWER_HEADER = 'Project Brain (ambient, deterministic) — before you edit:';
@@ -149,20 +150,23 @@ async function main() {
     // budget — the whole injected string stays ≤ BUDGETS.answerBytes.
     const headerBytes = Buffer.byteLength(`${ANSWER_HEADER}\n`, 'utf8');
     const budgetBytes = Math.max(1, answerBudgetBytes() - headerBytes);
-    const { inputs, answer } = await answerFor(files, { root: ROOT, now, budgetBytes });
+    const { inputs, answer } = await answerFor(files, { root: ROOT, now, budgetBytes, gate: { dangerMin: dangerEmitMin() } });
+    const sessionId = String(envelope.session_id || envelope.sessionId || '');
+    const record = () => logDecisions((answer.decisions || []).map((d) => decisionRecord({ ...d, session: sessionId, ts: new Date(now).toISOString() })));
     const body = renderAnswer(answer);
-    if (!body) return 0;                                   // nothing notable → stay quiet
+    if (!body) { record(); return 0; }                     // nothing notable → stay quiet (held-back signals still logged)
 
     const text = `${ANSWER_HEADER}\n${body}`.trimEnd();
 
     if (process.env.BRAIN_ANSWER_DEDUPE !== '0') {
-      const sessionId = String(envelope.session_id || envelope.sessionId || '');
       const fileKey = (inputs.files || []).join(',') || files.join(',');
       const hash = sha256(text).slice(0, 16);
       const state = readHookState();
+      // Already shown this session: logged the first time, not again.
       if (!shouldEmitAnswer(state, { sessionId, fileKey, hash, now })) return 0;
       writeHookStatePatch({ answerNudges: recordAnswer(state?.answerNudges, { sessionId, fileKey, hash, now }) });
     }
+    record();
 
     const payload = buildPreToolPayload(text);
     if (payload) process.stdout.write(payload);
