@@ -91,13 +91,15 @@ test('retrieve: with BRAIN_GRAPH_EXPAND=1 a structurally-adjacent record surface
   // OFF: only dense candidates are scored. declarer (vector [0,1]) still comes
   // back from search() since the fake store returns all, so to prove the
   // additive bonus matters we compare ranks. First assert OFF baseline.
-  const off = await retrieve('Foo', store, embedder, { topK: 3, candidates: 2 });
+  // lexicalUnion:false isolates graph expansion — the union is on by default
+  // and would pull `declarer` in lexically, hiding what this test measures.
+  const off = await retrieve('Foo', store, embedder, { topK: 3, candidates: 2, lexicalUnion: false });
   const offIds = off.map(r => r.id);
   assert.ok(!offIds.includes('declarer'), `OFF: declarer should be outside the candidate window, got: ${offIds.join(',')}`);
 
   process.env.BRAIN_GRAPH_EXPAND = '1';
   try {
-    const on = await retrieve('Foo', store, embedder, { topK: 3, candidates: 2 });
+    const on = await retrieve('Foo', store, embedder, { topK: 3, candidates: 2, lexicalUnion: false });
     const onIds = on.map(r => r.id);
     assert.ok(onIds.includes('declarer'), `ON: declarer should surface via graph expansion, got: ${onIds.join(',')}`);
   } finally {
@@ -105,7 +107,7 @@ test('retrieve: with BRAIN_GRAPH_EXPAND=1 a structurally-adjacent record surface
   }
 });
 
-test('retrieve: flag OFF does not call getAll (no perf regression) and is unchanged', async () => {
+test('retrieve: neither graph expansion nor the lexical union off means no corpus read', async () => {
   const { records, embedder } = makeFixture();
   let getAllCalls = 0;
   const store = {
@@ -118,8 +120,8 @@ test('retrieve: flag OFF does not call getAll (no perf regression) and is unchan
     async getAll() { getAllCalls++; return records; }
   };
   delete process.env.BRAIN_GRAPH_EXPAND;
-  const result = await retrieve('Foo', store, embedder, { topK: 3, candidates: 2 });
-  assert.equal(getAllCalls, 0, 'getAll must not be called when the flag is off');
+  const result = await retrieve('Foo', store, embedder, { topK: 3, candidates: 2, lexicalUnion: false });
+  assert.equal(getAllCalls, 0, 'the dense-only path must never read the whole corpus');
   // Candidate window of 2 excludes declarer entirely.
   assert.ok(!result.map(r => r.id).includes('declarer'));
 });

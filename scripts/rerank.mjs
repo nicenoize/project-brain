@@ -17,7 +17,10 @@ let loaded = null;
 
 async function load(modelName) {
   if (!loaded || loaded.modelName !== modelName) {
-    if (!process.env.BRAIN_QUIET) console.log(`Loading rerank model: ${modelName}`);
+    // STDERR, like embed.mjs's banner: brain:eval documents stdout as pure
+    // JSON that pipes into brain:eval:compare. On stdout this line silently
+    // broke that pipe for every run with BRAIN_RERANK=1.
+    if (!process.env.BRAIN_QUIET) console.error(`Loading rerank model: ${modelName}`);
     const { AutoTokenizer, AutoModelForSequenceClassification } = await import('@xenova/transformers');
     const tokenizer = await AutoTokenizer.from_pretrained(modelName);
     const model = await AutoModelForSequenceClassification.from_pretrained(modelName, { quantized: true });
