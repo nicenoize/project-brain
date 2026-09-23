@@ -531,7 +531,11 @@ export class LanceStore extends BrainStore {
   async search(queryVec, topK, filter = {}) {
     const table = await this.openTable();
     if (!table) return [];
-    const query = table.search(queryVec).limit(topK * 10);
+    // Over-fetch only when rows will be filtered out afterwards. Unfiltered,
+    // the 10x pulled 960 rows (every column, vectors included) to keep 96 —
+    // ~4x the time of fetching 96 (340 vs 88 ms, best of 3) for the same exact
+    // top-k, since the flat search is exhaustive.
+    const query = table.search(queryVec).limit(filterIsActive(filter) ? topK * 10 : topK);
     const rows = await query.toArray();
     return rows
       .map(row => ({ ...normalizeRecord(row), score: toScore(row) }))
@@ -890,6 +894,11 @@ export function normalizeRecord(record) {
     changedFiles: stripLanceSentinel(normalizeList(record.changedFiles)),
     vector: decodeVector(record.vector)
   };
+}
+
+/** PURE. Whether matchesFilter() can reject anything — i.e. any filter key is set. */
+export function filterIsActive(filter = {}) {
+  return Object.values(filter || {}).some(Boolean);
 }
 
 export function matchesFilter(record, filter = {}) {
