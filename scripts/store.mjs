@@ -266,15 +266,50 @@ export class LanceStore extends BrainStore {
     this.lancedb = lancedb;
     this.dir = options.dir || LANCE_DIR;
     this.model = options.model || null;
-    this.mirror = new JsonStore(options);
+    this._mirrorOptions = options;
+    this._mirror = null;
     this.mirrorEnabled = options.mirror !== false && process.env.BRAIN_JSON_MIRROR !== '0';
-    // LanceDB owns the embeddings; the mirror records WHAT is indexed, not the
-    // numbers. Set BRAIN_JSON_MIRROR_VECTORS=1 to keep them (a fully portable
-    // snapshot that can serve similarity search on its own).
-    this.mirror.vectorsOwnedElsewhere = process.env.BRAIN_JSON_MIRROR_VECTORS !== '1';
     this.mirrorStrict = process.env.BRAIN_JSON_MIRROR_STRICT === '1';
     this.db = null;
     this.table = null;
+    this._tableSignature = null;
+    // Set by upsert/delete. close() rewrites the mirror only when this is set:
+    // it used to rewrite all of search_index.json (16 MB on this repo) at the
+    // end of EVERY search, so a read-only MCP query paid a full table read, a
+    // mirror parse and a 16 MB write — and the corpus cache never survived.
+    this.dirty = false;
+  }
+
+  /**
+   * The JSON mirror, built on first use. Constructing it parses the whole
+   * mirror file, which a search never needs — only writes, recovery and the
+   * close-time flush touch it.
+   */
+  get mirror() {
+    if (!this._mirror) {
+      this._mirror = new JsonStore(this._mirrorOptions);
+      // LanceDB owns the embeddings; the mirror records WHAT is indexed, not the
+      // numbers. Set BRAIN_JSON_MIRROR_VECTORS=1 to keep them (a fully portable
+      // snapshot that can serve similarity search on its own).
+      this._mirror.vectorsOwnedElsewhere = process.env.BRAIN_JSON_MIRROR_VECTORS !== '1';
+    }
+    return this._mirror;
+  }
+
+  /**
+   * Cheap fingerprint of the table's latest committed version: every Lance
+   * commit rewrites `_latest.manifest`. A long-lived holder (the MCP server)
+   * reopens the table when this moves, because an open Lance table does not
+   * see commits made by other processes (readConsistencyInterval is off by
+   * default) — without it a cached store would serve a frozen index.
+   */
+  tableSignature() {
+    try {
+      const st = fs.statSync(path.join(this.dir, `${TABLE_NAME}.lance`, '_latest.manifest'));
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return null;
+    }
   }
 
   async open() {
@@ -285,7 +320,9 @@ export class LanceStore extends BrainStore {
 
   async openTable() {
     await this.open();
-    if (this.table) return this.table;
+    const signature = this.tableSignature();
+    if (this.table && signature === this._tableSignature) return this.table;
+    this._tableSignature = signature;
     try {
       this.table = await this.db.openTable(TABLE_NAME);
     } catch {
@@ -319,7 +356,7 @@ export class LanceStore extends BrainStore {
   async upsert(records) {
     const normalized = records.map(normalizeRecord);
     if (!normalized.length) return;
-    await this.maybeMirrorUpsert(normalized);
+    this.dirty = true;
     await this.open();
     const forLance = normalized.map(padLanceListColumns);
     let table;
@@ -484,7 +521,7 @@ export class LanceStore extends BrainStore {
 
   async delete(ids) {
     if (!ids.length) return;
-    await this.maybeMirrorDelete(ids);
+    this.dirty = true;
     const table = await this.openTable();
     if (!table) return;
     const quoted = ids.map(id => `'${String(id).replace(/'/g, "''")}'`).join(', ');
@@ -503,7 +540,14 @@ export class LanceStore extends BrainStore {
       .slice(0, topK);
   }
 
-  async getAll() {
+  /**
+   * Every record. `{ vectors: false }` skips the vector column: 384 floats
+   * per row boxed into JS arrays is most of the bytes of a full read, and
+   * nearly every caller (summary rebuilds, the manifest, the mirror flush)
+   * only reads metadata and text. Rows come back with `vector: []`, so a
+   * caller that upserts one would write an empty vector — only read with it.
+   */
+  async getAll({ vectors = true } = {}) {
     const table = await this.openTable();
     if (!table) return [];
     const pageSize = Number(process.env.BRAIN_LANCE_PAGE_SIZE || 4000);
@@ -517,7 +561,12 @@ export class LanceStore extends BrainStore {
     // large limit and a configurable page size. If row count is known, raise
     // the limit to fit; otherwise default to 100k to preserve old behavior.
     const limit = Number.isFinite(total) ? Math.max(pageSize, total + pageSize) : 100000;
-    const rows = await table.query().limit(limit).toArray();
+    let query = table.query().limit(limit);
+    if (!vectors) {
+      const columns = (await table.schema()).fields.map(f => f.name).filter(name => name !== 'vector');
+      query = query.select(columns);
+    }
+    const rows = await query.toArray();
     return rows.map(normalizeRecord);
   }
 
@@ -525,7 +574,10 @@ export class LanceStore extends BrainStore {
     try {
       const table = await this.openTable();
       if (!table) return 'lance:0';
-      return `lance:${await table.countRows()}`;
+      // The row count alone misses an edit that keeps the count (a file whose
+      // one chunk was re-embedded): the table version moves on every commit.
+      const version = typeof table.version === 'function' ? await table.version() : '';
+      return `lance:${await table.countRows()}:${version}`;
     } catch {
       return null;   // unreadable count → callers must assume the corpus moved
     }
@@ -535,7 +587,9 @@ export class LanceStore extends BrainStore {
   async flushMirrorFromLance() {
     if (!this.mirrorEnabled) return;
     try {
-      const rows = await this.getAll();
+      // The mirror drops vectors unless BRAIN_JSON_MIRROR_VECTORS=1, so only
+      // read them when it will actually keep them.
+      const rows = await this.getAll({ vectors: !this.mirror.vectorsOwnedElsewhere });
       this.mirror.records = rows;
       if (this.model) this.mirror.model = this.model;
       this.mirror.persist();
@@ -545,30 +599,16 @@ export class LanceStore extends BrainStore {
     }
   }
 
+  /**
+   * Flush the mirror once, and only after a write. The mirror used to be
+   * rewritten after every upsert/delete AND again here — an index run with
+   * summaries rewrote 16 MB half a dozen times, then rebuilt it from Lance
+   * anyway. The flush below is the only write that was ever authoritative.
+   */
   async close() {
+    if (!this.dirty) return;
     await this.flushMirrorFromLance();
-  }
-
-  async maybeMirrorUpsert(records) {
-    if (!this.mirrorEnabled) return;
-    try {
-      await this.mirror.upsert(records);
-    } catch (error) {
-      if (this.mirrorStrict) throw error;
-      console.warn(`Project Brain mirror warning (lance upsert): ${error.message || error}`);
-      console.warn('Continuing with Lance as source of truth. Set BRAIN_JSON_MIRROR=0 to disable mirror writes.');
-    }
-  }
-
-  async maybeMirrorDelete(ids) {
-    if (!this.mirrorEnabled) return;
-    try {
-      await this.mirror.delete(ids);
-    } catch (error) {
-      if (this.mirrorStrict) throw error;
-      console.warn(`Project Brain mirror warning (lance delete): ${error.message || error}`);
-      console.warn('Continuing with Lance as source of truth. Set BRAIN_JSON_MIRROR=0 to disable mirror writes.');
-    }
+    this.dirty = false;
   }
 }
 
@@ -689,7 +729,9 @@ export class QdrantStore extends BrainStore {
   async flushMirrorFromQdrant() {
     if (!this.mirrorEnabled) return;
     try {
-      const rows = await this.getAll();
+      // The mirror drops vectors unless BRAIN_JSON_MIRROR_VECTORS=1, so only
+      // read them when it will actually keep them.
+      const rows = await this.getAll({ vectors: !this.mirror.vectorsOwnedElsewhere });
       this.mirror.records = rows;
       if (this.model) this.mirror.model = this.model;
       this.mirror.persist();
