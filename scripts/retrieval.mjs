@@ -152,10 +152,12 @@ export async function retrieve(query, store, embedder, opts = {}) {
   // The claim is therefore "the file is found more often", not "ranked better".
   // Set BRAIN_LEXICAL_UNION=0 to restore dense-only candidate generation.
   const lexicalUnion = opts.lexicalUnion ?? (process.env.BRAIN_LEXICAL_UNION !== '0');
+  let expansion = [];
   if (lexicalUnion && !broad) {
     const unionTop = Number(opts.lexicalUnionTop || process.env.BRAIN_LEXICAL_UNION_TOP || 24);
     const { records: allRecords, index: bm25 } = await corpusFor(store, filter);
-    const lexical = tfidfScore(query, allRecords, bm25);
+    expansion = queryExpansion(query, bm25, opts);
+    const lexical = tfidfScore(query, allRecords, bm25, expansion);
     const inPool = new Set(pool.map(record => record.id));
     const unionRecords = allRecords
       .filter(record => (lexical.get(record.id) || 0) > 0 && !inPool.has(record.id))
@@ -169,7 +171,7 @@ export async function retrieve(query, store, embedder, opts = {}) {
     }
   }
 
-  const keyword = tfidfScore(query, pool);
+  const keyword = tfidfScore(query, pool, null, expansion);
   const symbol = symbolScore(query, pool, opts);
   const maxKeyword = Math.max(1, ...keyword.values());
   const context = retrievalContext({ ...opts, query });
@@ -216,6 +218,7 @@ export async function retrieve(query, store, embedder, opts = {}) {
   // eval tooling can distinguish candidate-generation misses from ranking misses.
   if (opts.trace && typeof opts.trace === 'object') {
     opts.trace.queryVector = queryVector;
+    opts.trace.expansion = expansion;
     opts.trace.broad = broad;
     opts.trace.poolSize = pool.length;
     opts.trace.denseCandidates = dense.map(record => ({
@@ -250,13 +253,14 @@ async function retrieveLexical(query, store, opts) {
   // broadCandidates scores the whole corpus, as the hybrid path does, so
   // symbol-only matches (zero BM25) can still rank.
   const broad = opts.broadCandidates ?? (process.env.BRAIN_BROAD_CANDIDATES === '1');
-  const lexical = tfidfScore(query, allRecords, bm25);
+  const expansion = queryExpansion(query, bm25, opts);
+  const lexical = tfidfScore(query, allRecords, bm25, expansion);
   const pool = broad ? allRecords.slice() : allRecords
     .filter(record => (lexical.get(record.id) || 0) > 0)
     .sort((a, b) => (lexical.get(b.id) || 0) - (lexical.get(a.id) || 0))
     .slice(0, Math.max(0, candidates));
 
-  const keyword = tfidfScore(query, pool);
+  const keyword = tfidfScore(query, pool, null, expansion);
   const symbol = symbolScore(query, pool, opts);
   const maxKeyword = Math.max(1, ...keyword.values());
   const context = retrievalContext({ ...opts, query });
@@ -279,6 +283,7 @@ async function retrieveLexical(query, store, opts) {
 
   if (opts.trace && typeof opts.trace === 'object') {
     opts.trace.queryVector = null;
+    opts.trace.expansion = expansion;
     opts.trace.broad = broad;
     opts.trace.poolSize = pool.length;
     opts.trace.denseCandidates = [];
@@ -288,6 +293,20 @@ async function retrieveLexical(query, store, opts) {
     }));
   }
   return limitChunksPerFile(ranked, opts).slice(0, topK);
+}
+
+/**
+ * The in-vocabulary expansion for `query` under BRAIN_QUERY_EXPAND=1 (default
+ * OFF, issue #19), or [] — and when it adds anything, it says so on stderr
+ * (unless BRAIN_QUIET): an expansion nobody can see is an expansion nobody
+ * can audit.
+ */
+function queryExpansion(query, index, opts = {}) {
+  const on = opts.queryExpand ?? (process.env.BRAIN_QUERY_EXPAND === '1');
+  if (!on || !index) return [];
+  const added = expandQueryTokens(lexicalTokens(query), index.df);
+  if (added.length && !process.env.BRAIN_QUIET) console.error(`query expansion (in-vocabulary): +${added.join(' +')}`);
+  return added;
 }
 
 /**
@@ -368,7 +387,8 @@ async function corpusFor(store, filter) {
  * change between two queries against the same corpus.
  */
 export function buildBm25Index(records) {
-  const docTokens = records.map(record => tokenize(recordText(record)));
+  const split = process.env.BRAIN_SPLIT_IDENTIFIERS === '1';
+  const docTokens = records.map(record => lexicalTokens(recordText(record), { split }));
   const df = new Map();
   for (const tokens of docTokens) {
     for (const token of new Set(tokens)) df.set(token, (df.get(token) || 0) + 1);
@@ -419,8 +439,8 @@ export function bm25Score(queryTokens, index) {
  * normalization (default 0.75). Pass `index` (from buildBm25Index) to reuse
  * a corpus already tokenized; the result is identical either way.
  */
-export function tfidfScore(query, records, index = null) {
-  const queryTokens = tokenize(query);
+export function tfidfScore(query, records, index = null, extraTokens = []) {
+  const queryTokens = lexicalTokens(query).concat(extraTokens);
   if (!records.length || !queryTokens.length) return new Map();
   return bm25Score(queryTokens, index || buildBm25Index(records));
 }
@@ -572,6 +592,83 @@ function clampGraphBonus(value) {
 
 export function tokenize(text) {
   return String(text).toLowerCase().split(/[^a-z0-9_/-]+/).filter(token => token.length > 1);
+}
+
+/**
+ * PURE. The parts of every compound identifier in `text`: camelCase humps and
+ * snake/kebab/path segments, lowercased. `getUserSession` → get, user,
+ * session. tokenize() keeps an identifier whole ("getusersession"), so a
+ * question in words ("user session") never meets it in BM25. Only identifiers
+ * that actually split contribute; plain words add nothing.
+ */
+export function identifierParts(text) {
+  const out = [];
+  for (const raw of String(text).match(/[A-Za-z0-9_$/-]+/g) || []) {
+    const parts = raw
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+      .split(/[\s_/$-]+/)
+      .map(p => p.toLowerCase())
+      .filter(p => p.length > 1);
+    if (parts.length > 1) out.push(...parts);
+  }
+  return out;
+}
+
+/**
+ * BM25 tokens for a text. With BRAIN_SPLIT_IDENTIFIERS=1 (default OFF,
+ * issue #19) identifier parts are added to the whole tokens, on BOTH the
+ * document and the query side so they meet.
+ */
+export function lexicalTokens(text, { split = process.env.BRAIN_SPLIT_IDENTIFIERS === '1' } = {}) {
+  const base = tokenize(text);
+  return split ? base.concat(identifierParts(text)) : base;
+}
+
+/** Suffix pairs for in-vocabulary word-form variants (strip, then re-add). */
+const VARIANT_STRIP = ['ations', 'ation', 'ings', 'ing', 'ions', 'ion', 'ies', 'es', 'ed', 'er', 's', 'e'];
+const VARIANT_ADD = ['', 's', 'es', 'e', 'ing', 'ed', 'ion', 'ation', 'er', 'y'];
+/** Cap on added tokens, so an expansion can widen a query but not replace it. */
+export const QUERY_EXPAND_MAX = 12;
+
+/**
+ * PURE. Constrained query vocabulary expansion (issue #19, variant 1): add
+ * only tokens that EXIST in the corpus vocabulary `df` (token → document
+ * frequency). Nothing is invented: word-form variants of each query token
+ * ("validating" → validate, validation) and joins of adjacent tokens ("user
+ * session" → usersession, user_session). Deterministic; the caller prints
+ * what was added.
+ *
+ * @returns {string[]} the added tokens, in query order, deduplicated, capped
+ */
+export function expandQueryTokens(tokens, df, { max = QUERY_EXPAND_MAX } = {}) {
+  if (!df || typeof df.has !== 'function') return [];
+  const have = new Set(tokens);
+  const added = [];
+  const take = (t) => {
+    if (added.length >= max || have.has(t) || !df.has(t)) return;
+    have.add(t);
+    added.push(t);
+  };
+  for (const t of tokens) {
+    if (t.length < 4 || /[\d_/-]/.test(t)) continue;           // identifiers and short words stay as they are
+    const stems = new Set([t]);
+    for (const suf of VARIANT_STRIP) {
+      if (t.endsWith(suf) && t.length - suf.length >= 3) {
+        const stem = t.slice(0, -suf.length);
+        stems.add(stem);
+        // planning → plann → plan: undo a doubled final consonant.
+        if (/([b-df-hj-np-tv-z])\1$/.test(stem)) stems.add(stem.slice(0, -1));
+      }
+    }
+    for (const stem of stems) for (const suf of VARIANT_ADD) take(stem + suf);
+  }
+  for (let i = 0; i + 1 < tokens.length; i++) {
+    const [a, b] = [tokens[i], tokens[i + 1]];
+    if (a.length < 3 || b.length < 3) continue;
+    for (const joined of [a + b, `${a}_${b}`, `${a}-${b}`]) take(joined);
+  }
+  return added;
 }
 
 export function retrievalContext(opts = {}) {
