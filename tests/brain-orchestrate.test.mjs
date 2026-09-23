@@ -115,3 +115,19 @@ test('leaseUntil: an orchestration lease expires', () => {
   assert.equal(ORCHESTRATION_LEASE_HOURS, 4);
   assert.equal(leaseUntil(Date.parse('2026-08-28T10:00:00Z'), 1), '2026-08-28T11:00:00Z');
 });
+
+test('runnerCommandFor: without a light command every package runs the full one', async () => {
+  const { runnerCommandFor } = await import('../scripts/brain-orchestrate.mjs');
+  const small = { size: { band: 'small', score: 20 } };
+  assert.deepEqual(runnerCommandFor(small, { full: 'claude -p {prompt}' }), { tier: 'full', command: 'claude -p {prompt}' });
+  assert.deepEqual(runnerCommandFor(small, { full: 'F', light: '' }), { tier: 'full', command: 'F' });
+});
+
+test('runnerCommandFor: with one, only small issues take the light tier', async () => {
+  const { runnerCommandFor, runnerTier } = await import('../scripts/brain-orchestrate.mjs');
+  const cmds = { full: 'F', light: 'L' };
+  assert.deepEqual(runnerCommandFor({ size: { band: 'small' } }, cmds), { tier: 'light', command: 'L' });
+  assert.deepEqual(runnerCommandFor({ size: { band: 'medium' } }, cmds), { tier: 'full', command: 'F' });
+  assert.deepEqual(runnerCommandFor({ size: { band: 'large' } }, cmds), { tier: 'full', command: 'F' });
+  assert.equal(runnerTier({}), 'full', 'an unsized package never gets the cheap runner');
+});

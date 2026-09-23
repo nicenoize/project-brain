@@ -54,7 +54,9 @@ Options:
   --write-packages     Also write one work-package plan per issue
   --spawn-worktrees     Create worktrees for the first runnable worker slots
   --launch-runners      Launch one runner process in each spawned worktree
-  --runner-cmd cmd      Shell command template for each runner; placeholders: {prompt},{task},{actor},{tool},{branch},{issue},{title},{cwd}
+  --runner-cmd cmd      Shell command template for each runner; placeholders: {prompt},{task},{actor},{tool},{branch},{issue},{title},{cwd},{tier}
+  --runner-cmd-light cmd  Optional cheaper runner for SMALL issues (tier=light); others keep --runner-cmd.
+                        Off unless set (also BRAIN_RUNNER_CMD_LIGHT). The tier is recorded per runner.
   --runner-log-dir dir  Runner log directory (default: .project-brain/runner-logs)
   --refill             Only assign open slots after counting active workstreams
   --watch              Keep polling/refilling until stopped
@@ -136,7 +138,7 @@ function buildOrchestration({ issues, concurrency, tool, base, openSlots = concu
     if (issue.number && activeIssueNumbers.has(String(issue.number))) continue;
     const first = issue.workPackages[0];
     if (first && activeTasks.has(first.taskId)) continue;
-    if (first) runnable.push({ issueNumber: issue.number, issueTitle: issue.title, ...first });
+    if (first) runnable.push({ issueNumber: issue.number, issueTitle: issue.title, size: issue.size, ...first });
   }
   const workerSlots = runnable.slice(0, openSlots).map(pkg => {
     const slot = nextWorkerNumber(usedWorkerNumbers);
@@ -421,8 +423,35 @@ export function spawnWorktrees(plan) {
   return spawned;
 }
 
+/**
+ * PURE. The runner tier for a work package: `light` for a small issue, `full`
+ * for everything else. Small means scoreIssue's band: few files, one module,
+ * no risk keyword (auth, billing, schema, migration, …).
+ */
+export function runnerTier(assignment) {
+  return assignment?.size?.band === 'small' ? 'light' : 'full';
+}
+
+/**
+ * PURE. Which command runs this package. A cheaper runner (a smaller model,
+ * another tool) takes the light tier ONLY when one is configured
+ * (--runner-cmd-light / BRAIN_RUNNER_CMD_LIGHT); without one every package
+ * runs the full command, exactly as before.
+ *
+ * Default off on purpose. The one controlled comparison we have seen of
+ * this pattern (planner model + cheaper implementers, n=4) cost MORE and
+ * regressed 3 of 4 runs, so the tier is recorded on every runner
+ * (BRAIN_RUNNER_TIER, the {tier} placeholder, the plan output) to make the
+ * outcome measurable per tier before anyone relies on it.
+ */
+export function runnerCommandFor(assignment, { full, light = '' }) {
+  const tier = light ? runnerTier(assignment) : 'full';
+  return { tier, command: tier === 'light' ? light : full };
+}
+
 export function launchRunners(plan, spawned, opts) {
   const runnerCmd = ensureRunnerCommand(opts);
+  const lightCmd = opts.runnerCmdLight || process.env.BRAIN_RUNNER_CMD_LIGHT || '';
   const logDir = path.resolve(ROOT, opts.runnerLogDir || process.env.BRAIN_RUNNER_LOG_DIR || '.project-brain/runner-logs');
   ensureDir(logDir);
   for (const worker of spawned) {
@@ -430,7 +459,9 @@ export function launchRunners(plan, spawned, opts) {
     if (!slot) continue;
     const assignment = slot.assignment;
     const prompt = assignment.runnerPrompt;
-    const command = renderTemplate(runnerCmd, {
+    const { tier, command: template } = runnerCommandFor(assignment, { full: runnerCmd, light: lightCmd });
+    const command = renderTemplate(template, {
+      tier,
       prompt,
       task: assignment.taskId,
       actor: slot.actor,
@@ -453,12 +484,14 @@ export function launchRunners(plan, spawned, opts) {
         BRAIN_TOOL: plan.tool,
         BRAIN_ISSUE: String(assignment.issueNumber || ''),
         BRAIN_BRANCH: assignment.branch,
-        BRAIN_RUNNER_PROMPT: prompt
+        BRAIN_RUNNER_PROMPT: prompt,
+        BRAIN_RUNNER_TIER: tier
       }
     });
     worker.runnerPid = pid;
     worker.runnerLog = logPath;
-    console.log(`Launched runner ${slot.actor} pid=${pid} log=${logPath}`);
+    worker.runnerTier = tier;
+    console.log(`Launched runner ${slot.actor} pid=${pid} tier=${tier} log=${logPath}`);
   }
 }
 
@@ -811,6 +844,7 @@ function parseArgs(argv) {
     if (a === '--interval') { opts.interval = val; i += val ? 1 : 0; continue; }
     if (a === '--max-cycles') { opts.maxCycles = val; i += val ? 1 : 0; continue; }
     if (a === '--runner-cmd') { opts.runnerCmd = val; i += val ? 1 : 0; continue; }
+    if (a === '--runner-cmd-light') { opts.runnerCmdLight = val; i += val ? 1 : 0; continue; }
     if (a === '--runner-log-dir') { opts.runnerLogDir = val; i += val ? 1 : 0; continue; }
   }
   return opts;
