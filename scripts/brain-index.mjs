@@ -66,6 +66,9 @@ if (oldManifest.model && oldManifest.model !== embedder.modelName) {
 // Pass `force` so the shrink-guard (#20) lets a deliberate `--force` rebuild
 // overwrite the index even when it produces a much smaller snapshot.
 const store = await openStore({ model: embedder.modelName, dims: embedder.dims, force: forceRebuild });
+// Every full read below except the chunk-reuse one needs metadata and text
+// only; skipping the vector column is most of the bytes of each read.
+const METADATA_ONLY = { vectors: false };
 
 // Fleet discovery: if ≥ 2 sibling projects (and BRAIN_FLEET_MODE doesn't
 // override), build the file list as the union of per-project listings and
@@ -116,7 +119,7 @@ for (const file of files) currentHashes.set(file, sha256(read(path.join(ROOT, fi
 let changedFiles = files.filter(file => forceRebuild || oldManifest.files?.[file]?.hash !== currentHashes.get(file));
 let deletedFiles = Object.keys(oldManifest.files || {}).filter(file => !fileSet.has(file));
 
-const existingRecords = await store.getAll();
+const existingRecords = await store.getAll(); // WITH vectors: chunk-level reuse reads them
 const existingIdsByFile = new Map();
 // Chunk-level vector reuse: when a file's top-level hash changes but most of
 // its chunks are byte-identical, we copy the previously-embedded vector instead
@@ -344,7 +347,7 @@ if (fleetMode && !isFastMode()) {
  */
 async function rebuildRepoSummaries(store, embedder, opts = {}) {
   const { all: rebuildAll = false, dirtyProjects = new Set() } = opts;
-  const allRecords = await store.getAll();
+  const allRecords = await store.getAll(METADATA_ONLY);
 
   // Stale: drop repo-summary records for dirty projects (or all on --force).
   const staleIds = allRecords
@@ -352,7 +355,7 @@ async function rebuildRepoSummaries(store, embedder, opts = {}) {
     .map(r => r.id);
   if (staleIds.length) await store.delete(staleIds);
 
-  const refreshed = await store.getAll();
+  const refreshed = await store.getAll(METADATA_ONLY);
   const childByProject = new Map();
   for (const r of refreshed) {
     if (!r.isSummary || r.type === 'repo-summary' || r.type === 'session' || r.type === 'auto-compact') continue;
@@ -401,7 +404,7 @@ async function rebuildRepoSummaries(store, embedder, opts = {}) {
  */
 async function rebuildCrossProjectEdges(store, embedder, opts = {}) {
   const { forceRebuild = false, dirtyProjects = new Set() } = opts;
-  const allRecords = await store.getAll();
+  const allRecords = await store.getAll(METADATA_ONLY);
   const dirty = forceRebuild ? new Set(projects.map(p => p.name)) : dirtyProjects;
   const staleIds = allRecords
     .filter(r => r.type === 'cross-project-edge' && (forceRebuild || dirty.has(r.edgeFrom) || dirty.has(r.edgeTo)))
@@ -432,7 +435,7 @@ async function rebuildCrossProjectEdges(store, embedder, opts = {}) {
  * "describe this fleet" queries hit one record.
  */
 async function rebuildFleetSummary(store, embedder) {
-  const all = await store.getAll();
+  const all = await store.getAll(METADATA_ONLY);
   const repoSummaries = all.filter(r => r.type === 'repo-summary');
   const edgeRecords = all.filter(r => r.type === 'cross-project-edge');
   // Drop any prior fleet-summary record before writing the fresh one.
@@ -462,7 +465,7 @@ function inferFeatureFromPath(file) {
   return file.includes('/features/') ? path.basename(file, path.extname(file)) : '';
 }
 
-const allRecords = await store.getAll();
+const allRecords = await store.getAll(METADATA_ONLY);
 const idsByFile = new Map();
 for (const record of allRecords) {
   if (record.isModuleSummary || record.isProjectSummary || record.id.startsWith('session:')) continue;
@@ -500,7 +503,7 @@ await store.close();
 
 async function rebuildModuleSummaries(store, embedder, opts = {}) {
   const { all: rebuildAll = false, dirtyDirs = new Set(), dirtyFeatures = new Set() } = opts;
-  const all = await store.getAll();
+  const all = await store.getAll(METADATA_ONLY);
 
   // Identify which existing module summaries are stale — for a partial run,
   // only those that cover a dirty directory.
@@ -570,7 +573,7 @@ async function rebuildPackageSummaries(store, embedder, opts = {}) {
   if (!packageDirs.length) return;
 
   // Identify and drop stale package-summary records for dirty packages only.
-  const allRecords = await store.getAll();
+  const allRecords = await store.getAll(METADATA_ONLY);
   const staleIds = allRecords
     .filter(record => {
       if (record.type !== 'package-summary') return false;
@@ -580,7 +583,7 @@ async function rebuildPackageSummaries(store, embedder, opts = {}) {
     .map(record => record.id);
   if (staleIds.length) await store.delete(staleIds);
 
-  const refreshedRecords = await store.getAll();
+  const refreshedRecords = await store.getAll(METADATA_ONLY);
   const childSummariesByDir = groupSummariesByPackage(refreshedRecords, packageDirs);
 
   const newRecords = [];
@@ -620,7 +623,7 @@ async function rebuildPackageSummaries(store, embedder, opts = {}) {
  */
 async function rebuildDecisionClusters(store, embedder, opts = {}) {
   const { all: rebuildAll = false, dirtyDecisions = new Set(), dirtyFeatures = new Set(), dirtyDirs = new Set() } = opts;
-  const allRecords = await store.getAll();
+  const allRecords = await store.getAll(METADATA_ONLY);
   const decisionFileSummaries = allRecords.filter(record =>
     record.isSummary && record.type === 'decision'
   );
@@ -689,7 +692,7 @@ async function rebuildDecisionClusters(store, embedder, opts = {}) {
 
 async function rebuildFeatureAndProjectSummaries(store, embedder, moduleRecords, opts = {}) {
   const { rebuildAll = false, dirtyFeatures = new Set() } = opts;
-  const all = await store.getAll();
+  const all = await store.getAll(METADATA_ONLY);
   const summaries = all.filter(record => record.isSummary && !record.isModuleSummary && !record.isProjectSummary && record.type !== 'session' && record.type !== 'auto-compact');
   const featureGroups = new Map();
   for (const record of summaries) {

@@ -378,3 +378,97 @@ test('compact: every backend answers, none throws', async () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Read paths do not write. A search used to end in close() → a full table read
+// and a rewrite of the whole JSON mirror (16 MB on this repo), on EVERY query,
+// including the MCP server's "read-only" ones.
+// ---------------------------------------------------------------------------
+
+async function lanceOrSkip(t) {
+  try {
+    return await import('@lancedb/lancedb');
+  } catch {
+    t.skip('@lancedb/lancedb not installed (optional dependency)');
+    return null;
+  }
+}
+
+function lanceStoreAt(LanceStore, lancedb, dir) {
+  return new LanceStore(lancedb, {
+    dir: path.join(dir, 'vector-db'),
+    path: path.join(dir, 'search_index.json'),
+    model: 'test-model'
+  });
+}
+
+test('LanceStore: a read-only session never touches the mirror', async (t) => {
+  const lancedb = await lanceOrSkip(t);
+  if (!lancedb) return;
+  const { LanceStore } = await import('../scripts/store.mjs');
+  const dir = tmpDir();
+
+  const writer = await lanceStoreAt(LanceStore, lancedb, dir).open();
+  await writer.upsert([record('a', [1, 0, 0, 0]), record('b', [0, 1, 0, 0])]);
+  await writer.close();
+  const mirrorPath = path.join(dir, 'search_index.json');
+  assert.equal(JSON.parse(fs.readFileSync(mirrorPath, 'utf8')).records.length, 2,
+    'a write session still flushes the mirror on close');
+
+  // A sentinel the flush would overwrite: if any read path writes, this is gone.
+  fs.writeFileSync(mirrorPath, '{"sentinel":true}');
+  const reader = await lanceStoreAt(LanceStore, lancedb, dir).open();
+  await reader.search([1, 0, 0, 0], 1);
+  await reader.getAll();
+  await reader.corpusVersion();
+  await reader.close();
+  assert.equal(fs.readFileSync(mirrorPath, 'utf8'), '{"sentinel":true}');
+  assert.equal(reader._mirror, null, 'a read session never even parses the mirror');
+});
+
+test('LanceStore: a long-lived store sees commits from another writer', async (t) => {
+  const lancedb = await lanceOrSkip(t);
+  if (!lancedb) return;
+  const { LanceStore } = await import('../scripts/store.mjs');
+  const dir = tmpDir();
+
+  const seed = await lanceStoreAt(LanceStore, lancedb, dir).open();
+  await seed.upsert([record('a', [1, 0, 0, 0])]);
+  await seed.close();
+
+  const longLived = await lanceStoreAt(LanceStore, lancedb, dir).open();
+  const before = await longLived.corpusVersion();
+  assert.equal((await longLived.getAll()).length, 1);
+
+  // Same row count, new content: the count alone would call this unchanged.
+  const other = await lanceStoreAt(LanceStore, lancedb, dir).open();
+  await other.upsert([record('a', [0, 1, 0, 0], { text: 'edited' })]);
+  await other.close();
+
+  const after = await longLived.corpusVersion();
+  assert.notEqual(after, before, 'corpusVersion moves on an edit that keeps the count');
+  const [row] = await longLived.getAll();
+  assert.equal(row.text, 'edited', 'the cached store reads the other writer\'s commit');
+});
+
+test('LanceStore.getAll({ vectors: false }): every field but the vector', async (t) => {
+  const lancedb = await lanceOrSkip(t);
+  if (!lancedb) return;
+  const { LanceStore } = await import('../scripts/store.mjs');
+  const dir = tmpDir();
+  const store = await lanceStoreAt(LanceStore, lancedb, dir).open();
+  await store.upsert([record('a', [1, 0, 0, 0], { text: 'alpha', type: 'code', symbols: ['foo'] })]);
+
+  const [full] = await store.getAll();
+  const [lean] = await store.getAll({ vectors: false });
+  assert.equal(full.vector.length, 4);
+  assert.deepEqual(lean.vector, [], 'no vector column read');
+  assert.deepEqual({ ...lean, vector: null }, { ...full, vector: null }, 'every other field is identical');
+  await store.close();
+
+  // The close-time flush reads without vectors too, and the mirror still
+  // records what is indexed.
+  const mirror = JSON.parse(fs.readFileSync(path.join(dir, 'search_index.json'), 'utf8'));
+  assert.equal(mirror.records.length, 1);
+  assert.equal(mirror.records[0].text, 'alpha');
+});
