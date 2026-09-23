@@ -79,3 +79,117 @@ export function logDecisions(records = [], logPath = DECISIONS_LOG, env = proces
   for (const r of records) if (appendUsageRecord(r, logPath)) n++;
   return n;
 }
+
+// ---------------------------------------------------------------------------
+// Calibration: was the decision right? (ADR 0033, step 2)
+// ---------------------------------------------------------------------------
+
+/** A fix/revert commit — the same proxy label calibrateFileHealth uses. */
+const FIX_RE = /\b(fix(es|ed)?|hotfix|revert(s|ed)?|regression)\b/i;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * What "the signal was right" means, per signal. A danger warning predicts
+ * trouble: a fix touches the file soon. A co-change partner predicts the
+ * change will spread: the partner file is committed soon, fix or not.
+ */
+export const SIGNAL_OUTCOMES = {
+  // skipFirst: the first commit touching the file after the warning is the
+  // change the agent was making. If that change is itself a fix, counting it
+  // would let every bug-fixing session confirm its own warning.
+  'answer.danger': { gated: true, horizonDays: 7, label: 'a LATER fix/revert touched the file', skipFirst: true, hit: (c) => FIX_RE.test(c.subject || '') },
+  'answer.partner': { gated: false, horizonDays: 2, label: 'the partner file was committed', skipFirst: false, hit: () => true }
+};
+
+/** Minimum decisions per side before a rate is reported as evidence. */
+export const MIN_CALIBRATION_N = 10;
+
+function rate(pos, n) { return n ? pos / n : null; }
+
+/**
+ * PURE. Join decisions with what happened to their target afterwards.
+ *
+ * Each (signal, target, session) counts once: the first decision. A session
+ * that edits one file ten times made one call about it, not ten. A decision
+ * counts only once its horizon has fully passed (`now`), or recent decisions
+ * would read as "nothing happened" when the answer isn't in yet.
+ *
+ * @param {object[]} decisions  .decisions.jsonl records
+ * @param {{dateIso:string, subject:string, files:string[]}[]} commits
+ * @returns per-signal { emitted, held, pending, lift, verdict, bins }
+ */
+export function calibrateDecisions(decisions = [], commits = [], { now = Date.now(), minN = MIN_CALIBRATION_N } = {}) {
+  const firsts = new Map();
+  for (const d of decisions) {
+    if (!d || !SIGNAL_OUTCOMES[d.signal]) continue;
+    const ts = Date.parse(d.ts);
+    if (!Number.isFinite(ts)) continue;
+    const key = `${d.signal}\u0000${d.target}\u0000${d.session}`;
+    const prev = firsts.get(key);
+    if (!prev || ts < prev.ts) firsts.set(key, { ...d, ts });
+  }
+  const dated = commits
+    .map((c) => ({ ...c, at: Date.parse(c.dateIso) }))
+    .filter((c) => Number.isFinite(c.at));
+
+  const bySignal = new Map();
+  for (const d of firsts.values()) {
+    const spec = SIGNAL_OUTCOMES[d.signal];
+    const end = d.ts + spec.horizonDays * DAY_MS;
+    const s = bySignal.get(d.signal) || { signal: d.signal, outcome: spec.label, horizonDays: spec.horizonDays, pending: 0, rows: [] };
+    if (end > now) { s.pending++; bySignal.set(d.signal, s); continue; }
+    let touching = dated
+      .filter((c) => c.at > d.ts && c.at <= end && (c.files || []).includes(d.target))
+      .sort((a, b) => a.at - b.at);
+    if (spec.skipFirst) touching = touching.slice(1);
+    const hit = touching.some((c) => spec.hit(c));
+    s.rows.push({ action: d.action, value: typeof d.value === 'number' ? d.value : null, hit });
+    bySignal.set(d.signal, s);
+  }
+
+  const out = [];
+  for (const s of bySignal.values()) {
+    const side = (action) => {
+      const rows = s.rows.filter((r) => r.action === action);
+      const pos = rows.filter((r) => r.hit).length;
+      return { n: rows.length, hits: pos, rate: rate(pos, rows.length) };
+    };
+    const emitted = side('emit');
+    const held = side('log');
+    const all = { n: s.rows.length, hits: s.rows.filter((r) => r.hit).length };
+    const baseRate = rate(all.hits, all.n);
+    const enough = emitted.n >= minN && held.n >= minN;
+    const lift = enough && held.rate ? emitted.rate / held.rate : null;
+    let verdict;
+    if (!s.rows.length) verdict = `no resolved decisions yet (${s.pending} pending, horizon ${s.horizonDays}d)`;
+    else if (!SIGNAL_OUTCOMES[s.signal].gated && emitted.n >= minN) verdict = `not gated yet: ${emitted.n} emitted, ${pct(emitted.rate)} right; choose a threshold from the value bins`;
+    else if (!enough) verdict = `not enough evidence: ${emitted.n} emitted / ${held.n} held back, need ${minN} each`;
+    else if (emitted.rate > held.rate) verdict = `emitted are right more often than held-back (${pct(emitted.rate)} vs ${pct(held.rate)}): the threshold separates`;
+    else verdict = `emitted are NOT right more often than held-back (${pct(emitted.rate)} vs ${pct(held.rate)}): the threshold does not separate`;
+    out.push({
+      signal: s.signal, outcome: s.outcome, horizonDays: s.horizonDays, pending: s.pending,
+      emitted, held, baseRate, lift, verdict, bins: valueBins(s.rows)
+    });
+  }
+  return out.sort((a, b) => (a.signal < b.signal ? -1 : 1));
+}
+
+function pct(x) { return x === null ? 'n/a' : `${Math.round(x * 100)}%`; }
+
+/**
+ * PURE. Hit rate by value quartile, the raw material for a threshold. For a
+ * signal that is not gated yet (co-change), this is how a cut-off gets chosen
+ * from evidence instead of guessed.
+ */
+export function valueBins(rows, parts = 4) {
+  const vals = rows.filter((r) => r.value !== null).sort((a, b) => a.value - b.value);
+  if (vals.length < parts) return [];
+  const bins = [];
+  for (let i = 0; i < parts; i++) {
+    const slice = vals.slice(Math.floor((i * vals.length) / parts), Math.floor(((i + 1) * vals.length) / parts));
+    if (!slice.length) continue;
+    const hits = slice.filter((r) => r.hit).length;
+    bins.push({ min: slice[0].value, max: slice[slice.length - 1].value, n: slice.length, hits, rate: hits / slice.length });
+  }
+  return bins;
+}
