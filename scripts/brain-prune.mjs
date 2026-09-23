@@ -28,6 +28,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import './common.mjs' // usage ledger choke point (#32) — arms only when BRAIN_USAGE_LOG=1
 
 // Run from the host project root (npm scripts run in package.json's
@@ -42,7 +43,11 @@ const APPLY = process.argv.includes('--apply')
 const WITH_CAVEMAN = process.argv.includes('--with-caveman')
 const AGE_DAYS = Number(process.env.BRAIN_COMPACT_AGE_DAYS ?? 30)
 
-const CAVEMAN_DIR = '/Users/seebo/.claude/plugins/marketplaces/caveman/caveman-compress'
+// Opt-in (--with-caveman). Resolved from the user's home, overridable, never a
+// hard-coded maintainer path: this file ships to every consumer.
+const CAVEMAN_DIR =
+  process.env.BRAIN_CAVEMAN_DIR ||
+  join(homedir(), '.claude', 'plugins', 'marketplaces', 'caveman', 'caveman-compress')
 
 const today = new Date()
 const cutoff = new Date(today.getTime() - AGE_DAYS * 86_400_000)
