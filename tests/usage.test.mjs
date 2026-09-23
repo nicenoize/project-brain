@@ -187,3 +187,22 @@ test('appendUsageRecord: fail-silent on an unwritable path (returns false, no th
   }
   void bad;
 });
+
+test('usageLogEnabled: on by default, explicit 0/1 win, off under the test runner', async () => {
+  const { usageLogEnabled } = await import('../scripts/common.mjs');
+  assert.equal(usageLogEnabled({}), true, 'default on');
+  assert.equal(usageLogEnabled({ BRAIN_USAGE_LOG: '0' }), false, 'opt-out');
+  assert.equal(usageLogEnabled({ NODE_TEST_CONTEXT: 'child-v8' }), false, 'fixtures never grow a ledger');
+  assert.equal(usageLogEnabled({ NODE_TEST_CONTEXT: 'child-v8', BRAIN_USAGE_LOG: '1' }), true, 'a test can still opt in');
+});
+
+test('appendUsageRecord: past the cap the ledger keeps its newer half', async () => {
+  const { appendUsageRecord } = await import('../scripts/common.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-usage-cap-'));
+  const log = path.join(dir, '.usage.jsonl');
+  for (let i = 0; i < 100; i++) appendUsageRecord({ cmd: 'search', n: i }, log, 2000);
+  const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  assert.ok(fs.statSync(log).size <= 2000 + 64, 'stays near the cap');
+  assert.equal(lines.at(-1).n, 99, 'the newest record survives');
+  assert.ok(lines[0].n > 0, 'the oldest ones went first');
+});
