@@ -331,9 +331,23 @@ async function senseState(opts = {}) {
       commitsAhead = Number((out.stdout || '0').trim()) || 0;
     } catch { /* soft */ }
     if (commitsAhead > 0) {
-      const pr = spawnSync('gh', ['pr', 'list', '--head', branch, '--json', 'number'], { cwd: ROOT, encoding: 'utf8' });
-      // gh absent or errored → assume no PR (flagged in the reason via ghUnavailable).
-      const hasPr = pr.status === 0 && /\"number\"/.test(pr.stdout || '');
+      // `gh pr list` is a network round-trip, and this runs on EVERY prompt
+      // (UserPromptSubmit). Cache the answer per branch+HEAD in the hook state
+      // file; a HEAD move or the TTL re-asks. The timeout keeps a hung network
+      // from ever holding a prompt.
+      const head = (spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout || '').trim();
+      const now = Date.now();
+      const cached = prCacheLookup(readHookState()?.prCache, { branch, head, now });
+      let hasPr;
+      if (cached !== null) {
+        hasPr = cached;
+      } else {
+        const pr = spawnSync('gh', ['pr', 'list', '--head', branch, '--json', 'number'], { cwd: ROOT, encoding: 'utf8', timeout: PR_LOOKUP_TIMEOUT_MS });
+        // gh absent or errored → assume no PR (flagged in the reason via ghUnavailable).
+        hasPr = pr.status === 0 && /\"number\"/.test(pr.stdout || '');
+        // Only a real answer is cached: an error or timeout re-asks next prompt.
+        if (pr.status === 0) writeHookState({ prCache: { branch, head, hasPr, ts: now } });
+      }
       commitsAheadNoPr = !hasPr;
     }
   }
@@ -500,6 +514,21 @@ function emitHook(event, text) {
 // ---------------------------------------------------------------------------
 
 export const HOOK_DEDUPE_TTL_MS = 15 * 60 * 1000; // ~15 min
+export const PR_CACHE_TTL_MS = 10 * 60 * 1000;
+const PR_LOOKUP_TIMEOUT_MS = 3000;
+
+/**
+ * PURE. The cached "does this branch have a PR" answer, or null to re-ask.
+ * Valid only for the same branch AND the same HEAD within the TTL: a push or
+ * a new commit is exactly when a PR tends to appear.
+ */
+export function prCacheLookup(cache, { branch, head, now }, ttlMs = PR_CACHE_TTL_MS) {
+  if (!cache || typeof cache !== 'object') return null;
+  if (!head || cache.branch !== branch || cache.head !== head) return null;
+  const ts = Number(cache.ts);
+  if (!Number.isFinite(ts) || now - ts >= ttlMs || now < ts) return null;
+  return typeof cache.hasPr === 'boolean' ? cache.hasPr : null;
+}
 const HOOK_STATE_FILE = path.join(BRAIN_DIR, '.route-hook-state.json');
 
 /**

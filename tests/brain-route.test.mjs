@@ -336,3 +336,20 @@ test('CLI: brain:route --json --no-index emits a valid recommendation envelope',
   assert.ok('signals' in out);
   assert.equal(out.signals.brainInitialized, true);
 });
+
+test('prCacheLookup: reuses an answer only for the same branch, same HEAD, within the TTL', async () => {
+  const { prCacheLookup, PR_CACHE_TTL_MS } = await import('../scripts/brain-route.mjs');
+  const cache = { branch: 'feature/x', head: 'abc', hasPr: true, ts: 1_000 };
+  const at = (now, over = {}) => prCacheLookup(cache, { branch: 'feature/x', head: 'abc', now, ...over });
+  assert.equal(at(1_000 + 60_000), true, 'fresh hit');
+  assert.equal(prCacheLookup({ ...cache, hasPr: false }, { branch: 'feature/x', head: 'abc', now: 2_000 }), false,
+    'a cached "no PR" is an answer too');
+  assert.equal(at(1_000 + PR_CACHE_TTL_MS), null, 'TTL lapsed → re-ask');
+  assert.equal(at(2_000, { head: 'def' }), null, 'new commit → re-ask');
+  assert.equal(at(2_000, { branch: 'feature/y' }), null, 'other branch → re-ask');
+  assert.equal(at(500), null, 'clock went backwards → re-ask');
+  assert.equal(prCacheLookup(null, { branch: 'feature/x', head: 'abc', now: 2_000 }), null);
+  assert.equal(prCacheLookup({ ...cache, hasPr: 'yes' }, { branch: 'feature/x', head: 'abc', now: 2_000 }), null,
+    'a malformed answer is not trusted');
+  assert.equal(prCacheLookup(cache, { branch: 'feature/x', head: '', now: 2_000 }), null, 'unknown HEAD → re-ask');
+});
