@@ -39,7 +39,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { ROOT, atomicWrite, takeFlag, takeOption } from './common.mjs';
+import { ROOT, atomicWrite, takeFlag, takeOption, ensureLocalStateIgnored } from './common.mjs';
 import { BUDGETS } from './footprint.mjs';
 import { gitLogArgs, parseLog, fileHealth, coChange } from './git-intel.mjs';
 import { applyRules, scoreChange } from './brain-route.mjs';
@@ -418,7 +418,10 @@ export function cachedCommits(root = ROOT, { now = Date.now(), limit = ANSWER_CO
     raw = String(r.stdout || '');
   } catch { return []; }
   if (sha && raw && bytesOf(raw) <= MAX_CACHE_BYTES) {
-    try { atomicWrite(cacheFile, JSON.stringify({ head: sha, limit, ts: Number(now), log: raw })); }
+    try {
+      ensureLocalStateIgnored(path.dirname(cacheFile));
+      atomicWrite(cacheFile, JSON.stringify({ head: sha, limit, ts: Number(now), log: raw }));
+    }
     catch { /* cache is an optimization, never a requirement */ }
   }
   return parseLog(raw);
