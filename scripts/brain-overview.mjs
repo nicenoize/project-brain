@@ -23,6 +23,7 @@
  * output byte-identical for identical inputs (ADR 0030: a claim is
  * re-derivable), and what lets the whole thing be unit-tested without a repo.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -322,7 +323,7 @@ async function main() {
   process.stdout.write(out.text);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`[brain:overview] ${error.message || error}\n`);
     process.exit(1);

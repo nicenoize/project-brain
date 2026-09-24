@@ -13,6 +13,7 @@ import { retrieve } from './retrieval.mjs';
 import { openStore } from './store.mjs';
 import { findTsWorkspaceReferences } from './ts-graph.mjs';
 import { buildGraph, resolvePaths, renderPaths } from './brain-graph.mjs';
+import { isMainModule } from './is-main.mjs';
 
 const GLOBAL_REFS = new Set(['JSON', 'String', 'Number', 'Boolean', 'Array', 'Object', 'Map', 'Set', 'Math', 'Date', 'Error', 'Promise']);
 async function main() {
@@ -46,7 +47,7 @@ async function main() {
 
 // Only run the CLI when invoked directly; importing buildImpact (e.g. from
 // brain-improve.mjs) must not parse argv, open the store, or call process.exit.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main();
 }
 

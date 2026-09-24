@@ -37,6 +37,7 @@ import {
 import { openStore } from './store.mjs';
 import { openEmbedder } from './embed.mjs';
 import { FINDINGS_DIR, serializeFinding, parseFinding } from './findings.mjs';
+import { isMainModule } from './is-main.mjs';
 
 // ---------------------------------------------------------------------------
 // Shared record helpers (kept local; no command-script imports).
@@ -694,7 +695,7 @@ async function main() {
 }
 
 // MANDATORY isMain guard: importing this module must not parse argv / open a store / exit.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`[brain:gaps] ${error.message || error}\n`);
     process.exit(1);

@@ -26,6 +26,7 @@ import { openStore } from './store.mjs';
 import { openEmbedder } from './embed.mjs';
 import { buildGraph } from './brain-graph.mjs';
 import { buildImpact } from './brain-impact.mjs';
+import { isMainModule } from './is-main.mjs';
 
 const MAX_NODES = Number(process.env.BRAIN_DIAGRAM_MAX_NODES || 200);
 
@@ -258,6 +259,6 @@ async function main() {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch(err => { process.stderr.write(`[brain:diagram] ${err.message || err}\n`); process.exit(1); });
 }

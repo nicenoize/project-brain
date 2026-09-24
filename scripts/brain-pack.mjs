@@ -6,6 +6,7 @@
  * (current task only) | minimal (architecture map). Drives `brain:ask`
  * and the auto-compact resume slice.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import { BRAIN_DIR, read, takeFlag, takeOption } from './common.mjs';
 import { getIndexProvider } from './index-provider.mjs';
@@ -37,7 +38,7 @@ const projectOpt = takeOption(args, '--project');
 const writeTo = takeOption(args, '--write');
 const query = args.join(' ').trim();
 
-if (!query && import.meta.url === `file://${process.argv[1]}`) {
+if (!query && isMainModule(import.meta.url)) {
   console.error(
     'Usage: npm run brain:pack -- "query" [--max-tokens N] [--tight-budget] [--mode default|resume|minimal|for-agent] [--for-agent [name]] [--include-auto-compact] [--print-budget] [--format json|text] [--task <workstream-id>] [--actor <label>] [--project name[,name2]] [--write <path>]'
   );
@@ -117,7 +118,7 @@ export async function packPrompt(query, opts = {}) {
   return { prompt, sources, stale, estimatedTokens: used, warning: warning || '' };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   const packed = await packPrompt(query, { maxTokens, mode, forAgent: agentName });
   if (packed.warning) console.error(packed.warning);
   if (printBudget) {

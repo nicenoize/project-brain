@@ -20,6 +20,7 @@
  *   brain:outline <file> --symbol <name> just that function's source
  *   brain:outline <file> --json
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -105,4 +106,4 @@ function main() {
   process.stdout.write('\nRead one with --symbol <name>. Line-anchored declarations only (a floor).\n');
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (isMainModule(import.meta.url)) main();

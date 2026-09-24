@@ -58,6 +58,7 @@ import {
 } from './import-graph.mjs';
 import { measureFiles } from './code-structure.mjs';
 import { gitLogArgs, parseLog, hotspots, busFactorOf } from './git-intel.mjs';
+import { isMainModule } from './is-main.mjs';
 
 /** Every source extension import-graph.mjs can scan (mirrors brain-graph-scan). */
 const SOURCE_EXT_RE = /\.(?:js|mjs|cjs|jsx|ts|tsx|mts|cts|py|go|rb|php|rs)$/i;
@@ -784,7 +785,7 @@ function main() {
 
 // Only run the CLI when invoked directly; importing for unit tests must not
 // trigger argv parsing / process.exit (mirrors brain-graph-scan.mjs).
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   try {
     main();
   } catch (error) {

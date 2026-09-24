@@ -22,6 +22,7 @@
  * languages the indexer extracts symbols for (TS/JS today). When no code
  * symbols are indexed, symbol-drift auto-skips rather than crying wolf.
  */
+import { isMainModule } from './is-main.mjs';
 import { takeFlag, takeOption } from './common.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
@@ -227,7 +228,7 @@ async function main() {
   process.exit(strict && !report.ok ? 1 : 0);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`[brain:verify] ${error.message || error}\n`);
     process.exit(1);

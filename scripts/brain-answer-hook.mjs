@@ -40,6 +40,7 @@ import { BRAIN_DIR, ROOT, exists, read, atomicWrite, sha256 } from './common.mjs
 import { buildPreToolPayload } from './brain-route-tool.mjs';
 import { answerFor, renderAnswer, answerBudgetBytes } from './brain-answer.mjs';
 import { dangerEmitMin, decisionRecord, logDecisions } from './decision.mjs';
+import { isMainModule } from './is-main.mjs';
 
 /** Short banner so the agent knows WHY this text appeared mid-turn. Counted against the budget. */
 export const ANSWER_HEADER = 'Project Brain (ambient, deterministic) — before you edit:';
@@ -178,6 +179,6 @@ async function main() {
 }
 
 // MANDATORY isMain guard: importing this module for tests must NOT run the CLI.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().then((code) => process.exit(code)).catch(() => process.exit(0));
 }
