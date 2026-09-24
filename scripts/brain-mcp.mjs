@@ -54,6 +54,7 @@
  * mutates a lease. The write surface stays in the CLI and the Control Room's
  * token-gated POST endpoints.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -1386,7 +1387,7 @@ function main() {
 
 // Only run when invoked directly; importing for tests must not touch stdio
 // (mirrors brain-serve.mjs's isMain guard).
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main();
 }
 

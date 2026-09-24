@@ -26,6 +26,7 @@
  * carry the nested `references:` list). Pure parsing helpers are exported so the
  * git-log parser is unit-testable without a real repo/index/model.
  */
+import { isMainModule } from './is-main.mjs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -489,6 +490,6 @@ async function main() {
 
 // Only run the CLI when invoked directly; importing for unit tests must not
 // trigger argv parsing / process.exit.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main();
 }

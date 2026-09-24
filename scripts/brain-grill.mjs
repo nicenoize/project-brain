@@ -48,6 +48,7 @@ import {
   serializeGrill, parseGrill, loadGrills,
   loadFindings, loadPlans
 } from './findings.mjs';
+import { isMainModule } from './is-main.mjs';
 
 const DECISIONS_DIR = path.join(BRAIN_DIR, 'decisions');
 
@@ -973,6 +974,6 @@ async function main() {
 
 // MANDATORY isMain guard: importing this module (e.g. from tests) must NOT run
 // the CLI, open the store, or call process.exit.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main();
 }

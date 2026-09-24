@@ -20,6 +20,7 @@
  * pattern class) — under a `toolNudges` namespace so the two hooks never clobber
  * each other's state.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -310,6 +311,6 @@ async function main() {
 }
 
 // MANDATORY isMain guard: importing this module for tests must NOT run the CLI.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().then((code) => process.exit(code)).catch(() => process.exit(0)); // even a rejected main exits 0
 }

@@ -22,6 +22,7 @@
  * Always exits 0 + emits `{"continue": true}` so the host workflow
  * (built-in compactor / stop handling) proceeds even on script error.
  */
+import { isMainModule } from './is-main.mjs';
 import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -120,6 +121,6 @@ function main() {
 
 // Only parse stdin / run the hook when invoked directly. Importing for reuse
 // (brain:close reuses extractTags) must NOT block on readFileSync(0) or exit.
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
   main()
 }

@@ -34,6 +34,7 @@
  * Both modes are intentionally cheap: no AST, no file walk per rule —
  * one pass per file, all rules applied together.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -403,7 +404,7 @@ function runScanMode() {
   return blocking.length ? 1 : 0;
 }
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain = isMainModule(import.meta.url);
 if (isMain) {
   if (SIDECAR_MODE) {
     process.exit(runSidecarMode());

@@ -198,6 +198,7 @@
  * Every name the old single-file module exported is re-exported below, so
  * brain-mcp.mjs / brain-answer.mjs / the tests import exactly as before.
  */
+import { isMainModule } from './is-main.mjs';
 import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -491,7 +492,7 @@ async function main() {
 
 // Only run when invoked directly; importing for tests must not bind a port
 // (mirrors brain-intel.mjs's isMain guard).
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`[brain:serve] ${error.message || error}\n`);
     process.exit(1);
