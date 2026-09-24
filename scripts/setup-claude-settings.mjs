@@ -170,20 +170,49 @@ function upgradeLegacyHooks(existing = {}) {
   return rewritten;
 }
 
+/**
+ * PURE (mutates `hooks` in place, returns the count). Drop a BRAIN hook that
+ * repeats an earlier brain hook of the same event (by hookIdentity), and any
+ * group that empties out. Only brain-script hooks are touched: a user's own
+ * hook is theirs to duplicate.
+ */
+export function dedupeBrainHooks(hooks = {}) {
+  let removed = 0;
+  for (const [event, groups] of Object.entries(hooks)) {
+    const seen = new Set();
+    const kept = [];
+    for (const group of groups ?? []) {
+      const list = (group?.hooks ?? []).filter((h) => {
+        const id = typeof h?.command === 'string' ? hookIdentity(h.command) : '';
+        if (!id.startsWith('brain-script:')) return true;
+        if (seen.has(id)) { removed += 1; return false; }
+        seen.add(id);
+        return true;
+      });
+      if (list.length || !(group?.hooks ?? []).length) kept.push({ ...group, hooks: list });
+    }
+    hooks[event] = kept;
+  }
+  return removed;
+}
+
 function mergeHooks(existing = {}, extra = {}) {
   let added = 0;
   for (const [event, groups] of Object.entries(extra)) {
     const have = collectHookIdentities(existing[event]);
     const wantedGroups = [];
     for (const group of groups) {
-      const groupCmds = (group.hooks ?? [])
-        .map((h) => h?.command?.trim())
-        .filter(Boolean)
-        .map(hookIdentity);
-      const allKnown = groupCmds.every((c) => have.has(c));
-      if (allKnown) continue;
-      wantedGroups.push(group);
-      groupCmds.forEach((c) => have.add(c));
+      // Only the hooks this settings file does not have yet. Appending the
+      // whole group when ONE of its hooks was missing re-added the others:
+      // that is how club-ops ended up running brain-route at SessionStart and
+      // lint-conventions on every edit twice.
+      const missing = (group.hooks ?? []).filter((h) => {
+        const cmd = h?.command?.trim();
+        return cmd && !have.has(hookIdentity(cmd));
+      });
+      if (!missing.length) continue;
+      wantedGroups.push({ ...group, hooks: missing });
+      missing.forEach((h) => have.add(hookIdentity(h.command.trim())));
       added += 1;
     }
     if (wantedGroups.length > 0) {
@@ -222,6 +251,7 @@ export function syncClaudeSettings() {
   // hooks — upgrade legacy forms first, then append non-duplicate groups
   existing.hooks = existing.hooks ?? {};
   const upgraded = upgradeLegacyHooks(existing.hooks);
+  const deduped = dedupeBrainHooks(existing.hooks);
   const hooksResult = mergeHooks(existing.hooks, recommended.hooks ?? {});
 
   // enabledPlugins / extraKnownMarketplaces — third-party code, opt-in only
@@ -248,6 +278,7 @@ export function syncClaudeSettings() {
     `plugins:+${pluginsResult.added}`,
     `marketplaces:+${marketsResult.added}`,
     ...(upgraded > 0 ? [`legacy-hooks-upgraded:${upgraded}`] : []),
+    ...(deduped > 0 ? [`duplicate-brain-hooks-removed:${deduped}`] : []),
   ].join(' ');
   console.log(`Synced .claude/settings.json (${summary}).`);
 
