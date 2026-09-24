@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { computeSettingsDrift, collectCommands, hookIdentity } from '../scripts/setup-claude-settings.mjs';
+import { computeSettingsDrift, collectCommands, hookIdentity, dedupeBrainHooks } from '../scripts/setup-claude-settings.mjs';
 
 const SETTINGS_SCRIPT = fileURLToPath(new URL('../scripts/setup-claude-settings.mjs', import.meta.url));
 
@@ -280,6 +280,15 @@ test('sync upgrades legacy active_state cat hook to the state digest', () => {
   }
 });
 
+
+const REAL_TEMPLATE = fileURLToPath(new URL('../templates/claude-code/settings.recommended.json', import.meta.url));
+/** Put the REAL template where setup-claude-settings.mjs reads it; without it the sync skips and proves nothing. */
+function withRealTemplate(dir) {
+  const tplDir = path.join(dir, 'skills', 'project-brain', 'templates', 'claude-code');
+  fs.mkdirSync(tplDir, { recursive: true });
+  fs.copyFileSync(REAL_TEMPLATE, path.join(tplDir, 'settings.recommended.json'));
+}
+
 const DIGEST_TEMPLATE = 'node "$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-state-digest.mjs" || true';
 const DIGEST_HAND_FIXED = 'node --preserve-symlinks --preserve-symlinks-main "$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-state-digest.mjs" || true';
 
@@ -304,6 +313,7 @@ test('drift: a hand-fixed hook (node flags added) is not "missing"', () => {
 
 test('settings sync (real template): a hand-fixed digest hook is not appended a second time', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-settings-identity-'));
+  withRealTemplate(dir);
   const claudeDir = path.join(dir, '.claude');
   fs.mkdirSync(claudeDir);
   fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({
@@ -314,7 +324,58 @@ test('settings sync (real template): a hand-fixed digest hook is not appended a 
     env: { ...process.env, PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA: '1', PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS: '1' }
   });
   assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Synced \.claude\/settings\.json/, 'the sync ran instead of skipping');
   const merged = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf8'));
   const digests = [...collectCommands(merged.hooks.SessionStart)].filter((c) => c.includes('brain-state-digest.mjs'));
   assert.deepEqual(digests, [DIGEST_HAND_FIXED], 'kept the hand-fixed form, added no duplicate');
+});
+
+const ROUTE_SS = 'node "$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-route.mjs" --hook --event sessionstart || true';
+const LINT = 'node "$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-lint-conventions.mjs"';
+
+test('dedupeBrainHooks: repeated brain hooks go, user hooks and distinct args stay', () => {
+  const hooks = {
+    SessionStart: [
+      { hooks: [{ type: 'command', command: DIGEST_HAND_FIXED }] },
+      { hooks: [{ type: 'command', command: ROUTE_SS }] },
+      { hooks: [{ type: 'command', command: DIGEST_TEMPLATE }, { type: 'command', command: ROUTE_SS }] },
+      { hooks: [{ type: 'command', command: 'echo mine' }, { type: 'command', command: 'echo mine' }] }
+    ],
+    PreToolUse: [
+      { matcher: 'Edit', hooks: [{ type: 'command', command: LINT }] },
+      { matcher: 'Edit', hooks: [{ type: 'command', command: LINT }] }
+    ]
+  };
+  assert.equal(dedupeBrainHooks(hooks), 3);
+  const ss = hooks.SessionStart.flatMap((g) => g.hooks.map((h) => h.command));
+  assert.deepEqual(ss, [DIGEST_HAND_FIXED, ROUTE_SS, 'echo mine', 'echo mine'], 'first occurrence kept, user duplicates untouched');
+  assert.equal(hooks.SessionStart.length, 3, 'the emptied group is gone');
+  assert.equal(hooks.PreToolUse.length, 1);
+});
+
+test('settings sync (real template): a partially known group adds only its missing hooks, and cleans old duplicates', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-settings-partial-'));
+  withRealTemplate(dir);
+  const claudeDir = path.join(dir, '.claude');
+  fs.mkdirSync(claudeDir);
+  fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({
+    hooks: {
+      SessionStart: [{ hooks: [{ type: 'command', command: ROUTE_SS }] }, { hooks: [{ type: 'command', command: ROUTE_SS }] }]
+    }
+  }));
+  const run = () => spawnSync(process.execPath, [SETTINGS_SCRIPT], {
+    cwd: dir, encoding: 'utf8',
+    env: { ...process.env, PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA: '1', PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS: '1' }
+  });
+  const first = run();
+  assert.equal(first.status, 0);
+  assert.match(first.stdout, /duplicate-brain-hooks-removed:1/, 'the old duplicate was cleaned');
+  const once = fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf8');
+  assert.equal(run().status, 0);
+  assert.equal(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf8'), once, 'a second sync changes nothing');
+  const merged = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf8'));
+  for (const [event, groups] of Object.entries(merged.hooks)) {
+    const ids = groups.flatMap((g) => g.hooks.map((h) => hookIdentity(h.command))).filter((id) => id.startsWith('brain-script:'));
+    assert.equal(new Set(ids).size, ids.length, `${event}: no brain hook twice (${ids.join(', ')})`);
+  }
 });
