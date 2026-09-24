@@ -25,6 +25,7 @@ import { activeStateJson } from './active-state.mjs';
 import { inferModule } from './infer.mjs';
 import { targetMatchesFile, UnsupportedPatternError } from './lease-overlap.mjs';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from './is-main.mjs';
 
 const DECISIONS_DIR = path.join(BRAIN_DIR, 'decisions');
 const SESSIONS_DIR = path.join(BRAIN_DIR, 'sessions');
@@ -428,7 +429,7 @@ async function main() {
 }
 
 // Only run the CLI when invoked directly (not when imported by tests).
-const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+const invokedDirectly = isMainModule(import.meta.url);
 if (invokedDirectly) {
   main().then(code => process.exit(code)).catch(err => {
     process.stderr.write(`[brain:brief] ${err.message || err}\n`);

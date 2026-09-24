@@ -29,6 +29,7 @@ import {
   FINDINGS_DIR, FINDING_CATEGORIES, FINDING_STATUSES,
   serializeFinding, parseFinding, loadFindings
 } from './findings.mjs';
+import { isMainModule } from './is-main.mjs';
 
 // What each category looks for + how to gather evidence with brain commands.
 const CATEGORY_GUIDE = {
@@ -213,6 +214,6 @@ function main() {
 }
 
 // Only run the CLI when invoked directly; importing must not parse argv / exit.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main();
 }

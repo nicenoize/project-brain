@@ -21,6 +21,7 @@
  * is PURE and exported, so routing + the auto/stop classification are
  * unit-testable against fixture signals with no real index, git, or model.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -709,7 +710,7 @@ async function main() {
 }
 
 // MANDATORY isMain guard: importing this module for tests must NOT run the CLI.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().then(code => process.exit(code)).catch(err => {
     process.stderr.write(`[brain:route] ${err.message || err}\n`);
     process.exit(1);

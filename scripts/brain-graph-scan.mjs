@@ -40,6 +40,7 @@ import {
   defaultEntryPoints,
   SCAN_NOTE
 } from './import-graph.mjs';
+import { isMainModule } from './is-main.mjs';
 
 const DEFAULT_TOP = 5;
 const DEFAULT_EXTERNAL = 10;
@@ -332,7 +333,7 @@ async function main() {
 
 // Only run the CLI when invoked directly; importing for unit tests must not
 // trigger argv parsing / process.exit (mirrors brain-intel.mjs).
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`[brain:graph-scan] ${error.message || error}\n`);
     process.exit(1);

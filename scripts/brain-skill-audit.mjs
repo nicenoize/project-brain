@@ -15,6 +15,7 @@
  *
  * Exit: 0 if risk <= threshold or unknown/absent; 1 if risk > threshold (gate).
  */
+import { isMainModule } from './is-main.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { takeFlag, takeOption } from './common.mjs';
@@ -69,6 +70,6 @@ function main() {
   process.exit(0);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main();
 }

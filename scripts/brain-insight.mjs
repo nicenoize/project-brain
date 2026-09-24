@@ -47,6 +47,7 @@ import {
   takeOption
 } from './common.mjs';
 import { hashSource, evaluateExplainers } from './brain-explain.mjs';
+import { isMainModule } from './is-main.mjs';
 
 export const INSIGHTS_DIR = path.join(BRAIN_DIR, 'insights');
 
@@ -396,6 +397,6 @@ function main() {
 
 // Only run the CLI when invoked directly; importing for unit tests must not
 // trigger argv parsing / process.exit.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main();
 }

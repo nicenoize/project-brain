@@ -36,6 +36,7 @@ import {
   takeFlag,
   takeOption
 } from './common.mjs';
+import { isMainModule } from './is-main.mjs';
 
 const EXPLAINERS_DIR = path.join(BRAIN_DIR, 'explainers');
 
@@ -299,6 +300,6 @@ function main() {
 
 // Only run the CLI when invoked directly; importing for unit tests must not
 // trigger argv parsing / process.exit.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main();
 }
