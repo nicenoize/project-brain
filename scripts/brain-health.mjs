@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { missingBrainScripts, ROOT, BRAIN_DIR, exists, read, JSON_INDEX, USAGE_LOG, usageLogEnabled, staleIndexFromRecords } from './common.mjs';
+import { missingBrainScripts, ROOT, BRAIN_DIR, exists, read, JSON_INDEX, USAGE_LOG, usageLogEnabled, staleIndexFromRecords, LOCAL_STATE_FILES } from './common.mjs';
 import { parseUsageLog, summarizeUsage, commandUniverseFromPackageScripts } from './usage.mjs';
 import {
   measureFile,
@@ -285,6 +285,14 @@ if (missingReferences.length && !jsonOut) {
   );
 }
 
+// Local state that was committed before anything ignored it stays tracked —
+// a .gitignore does not untrack a file. Say so, with the one command that fixes it.
+const committedLocalState = committedLocalStateFiles();
+if (committedLocalState.length && !jsonOut) {
+  console.warn(`Project Brain: per-machine state is committed: ${committedLocalState.join(', ')}. ` +
+    `Untrack it (the file stays on disk): git rm --cached ${committedLocalState.join(' ')}`);
+}
+
 if (!fs.existsSync('.gitignore') || !fs.readFileSync('.gitignore', 'utf8').includes('.project-brain/vector-db/')) {
   if (!jsonOut) console.error('Missing .project-brain/vector-db/ in .gitignore');
   layoutOk = false;
@@ -473,3 +481,14 @@ if (jsonOut) {
 }
 
 process.exit(finalOk ? 0 : 1);
+
+/** Tracked files among the brain's per-machine state (git ls-files); [] when git is unavailable. */
+function committedLocalStateFiles() {
+  try {
+    const paths = LOCAL_STATE_FILES.map((f) => `.project-brain/${f}`);
+    const r = spawnSync('git', ['ls-files', '--', ...paths], { cwd: ROOT, encoding: 'utf8' });
+    return r.status === 0 ? String(r.stdout || '').split('\n').filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}

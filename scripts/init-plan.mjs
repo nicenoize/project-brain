@@ -26,7 +26,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { mergePackageScripts, mergePackageDeps } from './common.mjs';
+import { mergePackageScripts, mergePackageDeps, LOCAL_STATE_FILES } from './common.mjs';
 import { computeSettingsDrift } from './setup-claude-settings.mjs';
 
 /** .gitignore entries the installer appends when absent (order preserved). */
@@ -36,17 +36,10 @@ export const GITIGNORE_ENTRIES = [
   '.project-brain/search_index.json',
   '.project-brain/runner-logs/',
   '.project-brain/runners/',
-  // Local, per-machine state. None of it belongs in a commit, and one repo
-  // already committed a 180 KB .answer-cache.json because nothing said so.
-  '.project-brain/.usage.jsonl',
-  '.project-brain/.decisions.jsonl',
-  '.project-brain/.answer-cache.json',
-  '.project-brain/.route-hook-state.json',
-  '.project-brain/.sync-state.json',
-  '.project-brain/.sync-bg.log',
-  '.project-brain/.sync-bg.lock',
-  '.project-brain/.dirty-files',
-  '.project-brain/.active_state.lock',
+  // Local, per-machine state (one list: common.mjs LOCAL_STATE_FILES). The
+  // brain also keeps a nested .project-brain/.gitignore for installs that
+  // predate these entries.
+  ...LOCAL_STATE_FILES.map((f) => `.project-brain/${f}`),
   '.worktrees/'
 ];
 

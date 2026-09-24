@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync, execSync } from 'node:child_process';
 import {
   ROOT, BRAIN_DIR, exists, read, atomicWrite, sha256, takeFlag, takeOption, gitBranchSafe,
-  staleIndexFromRecords, isFastMode
+  staleIndexFromRecords, isFastMode, ensureLocalStateIgnored
 } from './common.mjs';
 import { noteFriction } from './friction.mjs';
 import { BUDGETS } from './footprint.mjs';
@@ -566,6 +566,7 @@ function readHookState() {
  */
 function writeHookState(state) {
   try {
+    ensureLocalStateIgnored(BRAIN_DIR);
     const cur = (() => { try { return exists(HOOK_STATE_FILE) ? JSON.parse(read(HOOK_STATE_FILE)) : {}; } catch { return {}; } })();
     atomicWrite(HOOK_STATE_FILE, JSON.stringify({ ...cur, ...state }));
   } catch { /* soft — never block */ }
