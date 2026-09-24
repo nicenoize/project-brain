@@ -50,6 +50,7 @@ import { activeStateJson } from './active-state.mjs';
 import { loadFindings } from './findings.mjs';
 import { loadCandidates, dedupeCandidates } from './brain-learn.mjs';
 import { extractTags, SESSIONS_DIR } from './brain-session-digest.mjs';
+import { isMainModule } from './is-main.mjs';
 
 // ---------------------------------------------------------------------------
 // Pure collection core (exported, unit-tested) — no I/O.
@@ -410,7 +411,7 @@ function main() {
 
 // Only run the CLI when invoked directly; importing for unit tests must not
 // trigger argv parsing / process.exit / git I/O.
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
   try {
     main();
   } catch (error) {

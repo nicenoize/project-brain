@@ -73,6 +73,7 @@
  * missing or malformed arguments) and refusals (1: dirty tree without
  * --allow-dirty, tag already exists, no snapshot to compare).
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1888,7 +1889,7 @@ async function main() {
 }
 
 // MANDATORY isMain guard: importing this module must not parse argv / spawn / exit.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`[brain:release] ${error.stack || error.message || error}\n`);
     process.exit(1);

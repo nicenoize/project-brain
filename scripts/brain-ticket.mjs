@@ -6,6 +6,7 @@
  * .project-brain/work-packages/<id>.md, and (with --github) opens
  * paired issues so an orchestrator run can pick them up later.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -14,7 +15,7 @@ import { BRAIN_DIR, ROOT, ensureDir, slugify, write } from './common.mjs';
 
 // Run CLI side effects only when invoked directly, so `import { buildPlan }`
 // from sibling scripts (e.g. brain-speckit.mjs) doesn't double-execute.
-const __isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+const __isMain = isMainModule(import.meta.url);
 
 if (__isMain) main();
 

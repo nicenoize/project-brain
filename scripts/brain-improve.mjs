@@ -39,6 +39,7 @@ import { packPrompt } from './brain-pack.mjs';
 import { buildPlan, renderMarkdown } from './brain-ticket.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
+import { isMainModule } from './is-main.mjs';
 
 function usage() {
   return [
@@ -590,6 +591,6 @@ async function main() {
 }
 
 // Only run the CLI when invoked directly.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main();
 }

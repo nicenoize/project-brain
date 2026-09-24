@@ -22,6 +22,7 @@
  * leases})` so it is unit-testable with fixture records — no real index,
  * embedder, or model required.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -502,7 +503,7 @@ function splitList(s) { return String(s || '').split(/[,\n]/).map(x => x.trim())
 // MANDATORY isMain guard: importing this module (e.g. from tests) must NOT run
 // the CLI, open the store, or call process.exit. A past bug had scripts firing
 // their CLI on import.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().then(code => process.exit(code)).catch(err => {
     process.stderr.write(`[brain:radar] ${err.message || err}\n`);
     process.exit(1);

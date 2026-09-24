@@ -8,6 +8,7 @@
  * the active_state lock + per-slot orchestration lease so concurrent
  * orchestrators never over-spawn.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -29,7 +30,7 @@ const opts = parseArgs(args);
    effect — which is also why its pure helpers had no unit tests. The argv parse
    and the derived consts stay at module scope: runOnce() closes over them, and
    they are pure computation. Only the side effects are gated. */
-const isMain = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain = isMainModule(import.meta.url);
 
 if (isMain && opts.help) {
   console.log(`Usage:

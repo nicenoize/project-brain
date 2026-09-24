@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { peekOption, atomicWrite } from './common.mjs';
 import { openStore } from './store.mjs';
+import { isMainModule } from './is-main.mjs';
 
 // A full `--format json` graph can be multi-MB. Emitting that straight to a
 // terminal (i.e. into an agent's context) is a token bomb (decisions/0024); we
@@ -77,7 +78,7 @@ function emit(out, writePath) {
 
 // Only run the CLI when invoked directly; importing buildGraph (e.g. from
 // brain-diagram.mjs) must not open the store or print a graph.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch(err => { process.stderr.write(`[brain:graph] ${err.message || err}\n`); process.exit(1); });
 }
 

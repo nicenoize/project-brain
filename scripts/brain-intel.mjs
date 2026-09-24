@@ -68,6 +68,7 @@ import {
 import { buildImportGraph, cycles } from './import-graph.mjs';
 import { DECISIONS_LOG, calibrateDecisions } from './decision.mjs';
 import { measureFiles, refactorPlan, STRUCTURE_NOTE } from './code-structure.mjs';
+import { isMainModule } from './is-main.mjs';
 
 const DEFAULT_COMMIT_WINDOW = 500;
 const DEFAULT_ROW_LIMIT = 15;
@@ -742,7 +743,7 @@ async function main() {
 
 // Only run the CLI when invoked directly; importing for unit tests must not
 // trigger argv parsing / process.exit (mirrors brain-why.mjs).
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`[brain:intel] ${error.message || error}\n`);
     process.exit(1);

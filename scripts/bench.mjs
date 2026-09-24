@@ -97,6 +97,7 @@ import { fileURLToPath } from 'node:url';
 import { ROOT, takeFlag, takeOption } from './common.mjs';
 import { buildImportGraph } from './import-graph.mjs';
 import { gitLogArgs, parseLog, fileHealth, calibrateFileHealth } from './git-intel.mjs';
+import { isMainModule } from './is-main.mjs';
 
 const SELF = fileURLToPath(import.meta.url);
 const SCRIPTS_DIR = path.dirname(SELF);
@@ -872,7 +873,7 @@ async function main() {
   process.stdout.write(json ? `${JSON.stringify(report, null, 2)}\n` : `${renderTable(report)}\n`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === SELF) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`[bench] ${(error && error.message) || error}\n`);
     process.exit(1);

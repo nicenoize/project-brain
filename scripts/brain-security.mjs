@@ -53,6 +53,7 @@
  * imports it for GET /api/security. The isMain guard keeps importing this
  * module side-effect-free.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1017,7 +1018,7 @@ async function main() {
 
 // Only run the CLI when invoked directly; importing for unit tests (and for
 // brain-serve's /api/security) must not parse argv or spawn anything.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`[brain:security] ${error.message || error}\n`);
     process.exit(1);

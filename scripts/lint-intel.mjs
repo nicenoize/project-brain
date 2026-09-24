@@ -72,6 +72,7 @@
  * the thin I/O wrapper. The isMain guard keeps importing this module
  * side-effect-free.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -1775,7 +1776,7 @@ export function main() {
 
 // Only run the CLI when invoked directly; importing for unit tests (and for a
 // future /api/lint endpoint) must not parse argv or spawn anything.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   try {
     main();
   } catch (error) {

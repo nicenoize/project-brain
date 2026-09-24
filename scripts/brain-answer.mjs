@@ -52,6 +52,7 @@ import {
   parseFrontmatter, frontmatterTitle, moduleGlobs,
   globMatchesFile, inferModuleFromPath, moduleAliases
 } from './brain-serve.mjs';
+import { isMainModule } from './is-main.mjs';
 
 // ---------------------------------------------------------------------------
 // Budget
@@ -621,6 +622,6 @@ async function main() {
 }
 
 // MANDATORY isMain guard: importing this module for tests must NOT run the CLI.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   main().then((c) => process.exit(c)).catch(() => process.exit(0));
 }

@@ -30,6 +30,7 @@
  * unit-tested. Parsing is reused from active-state.mjs (activeStateJson).
  * Hook contract: always exits 0; errors go to stderr only.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -306,6 +307,6 @@ function main() {
   process.exit(0); // hook contract: never block a session start
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (isMainModule(import.meta.url)) {
   main();
 }

@@ -19,6 +19,7 @@
  * shared "which files changed" primitive in common.mjs (dirtyPathFor /
  * appendDirtyFile), the same list `brain:sync --if-stale` drains.
  */
+import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,6 +72,6 @@ function main() {
 }
 
 // MANDATORY isMain guard: importing this module for tests must NOT run the CLI.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   process.exit(main());
 }
