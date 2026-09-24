@@ -1,0 +1,10 @@
+# project-brain local state (per machine, never committed) — managed by project-brain
+/.usage.jsonl
+/.decisions.jsonl
+/.answer-cache.json
+/.route-hook-state.json
+/.sync-state.json
+/.sync-bg.log
+/.sync-bg.lock
+/.dirty-files
+/.active_state.lock

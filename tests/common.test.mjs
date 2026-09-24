@@ -155,3 +155,49 @@ test('hash handoff: round-trips, deletes its file, rejects garbage', async () =>
   fs.writeFileSync(`${dir}/bad.json`, '[1,2]');
   assert.equal(readHashHandoff(`${dir}/bad.json`), null);
 });
+
+test('ensureLocalStateIgnored: a nested .gitignore covers local state, keeps user lines, never creates the dir', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { ensureLocalStateIgnored, LOCAL_STATE_FILES } = await import('../scripts/common.mjs');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-ignore-'));
+
+  const absent = path.join(base, 'absent', '.project-brain');
+  ensureLocalStateIgnored(absent);
+  assert.equal(fs.existsSync(absent), false, 'never creates .project-brain');
+
+  const dir = path.join(base, 'repo', '.project-brain');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'my-own-entry'); // no trailing newline
+  ensureLocalStateIgnored(dir);
+  const text = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
+  assert.match(text, /^my-own-entry\n/, 'the user line stays, cleanly separated');
+  for (const f of LOCAL_STATE_FILES) assert.ok(text.includes(`/${f}\n`), f);
+
+  // A second process (fresh module state is not needed: the file is the truth).
+  const again = path.join(base, 'repo2', '.project-brain');
+  fs.mkdirSync(again, { recursive: true });
+  ensureLocalStateIgnored(again);
+  const once = fs.readFileSync(path.join(again, '.gitignore'), 'utf8');
+  ensureLocalStateIgnored(again);
+  assert.equal(fs.readFileSync(path.join(again, '.gitignore'), 'utf8'), once, 'idempotent');
+});
+
+test('ensureLocalStateIgnored: git actually ignores the state files', async (t) => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const { ensureLocalStateIgnored } = await import('../scripts/common.mjs');
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-ignore-git-'));
+  if (spawnSync('git', ['init', '-q'], { cwd: repo }).status !== 0) { t.skip('git unavailable'); return; }
+  const dir = path.join(repo, '.project-brain');
+  fs.mkdirSync(dir);
+  ensureLocalStateIgnored(dir);
+  for (const f of ['.usage.jsonl', '.decisions.jsonl', '.answer-cache.json']) {
+    assert.equal(spawnSync('git', ['check-ignore', '-q', `.project-brain/${f}`], { cwd: repo }).status, 0, f);
+  }
+  assert.notEqual(spawnSync('git', ['check-ignore', '-q', '.project-brain/active_state.md'], { cwd: repo }).status, 0,
+    'real brain records are NOT ignored');
+});

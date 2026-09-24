@@ -611,6 +611,52 @@ export function cosine(a, b) {
   return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
 }
 
+// --- Local state stays out of git -------------------------------------------
+/**
+ * Per-machine state the brain writes under .project-brain/. None of it belongs
+ * in a commit. The installer adds these to the host's .gitignore, but an
+ * EXISTING install never re-runs the installer. When the usage ledger went
+ * default-on, every upgraded repo would have grown an untracked
+ * .usage.jsonl that `git add .` commits. (club-ops already committed a
+ * 180 KB .answer-cache.json the same way.)
+ */
+export const LOCAL_STATE_FILES = Object.freeze([
+  '.usage.jsonl',
+  '.decisions.jsonl',
+  '.answer-cache.json',
+  '.route-hook-state.json',
+  '.sync-state.json',
+  '.sync-bg.log',
+  '.sync-bg.lock',
+  '.dirty-files',
+  '.active_state.lock'
+]);
+
+const LOCAL_IGNORE_HEADER = '# project-brain local state (per machine, never committed) — managed by project-brain';
+const ignoredDirs = new Set();
+
+/**
+ * Make `dir` (the .project-brain directory) ignore its own local state via a
+ * nested .gitignore, so it is out of git no matter what the host's
+ * .gitignore says. Idempotent and append-only (a user's own lines stay),
+ * fail-silent, once per process per directory. Never creates `dir`.
+ */
+export function ensureLocalStateIgnored(dir = BRAIN_DIR) {
+  if (ignoredDirs.has(dir)) return;
+  ignoredDirs.add(dir);
+  try {
+    if (!fs.existsSync(dir)) return;
+    const file = path.join(dir, '.gitignore');
+    const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    const have = new Set(current.split('\n').map((l) => l.trim()));
+    const missing = LOCAL_STATE_FILES.map((f) => `/${f}`).filter((e) => !have.has(e));
+    if (!missing.length) return;
+    const head = have.has(LOCAL_IGNORE_HEADER) ? [] : [LOCAL_IGNORE_HEADER];
+    const sep = current && !current.endsWith('\n') ? '\n' : '';
+    fs.appendFileSync(file, `${sep}${[...head, ...missing].join('\n')}\n`);
+  } catch { /* bookkeeping must never break a command */ }
+}
+
 // --- Sync → index hash handoff ---------------------------------------------
 // brain:sync hashes every indexable file to find what changed, then spawns
 // brain-index, which hashed every file again for its manifest. On club-ops
@@ -662,6 +708,7 @@ export const USAGE_LOG_MAX_BYTES = 1024 * 1024;
 export function appendUsageRecord(record, logPath = USAGE_LOG, maxBytes = USAGE_LOG_MAX_BYTES) {
   try {
     ensureDir(path.dirname(logPath));
+    ensureLocalStateIgnored(path.dirname(logPath));
     fs.appendFileSync(logPath, JSON.stringify(record) + '\n');
     try {
       if (fs.statSync(logPath).size > maxBytes) {
