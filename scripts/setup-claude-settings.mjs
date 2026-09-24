@@ -83,6 +83,33 @@ export function collectCommands(hookGroups) {
 }
 
 /**
+ * PURE. What a hook command DOES, for de-duplication: the brain script it runs
+ * plus its arguments, ignoring node flags, `|| true` and output redirection.
+ *
+ * Commands used to be compared as exact strings, so a hook a user had fixed by
+ * hand, e.g. `node --preserve-symlinks …/brain-state-digest.mjs || true` (the
+ * workaround for the symlink bug), counted as "missing". The next update then
+ * appended the template form beside it, and once both forms work, the digest
+ * is injected twice. Non-brain commands keep exact-string identity.
+ */
+export function hookIdentity(command) {
+  const cmd = String(command || '').trim();
+  const m = cmd.match(/^node\s+(?:--[\w-]+(?:=\S+)?\s+)*["']?([^"'\s]*\/scripts\/([\w.-]+\.mjs))["']?(.*)$/);
+  if (!m) return cmd;
+  const args = m[3]
+    .replace(/\s*\|\|\s*true\s*$/, '')
+    .replace(/\s*[12]?>\s*\/dev\/null(\s+2>&1)?/g, '')
+    .trim()
+    .replace(/\s+/g, ' ');
+  return `brain-script:${m[2]}${args ? ` ${args}` : ''}`;
+}
+
+/** Hook identities (hookIdentity) present in a list of hook groups. */
+function collectHookIdentities(hookGroups) {
+  return new Set([...collectCommands(hookGroups)].map(hookIdentity));
+}
+
+/**
  * PURE. Report the drift between an installed `.claude/settings.json` object
  * and the recommended template — i.e. what the additive merge WOULD still add.
  * Focused on the wiring that silently rots when `bin/update.sh` refreshes
@@ -98,11 +125,11 @@ export function computeSettingsDrift(installed = {}, recommended = {}) {
   const recHooks = recommended?.hooks ?? {};
   const instHooks = installed?.hooks ?? {};
   for (const [event, groups] of Object.entries(recHooks)) {
-    const have = collectCommands(instHooks[event]);
+    const have = collectHookIdentities(instHooks[event]);
     for (const group of groups ?? []) {
       for (const h of group?.hooks ?? []) {
         const cmd = typeof h?.command === 'string' ? h.command.trim() : '';
-        if (cmd && !have.has(cmd)) missingHooks.push({ event, command: cmd });
+        if (cmd && !have.has(hookIdentity(cmd))) missingHooks.push({ event, command: cmd });
       }
     }
   }
@@ -146,12 +173,13 @@ function upgradeLegacyHooks(existing = {}) {
 function mergeHooks(existing = {}, extra = {}) {
   let added = 0;
   for (const [event, groups] of Object.entries(extra)) {
-    const have = collectCommands(existing[event]);
+    const have = collectHookIdentities(existing[event]);
     const wantedGroups = [];
     for (const group of groups) {
       const groupCmds = (group.hooks ?? [])
         .map((h) => h?.command?.trim())
-        .filter(Boolean);
+        .filter(Boolean)
+        .map(hookIdentity);
       const allKnown = groupCmds.every((c) => have.has(c));
       if (allKnown) continue;
       wantedGroups.push(group);
