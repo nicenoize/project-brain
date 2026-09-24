@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { computeSettingsDrift, collectCommands } from '../scripts/setup-claude-settings.mjs';
+import { computeSettingsDrift, collectCommands, hookIdentity } from '../scripts/setup-claude-settings.mjs';
 
 const SETTINGS_SCRIPT = fileURLToPath(new URL('../scripts/setup-claude-settings.mjs', import.meta.url));
 
@@ -278,4 +278,43 @@ test('sync upgrades legacy active_state cat hook to the state digest', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+const DIGEST_TEMPLATE = 'node "$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-state-digest.mjs" || true';
+const DIGEST_HAND_FIXED = 'node --preserve-symlinks --preserve-symlinks-main "$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-state-digest.mjs" || true';
+
+test('hookIdentity: same script + args is the same hook, whatever the node flags and tail', () => {
+  assert.equal(hookIdentity(DIGEST_TEMPLATE), hookIdentity(DIGEST_HAND_FIXED));
+  assert.equal(hookIdentity(DIGEST_TEMPLATE), 'brain-script:brain-state-digest.mjs');
+  assert.equal(
+    hookIdentity('node "$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-prune.mjs" --apply >/dev/null 2>&1 || true'),
+    'brain-script:brain-prune.mjs --apply');
+  assert.notEqual(
+    hookIdentity('node "$X/scripts/brain-route.mjs" --hook --event sessionstart || true'),
+    hookIdentity('node "$X/scripts/brain-route.mjs" --hook --event userpromptsubmit || true'),
+    'different arguments are different hooks');
+  assert.equal(hookIdentity('  echo hi  '), 'echo hi', 'a non-brain command keeps exact identity');
+});
+
+test('drift: a hand-fixed hook (node flags added) is not "missing"', () => {
+  const recommended = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: DIGEST_TEMPLATE }] }] } };
+  const installed = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: DIGEST_HAND_FIXED }] }] } };
+  assert.equal(computeSettingsDrift(installed, recommended).hookDrift, 0);
+});
+
+test('settings sync (real template): a hand-fixed digest hook is not appended a second time', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brain-settings-identity-'));
+  const claudeDir = path.join(dir, '.claude');
+  fs.mkdirSync(claudeDir);
+  fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({
+    hooks: { SessionStart: [{ hooks: [{ type: 'command', command: DIGEST_HAND_FIXED }] }] }
+  }));
+  const r = spawnSync(process.execPath, [SETTINGS_SCRIPT], {
+    cwd: dir, encoding: 'utf8',
+    env: { ...process.env, PROJECT_BRAIN_SKIP_CAVEMAN_ULTRA: '1', PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS: '1' }
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const merged = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf8'));
+  const digests = [...collectCommands(merged.hooks.SessionStart)].filter((c) => c.includes('brain-state-digest.mjs'));
+  assert.deepEqual(digests, [DIGEST_HAND_FIXED], 'kept the hand-fixed form, added no duplicate');
 });
