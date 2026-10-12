@@ -120,6 +120,10 @@
  *                          nothing outside the brain dir is ever opened
  *   /api/activity          "What landed today, and who is working where?" — from
  *                          git, so it is never empty and needs no adoption.
+ *   /api/resources         "Room for another agent, and what can go?" — brain:ps
+ *                          collect() (sessions by last real message, orphans,
+ *                          idle docker stacks, MCP hygiene, admission); read-
+ *                          only, 20 s cache (serve/resources.mjs)
  *   /api/fleet             "Which of my repos needs attention right now?" — the
  *                          multi-repo view for the solo agent-manager. Fleet
  *                          discovery is projects.mjs's contract (sibling dirs
@@ -213,6 +217,7 @@ import { apiDoc, apiMap, apiWhy } from './serve/docs.mjs';
 import { apiFleet } from './serve/fleet.mjs';
 export { summarizeActivity, areaOf, localDayStart, apiActivity } from './serve/activity.mjs';
 import { apiActivity, summarizeActivity, areaOf, localDayStart } from './serve/activity.mjs';
+import { apiResources } from './serve/resources.mjs';
 import { createSseHub } from './serve/sse.mjs';
 import { serveStatic } from './serve/static.mjs';
 import {
@@ -292,6 +297,7 @@ function buildRoutes(api, sse) {
     ['/api/why', (req, res, url) => apiWhy(api, res, url)],
     ['/api/fleet', (req, res) => apiFleet(api, res)],
     ['/api/activity', (req, res, url) => apiActivity(api, res, url)],
+    ['/api/resources', (req, res) => apiResources(api, res)],
     ['/api/meta', (req, res) => apiMeta(api, res)],
     ['/api/runners', (req, res) => apiRunners(api, res)],
     ['/api/runners/log', (req, res, url) => apiRunnerLog(api, res, url)],

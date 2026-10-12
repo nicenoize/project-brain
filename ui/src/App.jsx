@@ -11,6 +11,7 @@ import BlastPanel from './components/BlastPanel.jsx';
 import MapPanel from './components/MapPanel.jsx';
 import FleetPanel from './components/FleetPanel.jsx';
 import ActivityPanel from './components/ActivityPanel.jsx';
+import ResourcesPanel from './components/ResourcesPanel.jsx';
 import GraphPanel from './components/GraphPanel.jsx';
 import SecurityPanel from './components/SecurityPanel.jsx';
 
@@ -78,8 +79,13 @@ function useData() {
       }));
       // Second pass: the slow one, folded in when it lands. A reload that
       // overtakes it simply sets briefLoading again.
-      const brief = await api.brief().catch(() => null);
-      setData((prev) => ({ ...prev, brief, briefLoading: false }));
+      // The machine reading (~0.5 s: footprints, transcripts, docker) rides
+      // the second pass too, beside the brief.
+      const [brief, resources] = await Promise.all([
+        api.brief().catch(() => null),
+        api.resources().catch(() => null)
+      ]);
+      setData((prev) => ({ ...prev, brief, resources, briefLoading: false }));
     } catch (error) {
       setData({ error, loading: false });
     }
@@ -124,6 +130,15 @@ function sectionState(id, d, { workstreams, leases, conflictsByTask }) {
       // Two people in one area is the only thing here that wants a human.
       if ((a.collisions || []).length) return 'attn';
       return a.today?.commits > 0 ? 'run' : 'quiet';
+    }
+    case 'resources': {
+      const r = d.resources;
+      if (!r || r.degraded) return 'quiet';
+      if (r.system?.pressure === 'critical') return 'stop';
+      // A held start, idle sessions or orphans want a human; a busy but
+      // healthy machine is just running.
+      if (!r.admission?.ok || r.idleCmd || r.orphans > 0) return 'attn';
+      return r.sessions.length ? 'run' : 'quiet';
     }
     case 'fleet': {
       const top = (d.fleet?.projects || [])[0];
@@ -257,6 +272,7 @@ export default function App() {
       <Board workstreams={workstreams} conflictsByTask={conflictsByTask} runnersInfo={d.runnersInfo} onChanged={d.reload} />),
     describe('danger', 'Which files are most dangerous?',
       <Intel hotspots={d.hotspots} health={d.health} coChange={d.coChange} ownership={d.ownership} leases={leases} />),
+    describe('resources', 'Is there room for another agent?', <ResourcesPanel resources={d.resources} />),
     describe('graph', 'What is tangled?', <GraphPanel graph={d.graph} />),
     describe('map', 'Why is it built this way?', <MapPanel map={d.map} records={d.records} />)
   ].sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state]);

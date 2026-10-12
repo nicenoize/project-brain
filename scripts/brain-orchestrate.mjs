@@ -15,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { BRAIN_DIR, ROOT, ensureDir, slugify, write } from './common.mjs';
 import { activeStateJson, addWorkstream, addLease, releaseLeases } from './active-state.mjs';
 import { spawnDetachedRunner } from './runner-supervisor.mjs';
+import { admission, collectQuick, resourceConfig } from './brain-ps.mjs';
 import { fileURLToPath } from 'node:url';
 import { targetsOverlap, UnsupportedPatternError } from './lease-overlap.mjs';
 
@@ -59,6 +60,7 @@ Options:
   --runner-cmd-light cmd  Optional cheaper runner for SMALL issues (tier=light); others keep --runner-cmd.
                         Off unless set (also BRAIN_RUNNER_CMD_LIGHT). The tier is recorded per runner.
   --runner-log-dir dir  Runner log directory (default: .project-brain/runner-logs)
+  --ignore-resources    Launch even under memory pressure / at maxConcurrentAgents (see brain:ps)
   --refill             Only assign open slots after counting active workstreams
   --watch              Keep polling/refilling until stopped
   --interval seconds   Watch polling interval (default: 120)
@@ -106,6 +108,22 @@ function runOnce(extra = {}) {
   const issueLimit = Math.max(limit, openSlots);
   const issues = opts.fromFile ? readIssues(opts.fromFile).slice(0, issueLimit) : fetchGithubIssues({ ...opts, limit: issueLimit }).slice(0, issueLimit);
   const plan = buildOrchestration({ issues, concurrency, tool, base, openSlots, active, state, extra });
+  if (opts.launchRunners && plan.workerSlots.length && !opts.ignoreResources && process.env.BRAIN_RESOURCE_GATE !== 'off') {
+    // Resource gate (R4): N more agents on a machine already under pressure
+    // is how a 24 GB laptop ends up swapping at 19 / 20 GB. --watch retries.
+    let config = {};
+    try { config = JSON.parse(fs.readFileSync(path.join(BRAIN_DIR, 'config.json'), 'utf8')); } catch { /* defaults */ }
+    let gate = { ok: true };
+    try { gate = admission(collectQuick(), resourceConfig(config), { starting: plan.workerSlots.length }); } catch { /* fail open */ }
+    if (!gate.ok) {
+      plan.resourceHold = { reasons: gate.reasons, suggest: gate.suggest };
+      console.error(`brain:orchestrate: holding ${plan.workerSlots.length} runner(s) — ${gate.reasons.join('; ')}.`);
+      for (const line of gate.suggest) console.error(`  free up: ${line}`);
+      console.error('  (override: --ignore-resources)');
+      if (opts.write || opts.writePackages) writePlan(plan, opts);
+      return plan;
+    }
+  }
   if (opts.spawnWorktrees && plan.workerSlots.length) {
     if (opts.launchRunners) ensureRunnerCommand(opts);
     const spawned = spawnWorktrees(plan, opts);
@@ -831,6 +849,7 @@ function parseArgs(argv) {
     if (a === '--spawn-worktrees') { opts.spawnWorktrees = true; continue; }
     if (a === '--launch-runners') { opts.launchRunners = true; opts.spawnWorktrees = true; continue; }
     if (a === '--refill') { opts.refill = true; continue; }
+    if (a === '--ignore-resources') { opts.ignoreResources = true; continue; }
     if (a === '--watch') { opts.watch = true; opts.refill = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
     if (a === '--limit') { opts.limit = val; i += val ? 1 : 0; continue; }
