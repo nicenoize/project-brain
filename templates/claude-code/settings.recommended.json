@@ -34,6 +34,14 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-warm.mjs\" rehydrate || true"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-ps.mjs\" --hook || true"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

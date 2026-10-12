@@ -20,6 +20,7 @@ import { startRunner, listRunners, stopRunner, tailLog } from '../runner-supervi
 import { readJsonBody, sendJson } from './security.mjs';
 import { freshness } from './records.mjs';
 import { readStateSafe, readLeasesSafe } from './state.mjs';
+import { admission, collectQuick, resourceConfig } from '../brain-ps.mjs';
 
 const DEFAULT_LOG_LINES = 100;
 const MAX_LOG_LINES = 2000;
@@ -103,6 +104,19 @@ export function apiRunners(api, res) {
   });
 }
 
+/** Admission for one more agent, or null when the machine has room. Fails open. */
+function resourceGate(root) {
+  if (process.env.BRAIN_RESOURCE_GATE === 'off') return null;
+  try {
+    let config = {};
+    try { config = JSON.parse(fs.readFileSync(path.join(root, '.project-brain', 'config.json'), 'utf8')); } catch { /* defaults */ }
+    const gate = admission(collectQuick(), resourceConfig(config), { starting: 1 });
+    return gate.ok ? null : { reasons: gate.reasons, suggest: gate.suggest };
+  } catch {
+    return null; // a probe failure must never block the operator
+  }
+}
+
 export async function apiRunnerStart(api, req, res) {
   const { root, runnersDir, runnerLogDir, ensureRunnersWatcher } = api;
   const parsed = await readJsonBody(req);
@@ -126,9 +140,11 @@ export async function apiRunnerStart(api, req, res) {
     .find((r) => r.workPackageId === task && r.status === 'running');
   if (running) return sendJson(res, 409, { error: 'already-running', runner: runnerView(running) });
   const advisories = leaseAdvisories(state.leases, workstream.owner);
-  if (advisories.length && !acknowledged) {
+  // Resource gate (R4): the same read-before-start moment, for the machine.
+  const resources = resourceGate(root);
+  if ((advisories.length || resources) && !acknowledged) {
     // Brief gate: surface the advisories, spawn NOTHING, record nothing.
-    return sendJson(res, 409, { briefGate: true, advisories });
+    return sendJson(res, 409, { briefGate: true, advisories, resources });
   }
   const started = startRunner({
     workPackageId: task,
@@ -145,7 +161,8 @@ export async function apiRunnerStart(api, req, res) {
     task,
     actor: 'control-room',
     acknowledgedBriefGate: acknowledged,
-    advisoryCount: advisories.length
+    advisoryCount: advisories.length,
+    ...(resources ? { resourceReasons: resources.reasons } : {})
   });
   ensureRunnersWatcher(); // the start may have just created runners/
   sendJson(res, 200, { runner: runnerView({ id: started.id, ...started.record }) });

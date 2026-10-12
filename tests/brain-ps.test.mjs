@@ -122,3 +122,77 @@ test('descendantPids walks the whole tree below a pid, and nothing beside it', (
   assert.deepEqual(descendantPids(rows, 400).sort((a, b) => a - b), [401, 402]);
   assert.deepEqual(descendantPids(rows, 311), []);
 });
+
+import { resourceConfig, RESOURCE_DEFAULTS, parseDockerPs, stackOwner, admission, mcpAudit, hookLine } from '../scripts/brain-ps.mjs';
+
+test('resource config: repo overrides win, junk falls back to defaults', () => {
+  assert.deepEqual(resourceConfig({}), { ...RESOURCE_DEFAULTS });
+  const c = resourceConfig({ resources: { maxConcurrentAgents: 3, minFreePct: 'x', stackIdleHours: -1 } });
+  assert.equal(c.maxConcurrentAgents, 3);
+  assert.equal(c.minFreePct, RESOURCE_DEFAULTS.minFreePct);
+  assert.equal(c.stackIdleHours, RESOURCE_DEFAULTS.stackIdleHours);
+});
+
+test('docker stacks group by compose project; loose containers stand alone', () => {
+  const st = parseDockerPs('p1|/w/a|c1\np1||c2\n||solo\n');
+  assert.deepEqual(st.map((x) => [x.project, x.compose, x.workdir, x.containers.length]), [['p1', true, '/w/a', 2], ['solo', false, null, 1]]);
+});
+
+test('a stack belongs to the project whose real path or scratchpad holds its workdir', () => {
+  const projects = [
+    { slug: '-Users-a-Coding-club-ops', cwd: '/Users/a/Coding/club-ops' },
+    { slug: '-Users-a-Coding-club', cwd: '/Users/a/Coding/club' },
+    { slug: '-Users-a-gone', cwd: null }
+  ];
+  assert.equal(stackOwner('/Users/a/Coding/club-ops/supabase', projects), '-Users-a-Coding-club-ops');
+  assert.equal(stackOwner('/Users/a/Coding/club/api', projects), '-Users-a-Coding-club');
+  assert.equal(stackOwner('/private/tmp/claude-501/-Users-a-Coding-club-ops/e43/scratch', projects), '-Users-a-Coding-club-ops');
+  assert.equal(stackOwner('/Users/a/Coding/club-ops2', projects), null, 'a name that merely starts alike is not ownership');
+  assert.equal(stackOwner(null, projects), null);
+});
+
+test('admission: pressure, free share and concurrency hold new agents — swap does not', () => {
+  const sessions = (n) => Array.from({ length: n }, (_, i) => ({ pid: i + 10, verdict: i === 0 ? 'idle' : 'active' }));
+  const calm = { pressure: 'normal', freePct: 30, swapUsedGb: 18.5, swapTotalGb: 20 };
+  assert.equal(admission({ system: calm, sessions: sessions(2) }).ok, true, 'swap 92 % full alone is not pressure on macOS');
+  const warn = admission({ system: { ...calm, pressure: 'warn' }, sessions: sessions(2) });
+  assert.equal(warn.ok, false);
+  assert.match(warn.reasons[0], /pressure is warn/);
+  assert.match(warn.suggest[0], /kill -TERM 10/);
+  assert.match(admission({ system: { ...calm, freePct: 5 }, sessions: [] }).reasons[0], /only 5% memory free/);
+  assert.match(admission({ system: calm, sessions: sessions(6) }).reasons[0], /6 agent sessions running/);
+  assert.equal(hookLine({ system: calm, sessions: sessions(6) }), '', 'the hook counts no session it would start');
+  assert.match(hookLine({ system: { ...calm, pressure: 'critical' }, sessions: [] }), /^brain: memory pressure is critical/);
+});
+
+test('MCP audit flags floating npx servers and browser servers in every session', () => {
+  const f = mcpAudit([
+    { name: 'playwright', scope: 'user', command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
+    { name: 'context7', scope: 'project', command: 'npx', args: ['-y', '@upstash/context7-mcp@1.2.3'] },
+    { name: 'pinned', scope: 'user', command: '/usr/local/bin/context7-mcp', args: [] },
+    { name: 'chrome-devtools', scope: 'project', command: 'npx', args: ['chrome-devtools-mcp@latest'] }
+  ]);
+  assert.deepEqual(f.map((x) => `${x.server}:${x.kind}`), ['playwright:unpinned', 'playwright:heavy-global', 'chrome-devtools:unpinned']);
+});
+
+import { resourcesView } from '../scripts/serve/resources.mjs';
+
+test('the Control Room view keeps what the panel needs and offers commands, never actions', () => {
+  const v = resourcesView({
+    system: { totalGb: 24, freePct: 24, pressure: 'warn' },
+    sessions: [{ pid: 7, verdict: 'idle', mb: 401.6, ageSec: 9, lastActivityMs: 1, cwd: '/x' }, { pid: 8, verdict: 'active', mb: 10, ageSec: 1, lastActivityMs: 2, cwd: '/y' }],
+    helpers: { 'mcp-server': [{ rssKb: 2048 }], 'dev-server': [] },
+    dockerMb: 8290.4,
+    stacks: [{ project: 'p', containers: ['a', 'b'], verdict: 'idle', stopCmd: 'docker stop $(…)' }],
+    runners: [],
+    orphans: [{ pid: 1 }],
+    mcp: [],
+    admission: { ok: false, reasons: ['memory pressure is warn'], suggest: [] },
+    idleHours: 4
+  });
+  assert.equal(v.idleCmd, 'kill -TERM 7');
+  assert.equal(v.sessions[0].mb, 402);
+  assert.deepEqual(v.helpers['mcp-server'], { count: 1, mb: 2 });
+  assert.deepEqual(v.stacks[0], { project: 'p', containers: 2, verdict: 'idle', stopCmd: 'docker stop $(…)' });
+  assert.equal(v.orphans, 1);
+});
