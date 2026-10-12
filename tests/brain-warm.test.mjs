@@ -122,3 +122,27 @@ test('env merge is additive and never overwrites the developer', () => {
   assert.equal(mergeEnv(env, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: 300000, BRAIN_USAGE_LOG: '1' }), 1);
   assert.deepEqual(env, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '500000', BRAIN_USAGE_LOG: '1' });
 });
+
+import { upsertCompactInstructions, COMPACT_BLOCK, COMPACT_BEGIN, COMPACT_END } from '../scripts/setup-claude-settings.mjs';
+
+test('compact instructions: added once, refreshed in place, nothing outside touched', () => {
+  const user = '# My project\n\nMy own rules.\n';
+  const a = upsertCompactInstructions(user);
+  assert.equal(a.status, 'added');
+  assert.ok(a.text.startsWith(user));
+  assert.match(a.text, /## Compact Instructions/);
+  assert.equal(upsertCompactInstructions(a.text).status, 'unchanged');
+
+  const old = a.text.replace('Keep:', 'Keep (old wording):') + '\nMore of my rules.\n';
+  const b = upsertCompactInstructions(old);
+  assert.equal(b.status, 'updated');
+  assert.ok(b.text.startsWith(user) && b.text.endsWith('\nMore of my rules.\n'));
+  assert.equal(b.text.split(COMPACT_BEGIN).length, 2, 'exactly one block');
+
+  // A hand-damaged block (end marker deleted) is left for the human.
+  const damaged = user + COMPACT_BEGIN + '\n## Compact Instructions\n';
+  assert.deepEqual(upsertCompactInstructions(damaged), { text: damaged, status: 'unchanged' });
+  assert.equal(upsertCompactInstructions('').text, COMPACT_BLOCK + '\n');
+  assert.ok(Buffer.byteLength(COMPACT_BLOCK) < 800, 'CLAUDE.md rides along with every request');
+  assert.ok(COMPACT_BLOCK.endsWith(COMPACT_END));
+});
