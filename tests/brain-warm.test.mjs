@@ -172,3 +172,32 @@ test('context size is read from the latest usage record', () => {
   assert.equal(lastContextTokens([rec(10), { type: 'user' }, rec(20), { type: 'system' }]), 121);
   assert.equal(lastContextTokens([]), 0);
 });
+
+import { explorationShaped, shouldSuggestDelegate } from '../scripts/brain-warm.mjs';
+
+test('exploration-shaped prompts are recognised; change requests are not', () => {
+  for (const p of ['wo wird der Login-Token validiert?', 'Wie funktioniert das Caching hier?', 'finde alle Stellen mit fetchUser', 'where is the rate limiter configured', 'how does the sync pipeline work', 'which files touch billing?']) {
+    assert.equal(explorationShaped(p), true, p);
+  }
+  for (const p of ['bau den Login neu', 'fix the failing test', 'wo ist der Bug? bitte fixe ihn', 'commit and push', 'ja bitte', '']) {
+    assert.equal(explorationShaped(p), false, p);
+  }
+});
+
+test('delegate suggestion: only with a large context, at most once per 20 calls', () => {
+  const q = 'wo wird der Token validiert?';
+  assert.equal(shouldSuggestDelegate(q, 80_000, { calls: 0 }), false);
+  assert.equal(shouldSuggestDelegate(q, 150_000, { calls: 5 }), true);
+  assert.equal(shouldSuggestDelegate(q, 150_000, { calls: 15, delegate: { lastAtCall: 5 } }), false);
+  assert.equal(shouldSuggestDelegate(q, 150_000, { calls: 25, delegate: { lastAtCall: 5 } }), true);
+});
+
+test('acceptance: an Agent call within 3 calls of a suggestion counts as followed', () => {
+  const s = emptyState('s');
+  s.delegate = { suggested: 1, followed: 0, openAtCall: 0 };
+  foldRecords(s, [tool('a', 'Read', { file_path: '/x' }), tool('b', 'Agent', { prompt: 'find' })]);
+  assert.equal(s.delegate.followed, 1);
+  s.delegate.openAtCall = s.calls;
+  foldRecords(s, [1, 2, 3, 4].map((i) => tool(`r${i}`, 'Read', { file_path: `/y${i}` })).concat([tool('z', 'Agent', {})]));
+  assert.equal(s.delegate.followed, 1, 'too late to count');
+});
