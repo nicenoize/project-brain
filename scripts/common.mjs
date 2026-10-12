@@ -712,7 +712,10 @@ export const USAGE_LOG_MAX_BYTES = 1024 * 1024;
 /** Append one usage record as a JSONL line. Fail-silent, append-only, sidecar. */
 export function appendUsageRecord(record, logPath = USAGE_LOG, maxBytes = USAGE_LOG_MAX_BYTES) {
   try {
-    ensureDir(path.dirname(logPath));
+    // Bookkeeping for an EXISTING brain only. Creating the directory here
+    // made every brain command — even `init --dry-run`, even `brain:ps` run
+    // from an unrelated folder — leave a .project-brain/ behind.
+    if (!fs.existsSync(path.dirname(logPath))) return;
     ensureLocalStateIgnored(path.dirname(logPath));
     fs.appendFileSync(logPath, JSON.stringify(record) + '\n');
     try {
