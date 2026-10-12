@@ -13,7 +13,7 @@
  *
  *   initialize            → {protocolVersion, capabilities:{tools:{}}, serverInfo, instructions}
  *   notifications/*       → swallowed (a notification MUST never get a response)
- *   tools/list            → the eight tools below, with JSON Schema inputs
+ *   tools/list            → the tools below, with JSON Schema inputs
  *   tools/call            → {content:[{type:'text',…}]} (isError:true on failure)
  *   ping                  → {}
  *   anything else         → -32601; malformed JSON → -32700; batch → -32600
@@ -69,6 +69,7 @@ import {
 // tests) — the same contract brain-serve.mjs relies on.
 import { applyRules, scoreChange } from './brain-route.mjs';
 import { buildBrief } from './brain-brief.mjs';
+import { recall, renderRecall, RECALL_CAP } from './brain-recall.mjs';
 import { getIndexProvider } from './index-provider.mjs';
 import { staleBanner } from './retrieval.mjs';
 import { discoverProjects, isFleetMode } from './projects.mjs';
@@ -651,6 +652,25 @@ const TOOLS = [
     handler: toolSearch
   },
   {
+    name: 'brain_recall',
+    description:
+      'Find a detail from earlier in THIS session — a command, an error, a file excerpt, a decision — ' +
+      'including what a compaction dropped. Searches the session transcript (all terms must match), ' +
+      'returns short excerpts with the call number and whether they predate a compaction. Use it ' +
+      'instead of re-running a command or re-reading a file you already saw.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search terms; "quoted phrases" stay whole.' },
+        session: { type: 'string', description: 'Session id (default: the newest session of this project).' },
+        limit: { type: 'integer', minimum: 1, maximum: RECALL_CAP.limitMax, description: `Hits to return (default ${RECALL_CAP.limitDefault}).` }
+      },
+      required: ['query'],
+      additionalProperties: false
+    },
+    handler: toolRecall
+  },
+  {
     name: 'brain_next',
     description:
       'What should happen next in this repo? Ranked next actions from the deterministic routing ' +
@@ -659,6 +679,19 @@ const TOOLS = [
     handler: toolNext
   }
 ];
+
+// --- brain_recall -----------------------------------------------------------
+
+async function toolRecall(args = {}) {
+  const query = String(args.query || '').trim();
+  if (!query) return say(['recall: `query` is required.']);
+  const res = await recall(query, { session: args.session || null, limit: args.limit });
+  if (!res.file) return say(['recall: no session transcript found for this project.']);
+  return say([
+    renderRecall(res),
+    provenanceLine({ basis: 'measured', source: `session transcript ${path.basename(res.file)} (read-only search)` })
+  ]);
+}
 
 // --- brain_status -----------------------------------------------------------
 

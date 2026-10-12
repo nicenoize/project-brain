@@ -62,6 +62,7 @@ export const api = {
   next: () => get('/api/next'),
   fleet: () => get('/api/fleet'),
   activity: (days = 7) => get(`/api/activity?days=${days}`),
+  resources: () => get('/api/resources'),
   blast: (files) => get(files?.length ? `/api/blast?files=${encodeURIComponent(files.join(','))}` : '/api/blast'),
   brief: (files) => get(files?.length ? `/api/brief?files=${encodeURIComponent(files.join(','))}` : '/api/brief')
 };

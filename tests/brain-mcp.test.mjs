@@ -241,7 +241,7 @@ test('tools/list returns every tool with valid JSON schemas', async () => {
   // at the number instead of the change.
   assert.deepEqual(tools.map((t) => t.name).sort(), [
     'brain_blast', 'brain_danger', 'brain_leases', 'brain_next',
-    'brain_outline', 'brain_overview', 'brain_risk', 'brain_search',
+    'brain_outline', 'brain_overview', 'brain_recall', 'brain_risk', 'brain_search',
     'brain_status', 'brain_why'
   ]);
   for (const t of tools) {

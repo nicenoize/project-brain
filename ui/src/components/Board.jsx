@@ -38,7 +38,7 @@ function LogDrawer({ runnerId }) {
     Start pulls the brief gate INLINE into the row (advisories must be read
     before the spawn — the governance moment); running cards carry stop + log. */
 export default function Board({ workstreams, conflictsByTask, runnersInfo, onChanged }) {
-  const [gate, setGate] = useState(null);       // {task, advisories}
+  const [gate, setGate] = useState(null);       // {task, advisories, resources}
   const [busy, setBusy] = useState('');         // task currently starting/stopping
   const [openLog, setOpenLog] = useState('');   // runner id with open drawer
   const [note, setNote] = useState(null);       // {task, text} transient error
@@ -58,7 +58,7 @@ export default function Board({ workstreams, conflictsByTask, runnersInfo, onCha
       onChanged?.();
     } catch (err) {
       if (err.status === 409 && err.data?.briefGate) {
-        setGate({ task, advisories: err.data.advisories || [] });
+        setGate({ task, advisories: err.data.advisories || [], resources: err.data.resources || null });
       } else {
         setNote({ task, text: err.data?.hint || err.message });
       }
@@ -169,18 +169,36 @@ export default function Board({ workstreams, conflictsByTask, runnersInfo, onCha
 
               {gated && (
                 <div className="gate" role="alertdialog" aria-label="Brief before start">
-                  <p className="gate-head">
-                    Read before starting — these leases are held by someone else:
-                  </p>
-                  <ul>
-                    {gate.advisories.map((a, i) => (
-                      <li key={i}>
-                        <span className="path">{a.target}</span>
-                        {' — '}{a.lockedBy || 'unowned'}
-                        {a.until ? ` until ${a.until}` : ''}
-                      </li>
-                    ))}
-                  </ul>
+                  {gate.advisories.length > 0 && (
+                    <>
+                      <p className="gate-head">
+                        Read before starting — these leases are held by someone else:
+                      </p>
+                      <ul>
+                        {gate.advisories.map((a, i) => (
+                          <li key={i}>
+                            <span className="path">{a.target}</span>
+                            {' — '}{a.lockedBy || 'unowned'}
+                            {a.until ? ` until ${a.until}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  {gate.resources && (
+                    <>
+                      <p className="gate-head">
+                        This machine has no room for another agent: {gate.resources.reasons.join('; ')}.
+                      </p>
+                      {gate.resources.suggest.length > 0 && (
+                        <ul>
+                          {gate.resources.suggest.map((line, i) => (
+                            <li key={i}><span className="path">{line}</span></li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
+                  )}
                   <div className="gate-actions">
                     <button
                       className="btn"
