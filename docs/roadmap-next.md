@@ -94,11 +94,11 @@ is one call from coming back.
 | **K1 Threshold** | `setup` writes `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000` into the project `settings.json` `env` (opt-in flag, recommended; user-level override respected). | settings env | **done** |
 | **K3 Snapshot** | `brain-session-digest` on `PreCompact` grows from "scrape tagged lines" to a deterministic session record: workstream, decisions, files touched + line ranges, commands run, tests last seen green/red, uncommitted diffstat, open items, dead ends. Written to `.project-brain/sessions/`, indexed. Also runs on `Stop` so a crash loses nothing. | PreCompact / Stop | **done** |
 | **K4 Rehydrate** | `SessionStart` matcher `compact` injects the warm layer (K3 record, budgeted in `footprint.mjs`, hard cap 9,500 chars) plus one line: "details: `brain_recall <query>`". Byte-stable ordering so the new cache prefix is reusable. | SessionStart(compact) | **done** |
-| **K2 Compact Instructions** | A brain-managed block in CLAUDE.md (between markers, like the settings sync): keep decisions, file paths + line ranges, test status, open items, the user's phrasing of the goal; drop tool output, exploration dead ends already recorded, resolved errors. | CLAUDE.md | second slice |
-| **K5 Boundary nudges** | After a commit, a merged PR, `brain:close`, or a workstream switch — and only when context > 150k — the `Stop`/`PostToolUse` hook prints one line: "good moment for `/compact` (context ≈ N)". Compacting at a boundary loses the least; the threshold stays the net. Context size comes from the transcript's last usage record (undocumented format, guarded: silent on parse failure). | Stop / PostToolUse(Bash git commit) | second slice |
-| **K6 Recall** | `brain_recall(query, [session])` MCP tool + `brain:recall` CLI: keyword search over the current session's transcript (and the previous one after a resume), returns ≤ 2k chars per hit with tool name and call index. | MCP | second slice |
-| **K7 Status line** | A `brain` status-line segment: context used %, time since last compaction, workstream. The only documented live source; `setup --statusline` opt-in. | statusline | third slice |
-| **K8 Delegate exploration** | The ambient router (`brain-route`, UserPromptSubmit) tags research-shaped prompts ("where is…", "how does… work", "find all…") with a one-line suggestion to run them in a subagent. Measure acceptance before making it louder. | UserPromptSubmit | third slice |
+| **K2 Compact Instructions** | A brain-managed block in CLAUDE.md (between markers, like the settings sync): keep decisions, file paths + line ranges, test status, open items, the user's phrasing of the goal; drop tool output, exploration dead ends already recorded, resolved errors. | CLAUDE.md | **done** |
+| **K5 Boundary nudges** | After a commit, a merged PR, `brain:close`, or a workstream switch — and only when context > 150k — the `Stop`/`PostToolUse` hook prints one line: "good moment for `/compact` (context ≈ N)". Compacting at a boundary loses the least; the threshold stays the net. Context size comes from the transcript's last usage record (undocumented format, guarded: silent on parse failure). | Stop / PostToolUse(Bash git commit) | **done** |
+| **K6 Recall** | `brain_recall(query, [session])` MCP tool + `brain:recall` CLI: keyword search over the current session's transcript (and the previous one after a resume), returns ≤ 2k chars per hit with tool name and call index. | MCP | **done** |
+| **K7 Status line** | A `brain` status-line segment: context used %, time since last compaction, workstream. The only documented live source; `setup --statusline` opt-in. | statusline | **done** |
+| **K8 Delegate exploration** | The ambient router (`brain-route`, UserPromptSubmit) tags research-shaped prompts ("where is…", "how does… work", "find all…") with a one-line suggestion to run them in a subagent. Measure acceptance before making it louder. | UserPromptSubmit | **done** |
 | K9 Re-read guard | Demoted: 13 % of reads re-read an unchanged file. Revisit only if K1–K6 leave it as the top remaining item in `brain:tokens`. | PreToolUse(Read) | parked |
 
 **First slice ships K1 + K3 + K4 together**, never K1 alone: a lower threshold
@@ -112,17 +112,17 @@ repo's own sessions.
 |---|---|---|
 | **R1 Inventory + orphan reap** | `brain:ps`: classify, real footprint, idleness by last real message; `--reap-orphans --yes` kills only helpers whose agent parent is gone. Foreign sessions are suggest-only. | **done** |
 | **R2 Process groups** | Runners already started as group leaders and `stop` already signalled the group. Two holes closed: a leader that exits while its group lives on (`dev-server &`) was reported `exited` and never collected; and a child that opens its own group (Playwright's Chrome) escaped `kill(-pid)`. Liveness is now group-wide (`leftovers: true` in the listing), and `stop` snapshots the process tree before signalling. What escapes anyway is an orphan for `brain:ps --reap-orphans`. | **done** |
-| R3 Idle rules | `.project-brain/config.json`: brain runner idle > 1 h → stop; dev server of a closed workstream → stop; foreign session idle > 4 h → suggest; docker stack of a project without a session for > N h → suggest `stop`. | second slice |
-| R4 Admission control | brief-gate sibling: no new agent while swap > 80 %, memory pressure warn, or `maxConcurrentAgents` reached — states the reason, names what to reap; override audited. | second slice |
-| R5 Triggers | SessionStart line when pressure is high (time-budgeted in `footprint.mjs`); Control Room resource panel with per-row stop; optional launchd job for `reap --orphans`. | third slice |
-| R6 MCP hygiene | `setup` flags `npx …@latest` MCP servers (2 processes + registry check per session) and heavy globals (playwright, chrome-devtools); proposes pinned binaries and per-project enablement. | third slice |
+| R3 Idle rules | `.project-brain/config.json`: brain runner idle > 1 h → stop; dev server of a closed workstream → stop; foreign session idle > 4 h → suggest; docker stack of a project without a session for > N h → suggest `stop`. | **done** |
+| R4 Admission control | brief-gate sibling: no new agent while swap > 80 %, memory pressure warn, or `maxConcurrentAgents` reached — states the reason, names what to reap; override audited. | **done** |
+| R5 Triggers | SessionStart line when pressure is high (time-budgeted in `footprint.mjs`); Control Room resource panel with per-row stop; optional launchd job for `reap --orphans`. | **done** — the panel is read-only with copyable commands instead of per-row stop buttons: the daemon kills nothing it did not start (security model d) |
+| R6 MCP hygiene | `setup` flags `npx …@latest` MCP servers (2 processes + registry check per session) and heavy globals (playwright, chrome-devtools); proposes pinned binaries and per-project enablement. | **done** |
 
 ### Workstream H — Headroom and payload compaction (gated)
 
 | Step | What | Status |
 |---|---|---|
-| H1 Headroom opt-in | Only if a repo's `brain:tokens` shows a material json/log share: list next to caveman in `settings.community-plugins.json`; verify it leaves the brain's injected digest and provenance lines intact. | gated on per-repo P0 |
-| H2 Compact-by-default MCP | `brain_blast` / `brain_search` / `brain_risk` return a compact form + handle, `brain_expand(handle)` the rest. Cheap, deterministic, our own version of Headroom's CCR. | after K |
+| H1 Headroom opt-in | Only if a repo's `brain:tokens` shows a material json/log share: list next to caveman in `settings.community-plugins.json`; verify it leaves the brain's injected digest and provenance lines intact. | **done** as a per-repo verdict in `brain:tokens` (fleet: not worth it — 11 % / 17 %) |
+| H2 Compact-by-default MCP | `brain_blast` / `brain_search` / `brain_risk` return a compact form + handle, `brain_expand(handle)` the rest. Cheap, deterministic, our own version of Headroom's CCR. | **dropped by measurement** — every brain MCP answer is 90–784 tokens; noise against 370k contexts |
 
 ### Gate, metrics, kill criteria
 
@@ -166,8 +166,14 @@ consumer repo:
   already the cold store.
 - **A compression model / proxy of our own.** Measured at a few percent here.
 
-Record as ADR 0035 ("context lives in three layers; the brain owns the warm one")
-when the first slice ships.
+Recorded as ADR 0035 ("context lives in three layers; the brain owns the warm one").
+
+Two corrections the build made to this plan: **swap is not a pressure signal on
+macOS** (it read 92 % full right after 3.4 GB were freed; R4 uses the kernel's
+`memorystatus_vm_pressure_level` and the free share instead), and **project
+slugs cannot be decoded** (`-a-club-ops2` is a/club-ops2 or a/club/ops2), so
+docker stacks are matched to projects by the real `cwd` their transcripts
+record.
 
 ### Also captured (from the r/vibecoding thread, not yet scheduled)
 

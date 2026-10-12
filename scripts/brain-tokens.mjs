@@ -199,6 +199,28 @@ export function summarize(report) {
   };
 }
 
+/**
+ * H1 (docs/roadmap-next.md): is a compression proxy (Headroom & co.) worth it
+ * HERE? Only when tool output is a real share of fresh input AND most of it
+ * is the json/log/search/html such proxies shrink. Measured across all
+ * projects it was 11 % and 17 % — not worth it; a log-heavy repo may differ.
+ * PURE.
+ */
+export function proxyVerdict(s) {
+  const fresh = s.usage.freshInput || 0;
+  const toolShare = fresh ? s.toolOutput.estTokens / fresh : 0;
+  const comp = s.toolOutput.compressibleShare;
+  const worth = toolShare >= 0.2 && comp >= 0.4;
+  return {
+    worth,
+    toolShare: round(toolShare),
+    compressibleShare: comp,
+    text: worth
+      ? `a compression proxy would pay here: tool output is ${(toolShare * 100).toFixed(0)}% of fresh input and ${(comp * 100).toFixed(0)}% of it is json/log/search/html (see settings.community-plugins.json for Headroom).`
+      : `a compression proxy would not pay here: tool output is ${(toolShare * 100).toFixed(0)}% of fresh input, ${(comp * 100).toFixed(0)}% of it compressible — context length is the lever.`
+  };
+}
+
 function round(x) { return Math.round(x * 1000) / 1000; }
 function iso(ms) { return ms ? new Date(ms).toISOString() : null; }
 
@@ -265,6 +287,8 @@ export function renderText(s, { scope }) {
   for (const t of s.tools.slice(0, 10)) {
     L.push(`  ${t.name.padEnd(34).slice(0, 34)} ${fmt(t.estTokens).padStart(7)}  ${String(t.calls).padStart(5)} calls  ${t.dominantKind.padEnd(5)} compressible ${pct(t.compressibleShare)}`);
   }
+  L.push('');
+  L.push(`Verdict: ${proxyVerdict(s).text}`);
   L.push('');
   L.push('Read: tool output enters context once fresh, then rides along as cache reads.');
   L.push('A proxy saves at most the compressible share of it. Every request re-reads the');

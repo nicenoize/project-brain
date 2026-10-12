@@ -86,7 +86,8 @@ Full policy, splitting heuristics, and step-by-step operating-mode runbooks: [`r
 - `brain:lint-conventions` / `brain:link-check` — conventions linter / markdown path check.
 - `brain:lint` — consume ESLint/tsc/SARIF output, rank findings by where a change actually hurts.
 - `brain:security` — advisories ordered by REACHABILITY (does our code import it), not severity alone.
-- `brain:tokens` / `brain:ps` — where agent tokens go (context size, compressible tool output) / which sessions, MCP servers and orphans hold RAM.
+- `brain:tokens` / `brain:ps` — where agent tokens go (context size, compressible tool output) / which sessions, runners, stacks and orphans hold RAM, and whether another agent fits.
+- `brain_recall` (MCP) / `brain:recall` — fetch a detail from earlier in this session, including what a compaction dropped, instead of re-running or re-reading.
 
 **Code intelligence (measured from git + imports, no index needed)**
 - `brain:outline <file>` — the file's functions with line ranges; `--symbol <name>` prints just that one. Read 90 lines instead of 1,300.
