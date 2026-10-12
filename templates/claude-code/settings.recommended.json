@@ -25,6 +25,15 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-route.mjs\" --hook --event sessionstart || true"
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-warm.mjs\" rehydrate || true"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -45,6 +54,14 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-session-digest.mjs\""
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-warm.mjs\" snapshot || true"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -61,6 +78,14 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-prune.mjs\" --apply >/dev/null 2>&1 || true"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-warm.mjs\" snapshot || true"
           }
         ]
       }
