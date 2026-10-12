@@ -17,7 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { descendantPids, listProcesses } from './brain-ps.mjs';
+import { descendantPids, listProcesses } from './procs.mjs';
 import { BRAIN_DIR, ensureDir } from './common.mjs';
 
 export const DEFAULT_RUNNERS_DIR = path.join(BRAIN_DIR, 'runners');

@@ -71,7 +71,7 @@ test('render stays inside the budget, drops whole sections, keeps the pointer', 
   s.cwd = '/r';
   const out = renderWarm(s, { budgetBytes: 2500, transcriptPath: '/t.jsonl' });
   assert.ok(Buffer.byteLength(out) <= 2500, `${Buffer.byteLength(out)} B`);
-  assert.match(out, /grep -n '<term>' \/t\.jsonl$/);
+  assert.match(out, /brain_recall.*\(t\.jsonl\)\.$/);
   assert.match(out, /Goal/);
   assert.doesNotMatch(out, /Files edited/); // would not fit — dropped whole, not cut
   assert.ok(BUDGETS.warmBytes < 10000, 'host caps additionalContext at 10,000 characters');
@@ -121,4 +121,83 @@ test('env merge is additive and never overwrites the developer', () => {
   const env = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '500000' };
   assert.equal(mergeEnv(env, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: 300000, BRAIN_USAGE_LOG: '1' }), 1);
   assert.deepEqual(env, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '500000', BRAIN_USAGE_LOG: '1' });
+});
+
+import { upsertCompactInstructions, COMPACT_BLOCK, COMPACT_BEGIN, COMPACT_END } from '../scripts/setup-claude-settings.mjs';
+
+test('compact instructions: added once, refreshed in place, nothing outside touched', () => {
+  const user = '# My project\n\nMy own rules.\n';
+  const a = upsertCompactInstructions(user);
+  assert.equal(a.status, 'added');
+  assert.ok(a.text.startsWith(user));
+  assert.match(a.text, /## Compact Instructions/);
+  assert.equal(upsertCompactInstructions(a.text).status, 'unchanged');
+
+  const old = a.text.replace('Keep:', 'Keep (old wording):') + '\nMore of my rules.\n';
+  const b = upsertCompactInstructions(old);
+  assert.equal(b.status, 'updated');
+  assert.ok(b.text.startsWith(user) && b.text.endsWith('\nMore of my rules.\n'));
+  assert.equal(b.text.split(COMPACT_BEGIN).length, 2, 'exactly one block');
+
+  // A hand-damaged block (end marker deleted) is left for the human.
+  const damaged = user + COMPACT_BEGIN + '\n## Compact Instructions\n';
+  assert.deepEqual(upsertCompactInstructions(damaged), { text: damaged, status: 'unchanged' });
+  assert.equal(upsertCompactInstructions('').text, COMPACT_BLOCK + '\n');
+  assert.ok(Buffer.byteLength(COMPACT_BLOCK) < 800, 'CLAUDE.md rides along with every request');
+  assert.ok(COMPACT_BLOCK.endsWith(COMPACT_END));
+});
+
+import { isBoundary, lastContextTokens, shouldNudge, nudgeText } from '../scripts/brain-warm.mjs';
+
+test('boundaries: finished units of work, at the start of a shell segment', () => {
+  for (const c of ['git commit -m "x"', 'git add -A && git commit -q -F -', 'git push -u origin feat', 'gh pr create --title t', 'gh pr merge 79 --merge', 'npm run brain:close']) {
+    assert.equal(isBoundary(c), true, c);
+  }
+  for (const c of ['git status', 'echo "then git push"', 'git log --grep "git commit"', 'gh pr view 3', '']) {
+    assert.equal(isBoundary(c), false, c);
+  }
+});
+
+test('nudge: only above 150k, once per boundary, again after 50k more', () => {
+  assert.equal(shouldNudge(120_000, 0), false);
+  assert.equal(shouldNudge(180_000, 0), true);
+  assert.equal(shouldNudge(200_000, 180_000), false);
+  assert.equal(shouldNudge(231_000, 180_000), true);
+  assert.equal(shouldNudge(160_000, 400_000), true, 'context shrank (compacted) and grew past the mark again');
+  assert.match(nudgeText(231_000), /≈ 231k tokens/);
+});
+
+test('context size is read from the latest usage record', () => {
+  const rec = (n) => ({ type: 'assistant', message: { usage: { input_tokens: 1, cache_creation_input_tokens: n, cache_read_input_tokens: 100 } } });
+  assert.equal(lastContextTokens([rec(10), { type: 'user' }, rec(20), { type: 'system' }]), 121);
+  assert.equal(lastContextTokens([]), 0);
+});
+
+import { explorationShaped, shouldSuggestDelegate } from '../scripts/brain-warm.mjs';
+
+test('exploration-shaped prompts are recognised; change requests are not', () => {
+  for (const p of ['wo wird der Login-Token validiert?', 'Wie funktioniert das Caching hier?', 'finde alle Stellen mit fetchUser', 'where is the rate limiter configured', 'how does the sync pipeline work', 'which files touch billing?']) {
+    assert.equal(explorationShaped(p), true, p);
+  }
+  for (const p of ['bau den Login neu', 'fix the failing test', 'wo ist der Bug? bitte fixe ihn', 'commit and push', 'ja bitte', '']) {
+    assert.equal(explorationShaped(p), false, p);
+  }
+});
+
+test('delegate suggestion: only with a large context, at most once per 20 calls', () => {
+  const q = 'wo wird der Token validiert?';
+  assert.equal(shouldSuggestDelegate(q, 80_000, { calls: 0 }), false);
+  assert.equal(shouldSuggestDelegate(q, 150_000, { calls: 5 }), true);
+  assert.equal(shouldSuggestDelegate(q, 150_000, { calls: 15, delegate: { lastAtCall: 5 } }), false);
+  assert.equal(shouldSuggestDelegate(q, 150_000, { calls: 25, delegate: { lastAtCall: 5 } }), true);
+});
+
+test('acceptance: an Agent call within 3 calls of a suggestion counts as followed', () => {
+  const s = emptyState('s');
+  s.delegate = { suggested: 1, followed: 0, openAtCall: 0 };
+  foldRecords(s, [tool('a', 'Read', { file_path: '/x' }), tool('b', 'Agent', { prompt: 'find' })]);
+  assert.equal(s.delegate.followed, 1);
+  s.delegate.openAtCall = s.calls;
+  foldRecords(s, [1, 2, 3, 4].map((i) => tool(`r${i}`, 'Read', { file_path: `/y${i}` })).concat([tool('z', 'Agent', {})]));
+  assert.equal(s.delegate.followed, 1, 'too late to count');
 });

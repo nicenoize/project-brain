@@ -327,22 +327,39 @@ The skill and Markdown layers improve **answer** quality; **`npm run brain:maint
 ```bash
 npm run brain:tokens                       # this repo's sessions, last 7 days
 npm run brain:tokens -- --all-projects --days 30 [--json]
-npm run brain:ps                           # agent sessions, MCP servers, dev servers, docker — and what can go
-npm run brain:ps -- --reap-orphans [--yes] # SIGTERM helpers whose agent is gone (dry run without --yes)
+npm run brain:ps                           # sessions, runners, MCP/dev/browser helpers, docker stacks, admission
+npm run brain:ps -- --apply [--yes]        # act on what the brain owns or what is dead (dry run without --yes)
 ```
 
-`brain:tokens` reads the Claude Code transcripts read-only. Usage is exact and deduplicated per API request (one response is logged as several records). Tool output is estimated at ~4 chars/token and classified json / log / search / html / diff / code / prose. The compressible share (json+log+search+html) is the upper bound on what a compression proxy such as Headroom could save. The context-per-request percentiles usually point at the bigger lever: session length.
+`brain:tokens` reads the Claude Code transcripts read-only. Usage is exact and deduplicated per API request (one response is logged as several records). Tool output is estimated at ~4 chars/token and classified json / log / search / html / diff / code / prose. Its last line is a verdict: would a compression proxy such as Headroom pay in this repo? That needs tool output ≥ 20 % of fresh input and ≥ 40 % of it json/log/search/html. The context-per-request percentiles usually point at the bigger lever, which is context length.
 
-`brain:ps` judges idleness by the **last real user/assistant message** in the project's transcripts, never by process age or file mtime. Idle sessions are only *suggested* for `kill -TERM`, because they live in someone's terminal and transcripts survive for `claude --resume`. Only orphans, meaning helper processes re-parented to PID 1, are reaped.
+`brain:ps` judges idleness by the **last real user/assistant message** in the project's transcripts, never by process age or file mtime. It sorts what it finds by ownership:
 
-### Context: compact earlier, lose nothing (`brain:warm`, auto-compact window)
+- **Acted on by `--apply --yes`:** brain runners whose log has been quiet for `runnerIdleHours`, or whose leader exited and left its group running; orphans (helpers re-parented to PID 1); dev servers running in a deleted directory.
+- **Only suggested:** idle agent sessions (`kill -TERM …`; transcripts survive for `claude --resume`) and docker stacks of a project with no message for `stackIdleHours`. A stack belongs to the project whose real path, or agent scratchpad, holds its workdir.
+- **Admission:** new agents are held under kernel memory pressure (warn or critical), below `minFreePct`, or at `maxConcurrentAgents`. The Control Room's brief gate shows the reasons, and acknowledging is audited. `brain:orchestrate --launch-runners` holds them too; override with `--ignore-resources`. `BRAIN_RESOURCE_GATE=off` disables both. Swap is shown but never decides, because macOS keeps swapped pages allocated until they are touched.
+- **MCP hygiene:** it flags `npx …@latest` servers (an npm wrapper plus a registry check in every session) and browser servers configured for every project.
 
-Claude Code compacts 1M-context models at ≈ 967k tokens, so long sessions run at a median of 370k context per request, most of it stale tool output. Two parts make earlier compaction safe:
+Thresholds are set in `.project-brain/config.json`:
 
-- **Warm layer (on by default with the recommended hooks).** `brain-warm.mjs snapshot` runs on `PreCompact` and `Stop`. It folds the transcript into a small record: the user's goal in their own words, the latest asks, the last agent message, `## Decided:`/`## Followup:` tags, files edited and read (with line ranges), and the last test/build/lint checks. It is incremental (byte offset), so a `Stop` costs a few ms. After a compaction, `brain-warm.mjs rehydrate` (SessionStart, matcher `compact`) injects that record under the host's 10,000-character cap (`BUDGETS.warmBytes`), plus live git state and the transcript path for anything else. Tool output is never copied. Records live in `.project-brain/.warm/` (local, gitignored, pruned after 14 days). `npm run brain:warm` shows what the next rehydrate would inject.
-- **Earlier threshold (opt-in).** `PROJECT_BRAIN_AUTO_COMPACT_WINDOW=1 npm run brain:update-skill` (or `--auto-compact-window[=N]` on the settings sync) adds `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000` to `.claude/settings.json` `env`. It never overwrites a value you set. Measure before and after with `npm run brain:tokens`.
+```json
+{ "resources": { "sessionIdleHours": 4, "runnerIdleHours": 1, "stackIdleHours": 12, "maxConcurrentAgents": 6, "minFreePct": 10 } }
+```
 
-Known limit: a check like `npm test | tail` reports the exit status of `tail`. ✓ then means "ran", not "passed".
+`brain-ps.mjs --hook` (SessionStart, in the recommended settings) speaks only under memory pressure, as a message to the user that costs no context tokens. The Control Room panel "Is there room for another agent?" (`/api/resources`) is read-only: what is yours to stop arrives as a command to copy.
+
+### Context: compact earlier, lose nothing (`brain:warm`, `brain:recall`)
+
+Claude Code compacts 1M-context models at ≈ 967k tokens, so long sessions ran at a median of 370k context per request, most of it stale tool output. The brain splits context into three layers (ADR 0035). The **hot** layer, the current step, stays in the window. The brain owns the **warm** layer, the session state re-injected after every compaction. The **cold** layer is the transcript on disk, searched on demand.
+
+- **Warm layer (on with the recommended hooks).** `brain-warm.mjs snapshot` runs on `PreCompact` and `Stop`. It folds the transcript into a small record: the user's goal in their own words, the latest asks, the last agent message, `## Decided:`/`## Followup:` tags, files edited and read (with line ranges), and the last test/build/lint checks. It is incremental (byte offset): a 267 MB transcript takes 120 ms once, then ~1 ms per turn. After a compaction, `rehydrate` (SessionStart, matcher `compact`) injects that record under the host's 10,000-character cap (`BUDGETS.warmBytes`), with live git state and a pointer to `brain_recall`. Tool output is never copied. Records live in `.project-brain/.warm/` (local, gitignored, pruned after 14 days). `npm run brain:warm` shows what the next rehydrate would inject, and how often subagent suggestions were followed.
+- **Cold layer: `brain_recall` (MCP) / `npm run brain:recall -- "<terms>" [--session id] [--limit 5]`.** It searches this project's session transcript and returns excerpts that contain every term, with the call number, the tool, and whether the excerpt predates a compaction. The read is streamed (267 MB in < 1 s), and nothing is indexed.
+- **Earlier threshold + compact instructions (opt-in).** `PROJECT_BRAIN_AUTO_COMPACT_WINDOW=1 npm run brain:update-skill` (or `--auto-compact-window[=N]` on the settings sync) adds `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000` to `.claude/settings.json` `env`. It also adds a ~157-token "Compact Instructions" block to CLAUDE.md between markers: what Claude Code's own summary should keep and drop. A value you set is never overwritten, and text outside the markers is never touched.
+- **Boundary nudges.** After a successful `git commit`, `git push`, `gh pr create|merge` or `brain:close`, if the context is above 150k (`BRAIN_NUDGE_MIN_TOKENS`), you see one line: a good moment to `/compact`. It appears once per boundary and again only after another 50k.
+- **Subagents for exploration.** When a prompt reads like exploration ("wo wird…", "how does … work", "find all …") and the context is above 100k, Claude gets a ~40-token suggestion to run it in a subagent. It comes at most once per 20 calls.
+- **Status line (opt-in).** `PROJECT_BRAIN_STATUSLINE=1` / `--statusline` on the settings sync shows `ctx 412k/1M (41%) · compacts at 300k · 2× compacted`. It is never installed over an existing statusLine; to append the segment to your own, pipe the status-line JSON into `brain-statusline.mjs`.
+
+Measure before and after with `npm run brain:tokens -- --days 14`. Known limit: a check like `npm test | tail` reports the exit status of `tail`, so ✓ then means "ran", not "passed".
 
 ### Performance modes
 
