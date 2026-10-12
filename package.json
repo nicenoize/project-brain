@@ -74,7 +74,8 @@
     "brain:outline": "node scripts/brain-outline.mjs",
     "brain:tokens": "node scripts/brain-tokens.mjs",
     "brain:ps": "node scripts/brain-ps.mjs",
-    "brain:warm": "node scripts/brain-warm.mjs show"
+    "brain:warm": "node scripts/brain-warm.mjs show",
+    "brain:recall": "node scripts/brain-recall.mjs"
   },
   "dependencies": {
     "fast-glob": "^3.3.2"

@@ -196,9 +196,8 @@ export function renderWarm(state, { budgetBytes = BUDGETS.warmBytes, git = null,
   const last = state.compactions[state.compactions.length - 1];
   const k = (n) => (n ? `${Math.round(n / 1000)}k` : '?');
   const head = `## Brain: session state after compaction${last ? ` #${state.compactions.length} (${k(last.preTokens)} → ${k(last.postTokens)})` : ''}`;
-  const tail = transcriptPath
-    ? `Anything compacted away is still in the transcript — search it, don't guess: grep -n '<term>' ${transcriptPath}`
-    : 'Anything compacted away is still in the session transcript — search it, don\'t guess.';
+  const tail = 'Anything compacted away is still in the session transcript — fetch it instead of guessing or re-running: ' +
+    `MCP \`brain_recall\` {"query": "<terms>"} or \`npm run brain:recall -- "<terms>"\`${transcriptPath ? ` (${path.basename(transcriptPath)})` : ''}.`;
 
   const sections = [];
   if (state.goal) sections.push(`**Goal (the user's words, first ask):** ${state.goal}`);
