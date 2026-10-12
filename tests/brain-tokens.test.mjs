@@ -96,3 +96,44 @@ test('re-read weighting: output counts once per later request, and compaction re
   const s = summarize(addTranscript(emptyReport(), [res, req('1'), req('2'), { type: 'system', subtype: 'compact_boundary' }, req('3')]));
   assert.equal(s.reread.json, 1, 'only json was live, read by two requests, then compacted away');
 });
+
+import { readTarget, editFailureReason, foldLoss, REREAD_WINDOW_CALLS } from '../scripts/brain-tokens.mjs';
+
+test('readTarget: Read and shell reads (cat/head/sed -n/nl) name their file', () => {
+  assert.equal(readTarget('Read', { file_path: '/r/a.ts' }), '/r/a.ts');
+  assert.equal(readTarget('Bash', { command: "sed -n '1,80p' scripts/brain-ps.mjs" }), 'scripts/brain-ps.mjs');
+  assert.equal(readTarget('Bash', { command: 'cd x && cat src/app.tsx | head -20' }), 'src/app.tsx');
+  assert.equal(readTarget('Bash', { command: 'head -n 40 README.md' }), 'README.md');
+  assert.equal(readTarget('Bash', { command: 'npm test' }), null);
+  assert.equal(readTarget('Edit', { file_path: '/r/a.ts' }), null);
+});
+
+test('edit failures: content failures apart from blocks and bad input', () => {
+  assert.equal(editFailureReason('<tool_use_error>String to replace not found in file.'), 'no-match');
+  assert.equal(editFailureReason('File has been modified since read'), 'stale');
+  assert.equal(editFailureReason('Found 2 matches of the string to replace, but replace_all is false.'), 'ambiguous');
+  assert.equal(editFailureReason('The server-side auto mode classifier gave no verdict'), 'blocked');
+  assert.equal(editFailureReason('Subagents should return findings as text, not write report files.'), 'blocked');
+  assert.equal(editFailureReason('InputValidationError: The required parameter `new_string` is missing'), 'invalid-input');
+});
+
+test('loss guards: re-reads after a compaction count only for files read before it', () => {
+  const call = (id, name, input) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input }] } });
+  const res = (id, content, is_error = false) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content, is_error }] } });
+  const rep = { loss: { compactions: 0, droppedTokens: 0, rereadCalls: 0, rereadChars: 0 }, edits: { total: 0, failed: 0, reasons: {} } };
+  foldLoss(rep, [
+    call('a', 'Read', { file_path: '/r/a.ts' }), res('a', 'x'.repeat(400)),
+    { type: 'system', subtype: 'compact_boundary', compactMetadata: { preTokens: 300000, postTokens: 30000 } },
+    call('b', 'Bash', { command: 'cat /r/a.ts' }), res('b', 'y'.repeat(800)), // re-read: known before
+    call('c', 'Read', { file_path: '/r/new.ts' }), res('c', 'z'.repeat(800)), // first read: not a re-read
+    call('d', 'Edit', { file_path: '/r/a.ts' }), res('d', 'String to replace not found in file.', true),
+    call('e', 'Edit', { file_path: '/r/a.ts' }), res('e', 'ok')
+  ]);
+  assert.deepEqual(rep.loss, { compactions: 1, droppedTokens: 270000, rereadCalls: 1, rereadChars: 800 });
+  assert.deepEqual(rep.edits, { total: 2, failed: 1, reasons: { 'no-match': 1 } });
+  // Outside the window of 50 calls, a re-read no longer counts against the compaction.
+  const rep2 = { loss: { compactions: 0, droppedTokens: 0, rereadCalls: 0, rereadChars: 0 }, edits: { total: 0, failed: 0, reasons: {} } };
+  const filler = Array.from({ length: REREAD_WINDOW_CALLS + 1 }, (_, i) => call(`f${i}`, 'Bash', { command: 'ls' }));
+  foldLoss(rep2, [call('a', 'Read', { file_path: '/r/a.ts' }), { type: 'system', subtype: 'compact_boundary', compactMetadata: {} }, ...filler, call('z', 'Read', { file_path: '/r/a.ts' }), res('z', 'late')]);
+  assert.equal(rep2.loss.rereadCalls, 0);
+});
