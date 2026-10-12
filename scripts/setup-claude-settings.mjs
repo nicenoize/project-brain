@@ -335,6 +335,20 @@ export function syncClaudeSettings() {
   });
   if (Object.keys(existing.env).length === 0) delete existing.env;
 
+  // K7: the context status-line segment — explicit opt-in, and never over an
+  // existing status line (a project one would replace the user's own).
+  let statusLine = null;
+  if (process.argv.includes('--statusline') || process.env.PROJECT_BRAIN_STATUSLINE === '1') {
+    if (existing.statusLine) statusLine = 'kept-yours';
+    else {
+      existing.statusLine = {
+        type: 'command',
+        command: 'node "$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-statusline.mjs"'
+      };
+      statusLine = 'added';
+    }
+  }
+
   // K2: compact instructions in CLAUDE.md, with the same opt-in.
   let compactStatus = null;
   if (window) {
@@ -368,6 +382,7 @@ export function syncClaudeSettings() {
     `hooks:+${hooksResult.added}`,
     `env:+${envAdded}`,
     ...(compactStatus ? [`compact-instructions:${compactStatus}`] : []),
+    ...(statusLine ? [`statusline:${statusLine}`] : []),
     `plugins:+${pluginsResult.added}`,
     `marketplaces:+${marketsResult.added}`,
     ...(upgraded > 0 ? [`legacy-hooks-upgraded:${upgraded}`] : []),
