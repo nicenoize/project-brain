@@ -97,6 +97,11 @@ export function emptyReport() {
     usage: { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 },
     tools: {}, // name → { calls, chars, kinds: { json: chars, … } }
     contexts: [], // total input tokens of each request — the context size it paid for
+    // What each request RE-READ, by kind: the live tool output (and the rest)
+    // since the last compaction, summed per request. Tool output enters the
+    // context once but rides along on every later request, so this — not the
+    // once-counted volume — is what a compression proxy acts on.
+    reread: {},
     firstTs: null,
     lastTs: null
   };
@@ -109,15 +114,20 @@ export function emptyReport() {
 export function addTranscript(report, records, { sinceMs = 0 } = {}) {
   const seenRequests = new Set();
   const toolNames = new Map(); // tool_use_id → tool name
+  const live = {}; // kind → chars in the live context
   let counted = false;
   for (const r of records) {
+    if (r && r.type === 'system' && r.subtype === 'compact_boundary') { for (const k in live) live[k] = 0; continue; }
     const ts = r && r.timestamp ? Date.parse(r.timestamp) : NaN;
     if (sinceMs && !(ts >= sinceMs)) continue;
     const msg = r && r.message;
     if (!msg) continue;
     if (r.type === 'assistant') {
       for (const c of Array.isArray(msg.content) ? msg.content : []) {
-        if (c && c.type === 'tool_use') toolNames.set(c.id, c.name);
+        if (c && c.type === 'tool_use') {
+          toolNames.set(c.id, c.name);
+          live.other = (live.other || 0) + JSON.stringify(c.input || {}).length;
+        } else if (c && c.type === 'text') live.other = (live.other || 0) + (c.text || '').length;
       }
       const key = r.requestId || msg.id;
       const u = msg.usage;
@@ -129,6 +139,8 @@ export function addTranscript(report, records, { sinceMs = 0 } = {}) {
         report.usage.cacheRead += u.cache_read_input_tokens || 0;
         report.usage.output += u.output_tokens || 0;
         report.contexts.push((u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0));
+        report.reread ||= {};
+        for (const k in live) report.reread[k] = (report.reread[k] || 0) + live[k];
         counted = true;
       }
     } else if (r.type === 'user' && Array.isArray(msg.content)) {
@@ -141,6 +153,7 @@ export function addTranscript(report, records, { sinceMs = 0 } = {}) {
         slot.calls += 1;
         slot.chars += text.length;
         slot.kinds[kind] = (slot.kinds[kind] || 0) + text.length;
+        live[kind] = (live[kind] || 0) + text.length;
         counted = true;
       }
     }
@@ -195,29 +208,41 @@ export function summarize(report) {
       byKind: Object.fromEntries(KINDS.map((k) => [k, Math.round((kindChars[k] || 0) / CHARS_PER_TOKEN)])),
       compressibleShare: toolChars ? round(compressibleChars / toolChars) : 0
     },
-    tools
+    tools,
+    reread: (() => {
+      const rr = report.reread || {};
+      const tot = Object.values(rr).reduce((a, b) => a + b, 0);
+      return Object.fromEntries([...KINDS, 'other'].map((k) => [k, tot ? round((rr[k] || 0) / tot) : 0]));
+    })()
   };
 }
 
 /**
- * H1 (docs/roadmap-next.md): is a compression proxy (Headroom & co.) worth it
- * HERE? Only when tool output is a real share of fresh input AND most of it
- * is the json/log/search/html such proxies shrink. Measured across all
- * projects it was 11 % and 17 % — not worth it; a log-heavy repo may differ.
- * PURE.
+ * H1 (docs/roadmap-next.md): what would a compression proxy (Headroom & co.)
+ * cut HERE? Measured on what requests RE-READ, by kind — tool output rides
+ * along on every request after it arrives. Ratios from Headroom's own
+ * benchmarks: json/log/search/html ≈ 85 %; prose ≈ 30 %; code is the open
+ * question (0–50 %): an agent EDITS code it read, and a compressed view risks
+ * edits that do not match the file. So the answer is a range, and the
+ * recommendation is an A/B, not a switch. PURE.
+ *
+ * (The first version compared once-counted tool output with fresh input —
+ * mostly cache rewrites — and called the fleet "not worth it". Re-read-
+ * weighted, the same fleet is ≈ 9–26 %.)
  */
 export function proxyVerdict(s) {
-  const fresh = s.usage.freshInput || 0;
-  const toolShare = fresh ? s.toolOutput.estTokens / fresh : 0;
-  const comp = s.toolOutput.compressibleShare;
-  const worth = toolShare >= 0.2 && comp >= 0.4;
+  const r = s.reread || {};
+  const comp = (r.json || 0) + (r.log || 0) + (r.search || 0) + (r.html || 0);
+  const low = comp * 0.85 + (r.prose || 0) * 0.2;
+  const high = comp * 0.85 + (r.prose || 0) * 0.4 + (r.code || 0) * 0.5;
+  const worth = high >= 0.15;
+  const pct = (x) => `${Math.round(x * 100)}%`;
   return {
     worth,
-    toolShare: round(toolShare),
-    compressibleShare: comp,
-    text: worth
-      ? `a compression proxy would pay here: tool output is ${(toolShare * 100).toFixed(0)}% of fresh input and ${(comp * 100).toFixed(0)}% of it is json/log/search/html (see settings.community-plugins.json for Headroom).`
-      : `a compression proxy would not pay here: tool output is ${(toolShare * 100).toFixed(0)}% of fresh input, ${(comp * 100).toFixed(0)}% of it compressible — context length is the lever.`
+    low: round(low),
+    high: round(high),
+    text: `a compression proxy would cut re-read input by ≈ ${pct(low)}–${pct(high)} here (${pct(comp)} json/log/search/html, ${pct(r.code || 0)} code, ${pct(r.prose || 0)} prose of what requests re-read)` +
+      (worth ? ' — worth an A/B with brain:tokens before/after; watch for edits that miss after compressed reads.' : ' — not worth it; context length is the lever.')
   };
 }
 
