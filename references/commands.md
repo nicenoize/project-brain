@@ -322,6 +322,19 @@ The skill and Markdown layers improve **answer** quality; **`npm run brain:maint
 - **Claude Code / Codex CLI / Gemini CLI:** no IDE hook—run **`npm run brain:compact`** (same env vars) before `/compact`, thread reset, or ending a long terminal session. Copy-paste policy from **`skills/project-brain/templates/agents/COMPACT_INSTRUCTIONS.md`** into team docs or `CLAUDE.md` if desired.
 - **CLI follow-up:** compact triggers **`npm run brain:sync`** by default so the index sees the new session file; Cursor hook mode skips sync for latency (set `BRAIN_COMPACT_SYNC=1` to force sync from hooks). Set **`BRAIN_QUIET=1`** is applied automatically for hook runs so stdout stays JSON-clean for Cursor.
 
+### Token and machine footprint (`brain:tokens`, `brain:ps`)
+
+```bash
+npm run brain:tokens                       # this repo's sessions, last 7 days
+npm run brain:tokens -- --all-projects --days 30 [--json]
+npm run brain:ps                           # agent sessions, MCP servers, dev servers, docker — and what can go
+npm run brain:ps -- --reap-orphans [--yes] # SIGTERM helpers whose agent is gone (dry run without --yes)
+```
+
+`brain:tokens` reads the Claude Code transcripts read-only. Usage is exact and deduplicated per API request (one response is logged as several records). Tool output is estimated at ~4 chars/token and classified json / log / search / html / diff / code / prose. The compressible share (json+log+search+html) is the upper bound on what a compression proxy such as Headroom could save. The context-per-request percentiles usually point at the bigger lever: session length.
+
+`brain:ps` judges idleness by the **last real user/assistant message** in the project's transcripts, never by process age or file mtime. Idle sessions are only *suggested* for `kill -TERM`, because they live in someone's terminal and transcripts survive for `claude --resume`. Only orphans, meaning helper processes re-parented to PID 1, are reaped.
+
 ### Performance modes
 
 - `BRAIN_FAST=1` — fast iteration mode. Sync hooks become no-ops, retrieval uses the JSON store with summary-only results, and module/feature/project summaries are not rebuilt during indexing. Recommended local default during heavy edit loops; CI keeps it off so retrieval quality stays high.

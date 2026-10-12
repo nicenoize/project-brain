@@ -373,7 +373,9 @@ export function mergePackageScripts(pkg) {
     'brain:draft': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-draft.mjs',
     'brain:release': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-release.mjs',
     'brain:overview': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-overview.mjs',
-    'brain:outline': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-outline.mjs'
+    'brain:outline': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-outline.mjs',
+    'brain:tokens': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-tokens.mjs',
+    'brain:ps': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-ps.mjs'
   };
   for (const [k, v] of Object.entries(scripts)) {
     if (!pkg.scripts[k] || pkg.scripts[k].includes('skills/project-brain/')) pkg.scripts[k] = v;
