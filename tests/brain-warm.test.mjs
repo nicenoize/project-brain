@@ -71,7 +71,7 @@ test('render stays inside the budget, drops whole sections, keeps the pointer', 
   s.cwd = '/r';
   const out = renderWarm(s, { budgetBytes: 2500, transcriptPath: '/t.jsonl' });
   assert.ok(Buffer.byteLength(out) <= 2500, `${Buffer.byteLength(out)} B`);
-  assert.match(out, /grep -n '<term>' \/t\.jsonl$/);
+  assert.match(out, /brain_recall.*\(t\.jsonl\)\.$/);
   assert.match(out, /Goal/);
   assert.doesNotMatch(out, /Files edited/); // would not fit — dropped whole, not cut
   assert.ok(BUDGETS.warmBytes < 10000, 'host caps additionalContext at 10,000 characters');
