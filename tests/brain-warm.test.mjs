@@ -146,3 +146,29 @@ test('compact instructions: added once, refreshed in place, nothing outside touc
   assert.ok(Buffer.byteLength(COMPACT_BLOCK) < 800, 'CLAUDE.md rides along with every request');
   assert.ok(COMPACT_BLOCK.endsWith(COMPACT_END));
 });
+
+import { isBoundary, lastContextTokens, shouldNudge, nudgeText } from '../scripts/brain-warm.mjs';
+
+test('boundaries: finished units of work, at the start of a shell segment', () => {
+  for (const c of ['git commit -m "x"', 'git add -A && git commit -q -F -', 'git push -u origin feat', 'gh pr create --title t', 'gh pr merge 79 --merge', 'npm run brain:close']) {
+    assert.equal(isBoundary(c), true, c);
+  }
+  for (const c of ['git status', 'echo "then git push"', 'git log --grep "git commit"', 'gh pr view 3', '']) {
+    assert.equal(isBoundary(c), false, c);
+  }
+});
+
+test('nudge: only above 150k, once per boundary, again after 50k more', () => {
+  assert.equal(shouldNudge(120_000, 0), false);
+  assert.equal(shouldNudge(180_000, 0), true);
+  assert.equal(shouldNudge(200_000, 180_000), false);
+  assert.equal(shouldNudge(231_000, 180_000), true);
+  assert.equal(shouldNudge(160_000, 400_000), true, 'context shrank (compacted) and grew past the mark again');
+  assert.match(nudgeText(231_000), /≈ 231k tokens/);
+});
+
+test('context size is read from the latest usage record', () => {
+  const rec = (n) => ({ type: 'assistant', message: { usage: { input_tokens: 1, cache_creation_input_tokens: n, cache_read_input_tokens: 100 } } });
+  assert.equal(lastContextTokens([rec(10), { type: 'user' }, rec(20), { type: 'system' }]), 121);
+  assert.equal(lastContextTokens([]), 0);
+});
