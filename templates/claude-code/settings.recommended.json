@@ -44,6 +44,14 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-route.mjs\" --hook --event userpromptsubmit || true"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-warm.mjs\" prompt || true"
+          }
+        ]
       }
     ],
     "PreCompact": [

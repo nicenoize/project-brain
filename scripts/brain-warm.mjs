@@ -63,7 +63,8 @@ export function emptyState(sessionId = null) {
     compactions: [], // { trigger, preTokens, postTokens, ts }
     branch: null,
     cwd: null,
-    pending: {} // tool_use_id → check command awaiting its result
+    pending: {}, // tool_use_id → check command awaiting its result
+    delegate: { suggested: 0, followed: 0, openAtCall: null } // K8 acceptance
   };
 }
 
@@ -132,6 +133,11 @@ export function foldRecords(state, records) {
           while ((m = TAG_RE.exec(b.text))) pushCapped(state.tags[m[1]], clip(m[2], 300), CAPS.tags);
         } else if (b.type === 'tool_use') {
           state.calls += 1;
+          const d = state.delegate || (state.delegate = { suggested: 0, followed: 0, openAtCall: null });
+          if (d.openAtCall != null) {
+            if (b.name === 'Agent' || b.name === 'Task') { d.followed += 1; d.openAtCall = null; }
+            else if (state.calls - d.openAtCall > 3) d.openAtCall = null;
+          }
           const input = b.input || {};
           const p = input.file_path || input.notebook_path;
           if (p && (EDIT_TOOLS.has(b.name) || b.name === 'Read')) {
@@ -267,6 +273,30 @@ export function nudgeText(ctx) {
   return `brain: good moment to /compact — this unit of work is done and the context is ≈ ${Math.round(ctx / 1000)}k tokens, all re-read on every request. The session state comes back after compaction; details stay recallable.`;
 }
 
+// --- K8: push exploration into subagents --------------------------------------
+
+// Exploration asks: answering them means many reads whose output only matters
+// as a conclusion. Implementation asks are excluded — they need the reads here.
+const EXPLORE = /\b(wo (ist|sind|wird|werden|steht|liegt)|wie funktioniert|wie hängt|welche (dateien|stellen|module)|finde alle|such(e|t) (alle|nach)|überblick über|untersuche|recherchier|where (is|are|do|does)|how does|how do .* work|which files|find (all|every|where)|look for|search for|investigate|explore|overview of)\b/i;
+const IMPLEMENT = /\b(bau(e|t)?|implementier|fix(e)?|behebe|änder|refactor|schreib|erstell|add|implement|build|write|change|rename|delete|lösch|merge|commit|push)\b/i;
+export const DELEGATE = Object.freeze({ minTokens: 100_000, everyCalls: 20 });
+
+/** Does this prompt ask to find/understand rather than to change? PURE. */
+export function explorationShaped(prompt) {
+  const p = String(prompt || '').slice(0, 2000);
+  return EXPLORE.test(p) && !IMPLEMENT.test(p);
+}
+
+export function shouldSuggestDelegate(prompt, ctx, state, { minTokens = DELEGATE.minTokens, everyCalls = DELEGATE.everyCalls } = {}) {
+  if (!(ctx >= minTokens) || !explorationShaped(prompt)) return false;
+  const last = state && state.delegate && state.delegate.lastAtCall;
+  return last == null || (state.calls || 0) - last >= everyCalls;
+}
+
+export function delegateText(ctx) {
+  return `brain: this reads like exploration and the context is already ≈ ${Math.round(ctx / 1000)}k. Consider running it in a subagent (Agent/Explore) and keeping only its conclusion here — its reads would otherwise ride along on every later request.`;
+}
+
 /** Context of the latest request, from the transcript's tail (the last ~256 kB). */
 function tailContextTokens(transcriptPath) {
   try {
@@ -380,10 +410,12 @@ function main(argv) {
     if (!id) { process.stderr.write('[brain:warm] no session snapshots yet\n'); process.exit(1); }
     const s = readState(id, WARM_DIR);
     process.stdout.write(renderWarm(s, { git: gitLine(s.cwd || process.cwd()) }) + '\n');
+    const d = s.delegate || {};
+    if (d.suggested) process.stdout.write(`\n(subagent suggestions: ${d.followed}/${d.suggested} followed)\n`);
     return;
   }
-  if (mode !== 'snapshot' && mode !== 'rehydrate' && mode !== 'boundary') {
-    process.stderr.write('Usage: brain-warm.mjs snapshot|rehydrate|boundary (hook, JSON on stdin) | show [session-id]\n');
+  if (!['snapshot', 'rehydrate', 'boundary', 'prompt'].includes(mode)) {
+    process.stderr.write('Usage: brain-warm.mjs snapshot|rehydrate|boundary|prompt (hook, JSON on stdin) | show [session-id]\n');
     process.exit(1);
   }
   // Hook path: never fail, never block the session.
@@ -391,6 +423,19 @@ function main(argv) {
     if (!fs.existsSync(BRAIN_DIR)) return;
     const payload = readStdinJson();
     const args = { sessionId: payload.session_id, transcriptPath: payload.transcript_path };
+    if (mode === 'prompt') {
+      const ctx = tailContextTokens(args.transcriptPath);
+      const state = readState(args.sessionId, WARM_DIR);
+      if (!shouldSuggestDelegate(payload.prompt, ctx, state)) return;
+      const d = state.delegate || (state.delegate = { suggested: 0, followed: 0, openAtCall: null });
+      d.suggested += 1;
+      d.lastAtCall = state.calls || 0;
+      d.openAtCall = state.calls || 0;
+      fs.mkdirSync(WARM_DIR, { recursive: true });
+      fs.writeFileSync(statePath(args.sessionId, WARM_DIR), JSON.stringify(state));
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: delegateText(ctx) } }));
+      return;
+    }
     if (mode === 'boundary') {
       const command = payload.tool_input && payload.tool_input.command;
       const resp = payload.tool_response || {};
