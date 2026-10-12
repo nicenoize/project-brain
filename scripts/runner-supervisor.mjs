@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { descendantPids, listProcesses } from './brain-ps.mjs';
 import { BRAIN_DIR, ensureDir } from './common.mjs';
 
 export const DEFAULT_RUNNERS_DIR = path.join(BRAIN_DIR, 'runners');
@@ -123,6 +124,9 @@ export function listRunners({ runnersDir = DEFAULT_RUNNERS_DIR } = {}) {
       continue;
     }
     const probe = probePid(record.pid);
+    // The leader can exit while its process group lives on (`dev-server &`).
+    // That is not "exited": stop still has something to collect.
+    const leftovers = !probe.alive && probeGroup(record.pid);
     let status;
     if (probe.alive) status = 'running';
     else if (record.status === 'running') status = 'orphaned';
@@ -132,7 +136,7 @@ export function listRunners({ runnersDir = DEFAULT_RUNNERS_DIR } = {}) {
       if (status !== 'running' && !record.endedAt) record.endedAt = new Date().toISOString();
       try { writeRecord(runnersDir, file.replace(/\.json$/, ''), record); } catch { /* listing stays best-effort */ }
     }
-    runners.push({ id: file.replace(/\.json$/, ''), ...record });
+    runners.push({ id: file.replace(/\.json$/, ''), ...record, ...(leftovers ? { leftovers: true } : {}) });
   }
   return { ok: true, runners, warnings };
 }
@@ -160,18 +164,28 @@ export async function stopRunner(id, { graceMs = 5000, pollMs = 100, runnersDir 
     try { writeRecord(runnersDir, rid, next); } catch { /* best effort */ }
     return { ok: true, status, id: rid, pid, signal: signal || null };
   };
-  if (!probePid(pid).alive) return finish('already-exited', null);
-  signalTree(pid, 'SIGTERM');
+  // Snapshot the tree BEFORE signalling: a child that opened its own process
+  // group (Playwright launches Chrome detached) escapes `kill(-pid)`, and once
+  // the leader is gone its parent link is gone too. Live leader or not, the
+  // group may still hold a `dev-server &` the leader left behind.
+  const escaped = probePid(pid).alive ? descendantPids(listProcesses(), pid) : [];
+  const allDead = () => !probePid(pid).alive && !probeGroup(pid) && escaped.every((p) => !probePid(p).alive);
+  if (allDead()) return finish('already-exited', null);
+  const signalAll = (signal) => {
+    signalTree(pid, signal);
+    for (const p of escaped) { try { process.kill(p, signal); } catch { /* already gone */ } }
+  };
+  signalAll('SIGTERM');
   const termDeadline = Date.now() + Math.max(0, Number(graceMs) || 0);
   while (Date.now() < termDeadline) {
-    if (!probePid(pid).alive) return finish('stopped', 'SIGTERM');
+    if (allDead()) return finish('stopped', 'SIGTERM');
     await sleep(pollMs);
   }
-  if (!probePid(pid).alive) return finish('stopped', 'SIGTERM');
-  signalTree(pid, 'SIGKILL');
+  if (allDead()) return finish('stopped', 'SIGTERM');
+  signalAll('SIGKILL');
   const killDeadline = Date.now() + 2000;
   while (Date.now() < killDeadline) {
-    if (!probePid(pid).alive) return finish('stopped', 'SIGKILL');
+    if (allDead()) return finish('stopped', 'SIGKILL');
     await sleep(pollMs);
   }
   return { ok: false, status: 'still-running', id: rid, pid };
@@ -238,6 +252,18 @@ export function recordId(workPackageId) {
 function writeRecord(runnersDir, id, record) {
   ensureDir(runnersDir);
   fs.writeFileSync(path.join(runnersDir, `${id}.json`), `${JSON.stringify(record, null, 2)}\n`);
+}
+
+/** Does any process of the group led by `pid` still exist (leader or not)? */
+export function probeGroup(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 1) return false;
+  try {
+    process.kill(-n, 0);
+    return true;
+  } catch (error) {
+    return error && error.code === 'EPERM';
+  }
 }
 
 function signalTree(pid, signal) {

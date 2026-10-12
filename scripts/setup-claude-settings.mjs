@@ -61,6 +61,43 @@ function mergeAllowList(existing = [], extra = []) {
   return { merged: [...set], added };
 }
 
+/**
+ * The auto-compact window to opt into, or null. Claude Code compacts 1M-context
+ * models at ≈ 967k tokens; measured on real sessions, a 300k window cuts input
+ * by ≈ 2/3 (docs/roadmap-next.md, workstream K). Opt-in because a lower window
+ * is only safe together with the warm layer (brain-warm.mjs) that re-injects
+ * the session state after each compaction.
+ *
+ *   PROJECT_BRAIN_AUTO_COMPACT_WINDOW=1|300000   or   --auto-compact-window[=N]
+ *
+ * PURE given argv/env. `1`/bare flag → the measured default 300000; values
+ * outside Claude Code's accepted 100000–1000000 are refused (null).
+ */
+export const AUTO_COMPACT_DEFAULT = 300000;
+export function autoCompactWindowOptIn(argv = process.argv, env = process.env) {
+  const flag = argv.find((a) => a === '--auto-compact-window' || a.startsWith('--auto-compact-window='));
+  const raw = flag ? (flag.split('=')[1] ?? '1') : env.PROJECT_BRAIN_AUTO_COMPACT_WINDOW;
+  if (raw === undefined || raw === '' || raw === '0') return null;
+  const n = raw === '1' ? AUTO_COMPACT_DEFAULT : Number(raw);
+  return Number.isInteger(n) && n >= 100000 && n <= 1000000 ? n : null;
+}
+
+/**
+ * PURE (mutates `existing`). Add the template's env keys a settings file does
+ * not set yet — never overwrite a value the developer chose. The template's
+ * env (e.g. BRAIN_USAGE_LOG) used to be silently dropped by the sync.
+ */
+export function mergeEnv(existing = {}, extra = {}) {
+  let added = 0;
+  for (const [k, v] of Object.entries(extra)) {
+    if (!(k in existing)) {
+      existing[k] = String(v);
+      added += 1;
+    }
+  }
+  return added;
+}
+
 function mergeObjectMap(existing = {}, extra = {}) {
   let added = 0;
   for (const [k, v] of Object.entries(extra)) {
@@ -254,6 +291,15 @@ export function syncClaudeSettings() {
   const deduped = dedupeBrainHooks(existing.hooks);
   const hooksResult = mergeHooks(existing.hooks, recommended.hooks ?? {});
 
+  // env — additive; the auto-compact window only on explicit opt-in.
+  existing.env = existing.env ?? {};
+  const window = autoCompactWindowOptIn();
+  const envAdded = mergeEnv(existing.env, {
+    ...(recommended.env ?? {}),
+    ...(window ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: window } : {}),
+  });
+  if (Object.keys(existing.env).length === 0) delete existing.env;
+
   // enabledPlugins / extraKnownMarketplaces — third-party code, opt-in only
   // (decisions/0028). Without the opt-in nothing is merged; existing user
   // entries are never touched either way.
@@ -275,6 +321,7 @@ export function syncClaudeSettings() {
   const summary = [
     `allow:+${allowResult.added}`,
     `hooks:+${hooksResult.added}`,
+    `env:+${envAdded}`,
     `plugins:+${pluginsResult.added}`,
     `marketplaces:+${marketsResult.added}`,
     ...(upgraded > 0 ? [`legacy-hooks-upgraded:${upgraded}`] : []),

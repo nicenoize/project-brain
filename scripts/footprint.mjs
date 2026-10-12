@@ -56,6 +56,12 @@ export const BUDGETS = {
   // constant that no test enforced, four times what it can legitimately
   // produce and the largest per-prompt allowance the brain had.
   routeHookBytes: 1500,
+  // The warm layer re-injected after a compaction (brain-warm.mjs rehydrate,
+  // SessionStart matcher "compact"). The host caps additionalContext at
+  // 10,000 CHARACTERS and spills the rest to a file Claude is not told to
+  // read; bytes >= characters, so 9,500 B always lands whole. Paid once per
+  // compaction, not per prompt — it replaces up to ~950k tokens of context.
+  warmBytes: 9500,
 
   // --- LATENCY budgets (milliseconds) -------------------------------------
   // The byte budgets above are exact: a file either is or is not 12001 bytes.
