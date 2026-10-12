@@ -375,7 +375,8 @@ export function mergePackageScripts(pkg) {
     'brain:overview': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-overview.mjs',
     'brain:outline': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-outline.mjs',
     'brain:tokens': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-tokens.mjs',
-    'brain:ps': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-ps.mjs'
+    'brain:ps': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-ps.mjs',
+    'brain:warm': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-warm.mjs show'
   };
   for (const [k, v] of Object.entries(scripts)) {
     if (!pkg.scripts[k] || pkg.scripts[k].includes('skills/project-brain/')) pkg.scripts[k] = v;
@@ -631,7 +632,8 @@ export const LOCAL_STATE_FILES = Object.freeze([
   '.sync-bg.log',
   '.sync-bg.lock',
   '.dirty-files',
-  '.active_state.lock'
+  '.active_state.lock',
+  '.warm'
 ]);
 
 const LOCAL_IGNORE_HEADER = '# project-brain local state (per machine, never committed) — managed by project-brain';

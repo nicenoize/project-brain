@@ -335,6 +335,15 @@ npm run brain:ps -- --reap-orphans [--yes] # SIGTERM helpers whose agent is gone
 
 `brain:ps` judges idleness by the **last real user/assistant message** in the project's transcripts, never by process age or file mtime. Idle sessions are only *suggested* for `kill -TERM`, because they live in someone's terminal and transcripts survive for `claude --resume`. Only orphans, meaning helper processes re-parented to PID 1, are reaped.
 
+### Context: compact earlier, lose nothing (`brain:warm`, auto-compact window)
+
+Claude Code compacts 1M-context models at ≈ 967k tokens, so long sessions run at a median of 370k context per request, most of it stale tool output. Two parts make earlier compaction safe:
+
+- **Warm layer (on by default with the recommended hooks).** `brain-warm.mjs snapshot` runs on `PreCompact` and `Stop`. It folds the transcript into a small record: the user's goal in their own words, the latest asks, the last agent message, `## Decided:`/`## Followup:` tags, files edited and read (with line ranges), and the last test/build/lint checks. It is incremental (byte offset), so a `Stop` costs a few ms. After a compaction, `brain-warm.mjs rehydrate` (SessionStart, matcher `compact`) injects that record under the host's 10,000-character cap (`BUDGETS.warmBytes`), plus live git state and the transcript path for anything else. Tool output is never copied. Records live in `.project-brain/.warm/` (local, gitignored, pruned after 14 days). `npm run brain:warm` shows what the next rehydrate would inject.
+- **Earlier threshold (opt-in).** `PROJECT_BRAIN_AUTO_COMPACT_WINDOW=1 npm run brain:update-skill` (or `--auto-compact-window[=N]` on the settings sync) adds `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000` to `.claude/settings.json` `env`. It never overwrites a value you set. Measure before and after with `npm run brain:tokens`.
+
+Known limit: a check like `npm test | tail` reports the exit status of `tail`. ✓ then means "ran", not "passed".
+
 ### Performance modes
 
 - `BRAIN_FAST=1` — fast iteration mode. Sync hooks become no-ops, retrieval uses the JSON store with summary-only results, and module/feature/project summaries are not rebuilt during indexing. Recommended local default during heavy edit loops; CI keeps it off so retrieval quality stays high.
