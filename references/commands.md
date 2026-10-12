@@ -359,7 +359,7 @@ Claude Code compacts 1M-context models at ≈ 967k tokens, so long sessions ran 
 - **Subagents for exploration.** When a prompt reads like exploration ("wo wird…", "how does … work", "find all …") and the context is above 100k, Claude gets a ~40-token suggestion to run it in a subagent. It comes at most once per 20 calls.
 - **Status line (opt-in).** `PROJECT_BRAIN_STATUSLINE=1` / `--statusline` on the settings sync shows `ctx 412k/1M (41%) · compacts at 300k · 2× compacted`. It is never installed over an existing statusLine; to append the segment to your own, pipe the status-line JSON into `brain-statusline.mjs`.
 
-Measure before and after with `npm run brain:tokens -- --days 14`. Known limit: a check like `npm test | tail` reports the exit status of `tail`, so ✓ then means "ran", not "passed".
+Measure before and after with `npm run brain:tokens -- --days 14`. Its **Loss guards** section reports what earlier compaction and compression cost. First, re-reads after each compaction: files read again within 50 calls that had been read before it, through Read or `cat`/`sed`/`head`, as a share of what the compaction dropped (ADR 0035 kill line: 33 %). Second, edits that failed on the file's content (`no-match`, `stale`, `not-read`, `ambiguous`), which is the rate a compression proxy could raise. Blocks and invalid input are counted apart from those. Known limit: a check like `npm test | tail` reports the exit status of `tail`, so ✓ then means "ran", not "passed".
 
 ### Performance modes
 
