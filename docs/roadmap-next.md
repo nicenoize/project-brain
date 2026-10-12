@@ -111,7 +111,7 @@ repo's own sessions.
 | Step | What | Status |
 |---|---|---|
 | **R1 Inventory + orphan reap** | `brain:ps`: classify, real footprint, idleness by last real message; `--reap-orphans --yes` kills only helpers whose agent parent is gone. Foreign sessions are suggest-only. | **done** |
-| R2 Process groups | `runner-supervisor` spawns each runner in its own process group; `stop` takes the whole tree (agent + MCP + dev server + browser). No orphans from us, ever. | first slice |
+| **R2 Process groups** | Runners already started as group leaders and `stop` already signalled the group. Two holes closed: a leader that exits while its group lives on (`dev-server &`) was reported `exited` and never collected; and a child that opens its own group (Playwright's Chrome) escaped `kill(-pid)`. Liveness is now group-wide (`leftovers: true` in the listing), and `stop` snapshots the process tree before signalling. What escapes anyway is an orphan for `brain:ps --reap-orphans`. | **done** |
 | R3 Idle rules | `.project-brain/config.json`: brain runner idle > 1 h → stop; dev server of a closed workstream → stop; foreign session idle > 4 h → suggest; docker stack of a project without a session for > N h → suggest `stop`. | second slice |
 | R4 Admission control | brief-gate sibling: no new agent while swap > 80 %, memory pressure warn, or `maxConcurrentAgents` reached — states the reason, names what to reap; override audited. | second slice |
 | R5 Triggers | SessionStart line when pressure is high (time-budgeted in `footprint.mjs`); Control Room resource panel with per-row stop; optional launchd job for `reap --orphans`. | third slice |

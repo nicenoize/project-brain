@@ -7,7 +7,8 @@ import {
   findOrphans,
   lastRealMessageMs,
   sessionVerdicts,
-  renderText
+  renderText,
+  descendantPids
 } from '../scripts/brain-ps.mjs';
 
 test('parseEtime reads every ps elapsed-time shape', () => {
@@ -113,4 +114,11 @@ test('the report suggests killing idle sessions but never active ones', () => {
   assert.match(text, /kill -TERM 11 /);
   assert.doesNotMatch(text, /kill -TERM[^\n]*\b22\b/);
   assert.match(text, /docker: 7\.9 GB/);
+});
+
+test('descendantPids walks the whole tree below a pid, and nothing beside it', () => {
+  const rows = parsePs(PS);
+  assert.deepEqual(descendantPids(rows, 300).sort((a, b) => a - b), [310, 311]);
+  assert.deepEqual(descendantPids(rows, 400).sort((a, b) => a - b), [401, 402]);
+  assert.deepEqual(descendantPids(rows, 311), []);
 });

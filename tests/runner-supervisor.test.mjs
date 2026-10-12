@@ -213,6 +213,53 @@ test('total on missing state: empty dir listing, unknown-id stop and tail', asyn
   assert.equal(recordId('a b/c'), 'a-b-c');
 });
 
+/** Start `cmd` under the supervisor and read the helper PID it writes to `pidFile`. */
+async function startWithHelper(dirs, id, cmd, pidFile) {
+  const started = startRunner({ workPackageId: id, runnerCmd: cmd, worktreeDir: dirs.root, logDir: dirs.logDir, runnersDir: dirs.runnersDir });
+  assert.equal(started.ok, true);
+  spawnedPids.push(started.pid);
+  assert.ok(await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim()), 'helper wrote its pid');
+  const helper = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  spawnedPids.push(helper);
+  return { leader: started.pid, helper };
+}
+
+test('a leader that exits leaves its group behind: listed as leftovers, collected by stop', async () => {
+  const dirs = fixture();
+  const pidFile = path.join(dirs.root, 'helper.pid');
+  // The shell backgrounds a long-running helper (think `npm run dev &`) and exits.
+  const cmd = `'${process.execPath}' -e 'setInterval(() => {}, 1000)' & echo $! > '${pidFile}'; exit 0`;
+  const { leader, helper } = await startWithHelper(dirs, 'wp-leftover', cmd, pidFile);
+  try {
+    assert.ok(await waitFor(() => !probePid(leader).alive), 'leader exited');
+    assert.equal(probePid(helper).alive, true, 'helper still running');
+    const row = listRunners({ runnersDir: dirs.runnersDir }).runners.find((r) => r.id === 'wp-leftover');
+    assert.equal(row.leftovers, true);
+
+    const stopped = await stopRunner('wp-leftover', { graceMs: 2000, runnersDir: dirs.runnersDir });
+    assert.equal(stopped.status, 'stopped', 'not "already-exited": the group still had a process');
+    assert.ok(await waitFor(() => !probePid(helper).alive), 'helper collected');
+  } finally {
+    killQuietly(helper);
+  }
+});
+
+test('a child that opened its own process group is collected too', async () => {
+  const dirs = fixture();
+  const pidFile = path.join(dirs.root, 'escaped.pid');
+  // Like Playwright launching Chrome: detached → its own group, out of reach of kill(-leader).
+  const script = `const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});c.unref();require('fs').writeFileSync(${JSON.stringify(pidFile)},String(c.pid));setInterval(()=>{},1000)`;
+  const cmd = `'${process.execPath}' -e '${script.replace(/'/g, `'\\''`)}'`;
+  const { helper } = await startWithHelper(dirs, 'wp-escaped', cmd, pidFile);
+  try {
+    const stopped = await stopRunner('wp-escaped', { graceMs: 2000, runnersDir: dirs.runnersDir });
+    assert.equal(stopped.ok, true);
+    assert.ok(await waitFor(() => !probePid(helper).alive), 'escaped child collected');
+  } finally {
+    killQuietly(helper);
+  }
+});
+
 test('no zombie children survive the test run', async () => {
   for (const pid of spawnedPids) killQuietly(pid);
   const allDead = await waitFor(() => spawnedPids.every(pid => !probePid(pid).alive), 3000);

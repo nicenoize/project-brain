@@ -93,6 +93,24 @@ export function findOrphans(rows) {
   return [...out.values()];
 }
 
+/** Every process below `rootPid` in the parent tree (not including it). PURE. */
+export function descendantPids(rows, rootPid) {
+  const children = new Map();
+  for (const r of rows) {
+    if (!children.has(r.ppid)) children.set(r.ppid, []);
+    children.get(r.ppid).push(r.pid);
+  }
+  const out = [];
+  const stack = [...(children.get(rootPid) || [])];
+  while (stack.length) {
+    const pid = stack.pop();
+    if (out.includes(pid)) continue;
+    out.push(pid);
+    stack.push(...(children.get(pid) || []));
+  }
+  return out;
+}
+
 /** Latest real user/assistant timestamp (ms) among parsed transcript records. */
 export function lastRealMessageMs(records) {
   let last = 0;
@@ -201,8 +219,13 @@ function systemMemory() {
   };
 }
 
+/** The live process table. */
+export function listProcesses() {
+  return parsePs(sh('ps', ['-axo', 'pid=,ppid=,rss=,etime=,command=']));
+}
+
 export function collect({ idleHours = 4, now = Date.now() } = {}) {
-  const rows = parsePs(sh('ps', ['-axo', 'pid=,ppid=,rss=,etime=,command=']));
+  const rows = listProcesses();
   const self = new Set([process.pid, process.ppid]);
   const byKind = {};
   for (const r of rows) {
