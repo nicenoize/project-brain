@@ -77,3 +77,13 @@ test('records older than the window are ignored; empty transcripts add no sessio
   assert.equal(r.requests, 0);
   assert.equal(r.sessions, 0);
 });
+
+import { proxyVerdict } from '../scripts/brain-tokens.mjs';
+
+test('proxy verdict: only a real, mostly-compressible tool-output share pays', () => {
+  const s = (fresh, tool, comp) => ({ usage: { freshInput: fresh }, toolOutput: { estTokens: tool, compressibleShare: comp } });
+  assert.equal(proxyVerdict(s(280e6, 31e6, 0.17)).worth, false, 'the measured fleet: 11 % / 17 %');
+  assert.equal(proxyVerdict(s(100e6, 40e6, 0.6)).worth, true, 'a log-heavy repo');
+  assert.equal(proxyVerdict(s(100e6, 40e6, 0.2)).worth, false);
+  assert.equal(proxyVerdict(s(0, 0, 0)).worth, false);
+});
