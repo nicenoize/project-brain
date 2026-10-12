@@ -102,9 +102,105 @@ export function emptyReport() {
     // context once but rides along on every later request, so this — not the
     // once-counted volume — is what a compression proxy acts on.
     reread: {},
+    // Loss guards (ADR 0035): what compaction and compression may cost.
+    loss: { compactions: 0, droppedTokens: 0, rereadCalls: 0, rereadChars: 0 },
+    edits: { total: 0, failed: 0, reasons: {} },
     firstTs: null,
     lastTs: null
   };
+}
+
+// A file read through the shell: cat / head / tail / nl / bat / sed -n '…p' FILE.
+// 87 % of tool output in a real repo came from Bash, much of it exactly this.
+const SHELL_READ = /(?:^|[;&|]\s*)(?:cat|head|tail|nl|bat|less|sed\s+-n\s+(?:'[^']*'|"[^"]*"|\S+))\s+(?:-[\w-]+(?:\s+\d+)?\s+)*['"]?([\w@~./-]+\.\w+)/;
+export const REREAD_WINDOW_CALLS = 50;
+
+/** The file a tool call reads, or null. PURE. */
+export function readTarget(name, input = {}) {
+  if (name === 'Read') return input.file_path || null;
+  if (name === 'Bash' && typeof input.command === 'string') {
+    const m = input.command.split('\n')[0].match(SHELL_READ);
+    return m ? m[1] : null;
+  }
+  return null;
+}
+
+/** Why an edit failed, from its error text. PURE. */
+export function editFailureReason(text) {
+  const t = String(text || '');
+  if (/classifier|permission|denied|doesn't want to proceed|user rejected|should return findings as text/i.test(t)) return 'blocked';
+  if (/InputValidationError|required parameter|unexpected parameter/i.test(t)) return 'invalid-input';
+  if (/string to replace not found|old_string.*not found|not found in file/i.test(t)) return 'no-match';
+  if (/has not been read|read it first|must read/i.test(t)) return 'not-read';
+  if (/modified since|has been modified|changed since/i.test(t)) return 'stale';
+  if (/found \d+ matches|multiple|more than one|not unique/i.test(t)) return 'ambiguous';
+  return 'other';
+}
+
+/** Failures that point at a stale or compressed view of the file — the ones compression could cause. */
+export const CONTENT_FAILURES = Object.freeze(['no-match', 'stale', 'not-read', 'ambiguous']);
+
+/**
+ * Loss guards, folded per transcript. Reads are tracked from the session's
+ * start so "read before the compaction" is known even when the compaction
+ * itself falls inside the --days window and the first read does not.
+ *  - re-reads: in the REREAD_WINDOW_CALLS tool calls after a compaction,
+ *    reads of a file that was already read before it — what the compaction
+ *    made the agent fetch again, against what it dropped.
+ *  - failed edits: Edit/Write calls answered with an error, by reason —
+ *    "no-match" is what a stale or compressed view of a file produces.
+ */
+export function foldLoss(report, records, { sinceMs = 0 } = {}) {
+  const read = new Set();
+  let known = null; // files read before the open compaction window
+  let left = 0;
+  const pendingReread = new Set();
+  const pendingEdit = new Set();
+  for (const r of records) {
+    if (!r) continue;
+    const ts = r.timestamp ? Date.parse(r.timestamp) : NaN;
+    const inWindow = !sinceMs || ts >= sinceMs;
+    if (r.type === 'system' && r.subtype === 'compact_boundary') {
+      if (!inWindow) continue;
+      const m = r.compactMetadata || {};
+      report.loss.compactions += 1;
+      report.loss.droppedTokens += Math.max(0, (m.preTokens || 0) - (m.postTokens || 0));
+      known = new Set(read);
+      left = REREAD_WINDOW_CALLS;
+      continue;
+    }
+    const content = r.message && r.message.content;
+    if (!Array.isArray(content)) continue;
+    if (r.type === 'assistant') {
+      for (const c of content) {
+        if (!c || c.type !== 'tool_use') continue;
+        if (left > 0) left -= 1; else known = null;
+        const target = readTarget(c.name, c.input || {});
+        if (target) {
+          if (known && known.has(target)) pendingReread.add(c.id);
+          read.add(target);
+        }
+        if (inWindow && /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(c.name)) pendingEdit.add(c.id);
+      }
+    } else if (r.type === 'user') {
+      for (const c of content) {
+        if (!c || c.type !== 'tool_result') continue;
+        if (pendingReread.delete(c.tool_use_id)) {
+          report.loss.rereadCalls += 1;
+          report.loss.rereadChars += resultText(c.content).length;
+        }
+        if (pendingEdit.delete(c.tool_use_id)) {
+          report.edits.total += 1;
+          if (c.is_error) {
+            report.edits.failed += 1;
+            const why = editFailureReason(resultText(c.content));
+            report.edits.reasons[why] = (report.edits.reasons[why] || 0) + 1;
+          }
+        }
+      }
+    }
+  }
+  return report;
 }
 
 /**
@@ -112,6 +208,7 @@ export function emptyReport() {
  * Records older than `sinceMs` are ignored.
  */
 export function addTranscript(report, records, { sinceMs = 0 } = {}) {
+  foldLoss(report, records, { sinceMs });
   const seenRequests = new Set();
   const toolNames = new Map(); // tool_use_id → tool name
   const live = {}; // kind → chars in the live context
@@ -209,6 +306,32 @@ export function summarize(report) {
       compressibleShare: toolChars ? round(compressibleChars / toolChars) : 0
     },
     tools,
+    loss: (() => {
+      const l = report.loss || { compactions: 0, droppedTokens: 0, rereadCalls: 0, rereadChars: 0 };
+      const rereadTokens = Math.round(l.rereadChars / CHARS_PER_TOKEN);
+      return {
+        compactions: l.compactions,
+        droppedTokens: l.droppedTokens,
+        rereadCalls: l.rereadCalls,
+        rereadTokens,
+        rereadPerCompaction: l.compactions ? Math.round(rereadTokens / l.compactions) : 0,
+        // Re-read tokens enter once; the dropped tokens are saved on EVERY later
+        // request. This ratio is therefore the strict side of ADR 0035's ⅓ line.
+        rereadVsDropped: l.droppedTokens ? round(rereadTokens / l.droppedTokens) : 0
+      };
+    })(),
+    edits: (() => {
+      const e = report.edits || { total: 0, failed: 0, reasons: {} };
+      const content = CONTENT_FAILURES.reduce((a, k) => a + (e.reasons[k] || 0), 0);
+      return {
+        total: e.total,
+        failed: e.failed,
+        failRate: e.total ? round(e.failed / e.total) : 0,
+        contentFailed: content,
+        contentFailRate: e.total ? round(content / e.total) : 0,
+        reasons: e.reasons
+      };
+    })(),
     reread: (() => {
       const rr = report.reread || {};
       const tot = Object.values(rr).reduce((a, b) => a + b, 0);
@@ -312,6 +435,15 @@ export function renderText(s, { scope }) {
   for (const t of s.tools.slice(0, 10)) {
     L.push(`  ${t.name.padEnd(34).slice(0, 34)} ${fmt(t.estTokens).padStart(7)}  ${String(t.calls).padStart(5)} calls  ${t.dominantKind.padEnd(5)} compressible ${pct(t.compressibleShare)}`);
   }
+  L.push('');
+  L.push('Loss guards');
+  const lo = s.loss;
+  L.push(lo.compactions
+    ? `  compactions ${lo.compactions} · dropped ${fmt(lo.droppedTokens)} · re-read after them ${fmt(lo.rereadTokens)} in ${lo.rereadCalls} calls (${fmt(lo.rereadPerCompaction)} per compaction) = ${pct(lo.rereadVsDropped)} of what they dropped — kill line 33%`
+    : '  compactions 0 — nothing to judge yet');
+  const ed = s.edits;
+  const why = Object.entries(ed.reasons).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', ');
+  L.push(`  edits ${ed.total} · failed on the file's content ${ed.contentFailed} (${pct(ed.contentFailRate)}) — the rate compression could raise · all failures ${ed.failed}${why ? ` (${why})` : ''}`);
   L.push('');
   L.push(`Verdict: ${proxyVerdict(s).text}`);
   L.push('');

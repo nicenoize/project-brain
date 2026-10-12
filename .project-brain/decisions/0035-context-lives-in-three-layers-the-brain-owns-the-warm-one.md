@@ -74,9 +74,13 @@ under kernel memory pressure.
   prompt and recall all read it, guarded, and `brain-session-digest` already
   depended on it.
 - Compaction loses detail by nature. Kill criterion: if re-reads in the 50
-  calls after a compaction eat more than ⅓ of the saved input, or the user
+  calls after a compaction eat more than ⅓ of what it dropped, or the user
   reports lost context twice in a week, the window goes back off and the
   warm layer is fixed. The window is never raised to hide lossy summaries.
+  `brain:tokens` measures both machine-checkable halves ("Loss guards"):
+  re-reads after compaction, and edits failing on stale or compressed file
+  content. Baseline 2026-10-12 (old 967k compaction): re-reads ≈ 0.1–0.4 %
+  of dropped; content edit failures 0.1 % of 5,268 edits in club-ops.
 - K1/K4/K5/K7/K8 are Claude Code surfaces. Other hosts get the CLI
   (`brain:warm show`, `brain:recall`) and the existing `brain:compact`.
 
