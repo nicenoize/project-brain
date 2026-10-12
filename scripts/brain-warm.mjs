@@ -231,6 +231,59 @@ export function renderWarm(state, { budgetBytes = BUDGETS.warmBytes, git = null,
   return out.join('\n\n');
 }
 
+// --- K5: boundary nudges ------------------------------------------------------
+
+// A finished unit of work: compacting HERE loses the least. Matched at the
+// start of a shell segment, like CHECK_CMD, so a commit message that merely
+// says "git push" does not count.
+const BOUNDARY_CMD = /(?:^|&&|;)\s*(git commit\b|git push\b|gh pr (?:create|merge)\b|npm run brain:close\b|project-brain close\b)/;
+export const NUDGE = Object.freeze({ minTokens: 150_000, regrowTokens: 50_000 });
+
+/** Is this Bash command the end of a unit of work? */
+export function isBoundary(command) {
+  return BOUNDARY_CMD.test(String(command || '').split('\n')[0]);
+}
+
+/** Context size of the latest request in these records (input + cache), or 0. */
+export function lastContextTokens(records) {
+  for (let i = records.length - 1; i >= 0; i--) {
+    const u = records[i] && records[i].type === 'assistant' && records[i].message && records[i].message.usage;
+    if (u) return (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+  }
+  return 0;
+}
+
+/**
+ * Nudge once per boundary while the context is large; again only after it
+ * has grown by `regrowTokens` (a compaction resets it). PURE.
+ */
+export function shouldNudge(ctx, lastNudgeCtx, { minTokens = NUDGE.minTokens, regrowTokens = NUDGE.regrowTokens } = {}) {
+  if (!(ctx >= minTokens)) return false;
+  if (!lastNudgeCtx || ctx < lastNudgeCtx) return true;
+  return ctx - lastNudgeCtx >= regrowTokens;
+}
+
+export function nudgeText(ctx) {
+  return `brain: good moment to /compact — this unit of work is done and the context is ≈ ${Math.round(ctx / 1000)}k tokens, all re-read on every request. The session state comes back after compaction; details stay recallable.`;
+}
+
+/** Context of the latest request, from the transcript's tail (the last ~256 kB). */
+function tailContextTokens(transcriptPath) {
+  try {
+    const size = fs.statSync(transcriptPath).size;
+    const len = Math.min(size, 256 * 1024);
+    const fd = fs.openSync(transcriptPath, 'r');
+    try {
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      const lines = buf.toString('utf8').split('\n');
+      const records = [];
+      for (const l of lines) { try { records.push(JSON.parse(l)); } catch { /* partial */ } }
+      return lastContextTokens(records);
+    } finally { fs.closeSync(fd); }
+  } catch { return 0; }
+}
+
 // --- I/O ---------------------------------------------------------------------
 
 const safeId = (id) => String(id || 'unknown').replace(/[^\w-]/g, '').slice(0, 64) || 'unknown';
@@ -329,8 +382,8 @@ function main(argv) {
     process.stdout.write(renderWarm(s, { git: gitLine(s.cwd || process.cwd()) }) + '\n');
     return;
   }
-  if (mode !== 'snapshot' && mode !== 'rehydrate') {
-    process.stderr.write('Usage: brain-warm.mjs snapshot|rehydrate (hook, JSON on stdin) | show [session-id]\n');
+  if (mode !== 'snapshot' && mode !== 'rehydrate' && mode !== 'boundary') {
+    process.stderr.write('Usage: brain-warm.mjs snapshot|rehydrate|boundary (hook, JSON on stdin) | show [session-id]\n');
     process.exit(1);
   }
   // Hook path: never fail, never block the session.
@@ -338,6 +391,20 @@ function main(argv) {
     if (!fs.existsSync(BRAIN_DIR)) return;
     const payload = readStdinJson();
     const args = { sessionId: payload.session_id, transcriptPath: payload.transcript_path };
+    if (mode === 'boundary') {
+      const command = payload.tool_input && payload.tool_input.command;
+      const resp = payload.tool_response || {};
+      if (!isBoundary(command) || resp.interrupted || /^Exit code [1-9]/.test(String(resp.stderr || resp.output || ''))) return;
+      const ctx = tailContextTokens(args.transcriptPath);
+      const file = statePath(args.sessionId, WARM_DIR);
+      const state = readState(args.sessionId, WARM_DIR);
+      if (!shouldNudge(ctx, state.lastNudgeCtx, { minTokens: Number(process.env.BRAIN_NUDGE_MIN_TOKENS) || NUDGE.minTokens })) return;
+      state.lastNudgeCtx = ctx;
+      fs.mkdirSync(WARM_DIR, { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(state));
+      process.stdout.write(JSON.stringify({ systemMessage: nudgeText(ctx) }));
+      return;
+    }
     if (mode === 'snapshot') {
       ensureLocalStateIgnored();
       snapshot(args);

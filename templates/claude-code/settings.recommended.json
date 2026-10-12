@@ -132,6 +132,15 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-stage-dirty.mjs\" || true"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/skills/project-brain/scripts/brain-warm.mjs\" boundary || true"
+          }
+        ]
       }
     ]
   }
