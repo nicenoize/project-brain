@@ -80,10 +80,19 @@ test('records older than the window are ignored; empty transcripts add no sessio
 
 import { proxyVerdict } from '../scripts/brain-tokens.mjs';
 
-test('proxy verdict: only a real, mostly-compressible tool-output share pays', () => {
-  const s = (fresh, tool, comp) => ({ usage: { freshInput: fresh }, toolOutput: { estTokens: tool, compressibleShare: comp } });
-  assert.equal(proxyVerdict(s(280e6, 31e6, 0.17)).worth, false, 'the measured fleet: 11 % / 17 %');
-  assert.equal(proxyVerdict(s(100e6, 40e6, 0.6)).worth, true, 'a log-heavy repo');
-  assert.equal(proxyVerdict(s(100e6, 40e6, 0.2)).worth, false);
-  assert.equal(proxyVerdict(s(0, 0, 0)).worth, false);
+test('proxy verdict is a range over what requests re-read, not once-counted output', () => {
+  const v = (reread) => proxyVerdict({ reread });
+  const fleet = v({ other: 0.52, code: 0.318, prose: 0.068, html: 0.058, search: 0.019, log: 0.006, json: 0.005, diff: 0.005 });
+  assert.equal(fleet.worth, true, 'the measured fleet: worth an A/B');
+  assert.ok(fleet.low > 0.08 && fleet.low < 0.11, String(fleet.low));
+  assert.ok(fleet.high > 0.24 && fleet.high < 0.28, String(fleet.high));
+  assert.equal(v({ other: 0.9, prose: 0.1 }).worth, false);
+  assert.equal(v({}).worth, false);
+});
+
+test('re-read weighting: output counts once per later request, and compaction resets it', () => {
+  const req = (id) => ({ type: 'assistant', requestId: id, timestamp: '2026-10-12T10:00:00Z', message: { id, usage: { input_tokens: 1 }, content: [] } });
+  const res = { type: 'user', timestamp: '2026-10-12T10:00:00Z', message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: '{"a":1}' }] } };
+  const s = summarize(addTranscript(emptyReport(), [res, req('1'), req('2'), { type: 'system', subtype: 'compact_boundary' }, req('3')]));
+  assert.equal(s.reread.json, 1, 'only json was live, read by two requests, then compacted away');
 });
