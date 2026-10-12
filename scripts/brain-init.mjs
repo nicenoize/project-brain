@@ -1,8 +1,29 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, BRAIN_DIR, ensureDir, exists, write } from './common.mjs';
+import { ROOT, BRAIN_DIR, ensureDir, exists, write, unknownFlags } from './common.mjs';
 
 const dirs = ['features', 'modules', 'decisions', 'sessions', 'work-packages', 'orchestration', 'vector-db', 'packages'].map(d => path.join(BRAIN_DIR, d));
+
+// Flags are checked BEFORE anything is written. This script writes at module
+// load, and used to accept any argument: `init --dry-run` silently
+// initialized the workspace it had only been asked to describe — on a
+// read-only company workspace. An unknown flag is now refused.
+const ARGS = process.argv.slice(2);
+const BAD_FLAGS = unknownFlags(ARGS, ['--dry-run', '--help']);
+if (BAD_FLAGS.length || ARGS.includes('--help')) {
+  if (BAD_FLAGS.length) process.stderr.write(`[brain:init] unknown flag(s): ${BAD_FLAGS.join(', ')} — nothing was written.\n`);
+  process.stderr.write('Usage: brain-init [--dry-run]   (creates .project-brain/ with seed docs; never overwrites)\n');
+  process.exit(BAD_FLAGS.length ? 1 : 0);
+}
+if (ARGS.includes('--dry-run')) {
+  const seeds = ['context_index.md', 'master_plan.md', 'product_plan.md', 'repo_context.md', 'active_state.md', 'conventions.example.json', 'eval.json', 'DECISIONS.md', 'MODULE_MAP.md'];
+  const missing = [...dirs.map((d) => d + path.sep), ...seeds.map((f) => path.join(BRAIN_DIR, f))].filter((p) => !exists(p));
+  console.log(missing.length
+    ? `brain:init --dry-run — would create under ${ROOT}:\n${missing.map((p) => `  ${path.relative(ROOT, p)}`).join('\n')}\n(nothing written)`
+    : `brain:init --dry-run — ${path.relative(ROOT, BRAIN_DIR) || '.project-brain'} is complete; nothing to create (nothing written)`);
+  process.exit(0);
+}
+
 dirs.forEach(ensureDir);
 
 // If the host repo has a `pkg/<name>/` layout, scaffold a matching
