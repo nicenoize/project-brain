@@ -83,6 +83,41 @@ export function autoCompactWindowOptIn(argv = process.argv, env = process.env) {
 }
 
 /**
+ * K2 (docs/roadmap-next.md): what Claude Code's own compaction summary should
+ * keep and drop. Claude Code reads a "Compact Instructions" section of
+ * CLAUDE.md; this block lives between markers so updates replace only it.
+ * CLAUDE.md is sent with EVERY request — the block stays near 150 tokens.
+ * Written only with the auto-compact opt-in: the two belong together.
+ */
+export const COMPACT_BEGIN = '<!-- project-brain:compact-instructions — managed; edit outside these markers -->';
+export const COMPACT_END = '<!-- /project-brain:compact-instructions -->';
+export const COMPACT_BLOCK = [
+  COMPACT_BEGIN,
+  '## Compact Instructions',
+  '',
+  'Keep: the user\'s goal and latest asks in their words; decisions and why; paths with line ranges being changed; what last passed or failed (tests, build); open items and the next step; ruled-out approaches, one line each.',
+  'Drop: raw tool output, file contents, logs, search results, resolved errors. The project brain re-injects session state after compaction, and `brain_recall` fetches any dropped detail from the transcript, so keep pointers (path:line, command), not copies.',
+  COMPACT_END
+].join('\n');
+
+/**
+ * PURE. Insert or refresh the managed block. Returns the new text and what
+ * happened ('added' | 'updated' | 'unchanged'). Text outside the markers is
+ * never touched; a lone begin marker (hand-damaged block) is left alone.
+ */
+export function upsertCompactInstructions(text = '', block = COMPACT_BLOCK) {
+  const begin = text.indexOf(COMPACT_BEGIN);
+  const end = text.indexOf(COMPACT_END);
+  if (begin !== -1 && end > begin) {
+    const next = text.slice(0, begin) + block + text.slice(end + COMPACT_END.length);
+    return { text: next, status: next === text ? 'unchanged' : 'updated' };
+  }
+  if (begin !== -1) return { text, status: 'unchanged' };
+  const sep = !text ? '' : text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n';
+  return { text: text + sep + block + '\n', status: 'added' };
+}
+
+/**
  * PURE (mutates `existing`). Add the template's env keys a settings file does
  * not set yet — never overwrite a value the developer chose. The template's
  * env (e.g. BRAIN_USAGE_LOG) used to be silently dropped by the sync.
@@ -300,6 +335,16 @@ export function syncClaudeSettings() {
   });
   if (Object.keys(existing.env).length === 0) delete existing.env;
 
+  // K2: compact instructions in CLAUDE.md, with the same opt-in.
+  let compactStatus = null;
+  if (window) {
+    const claudeMd = path.join(process.cwd(), 'CLAUDE.md');
+    const before = fs.existsSync(claudeMd) ? fs.readFileSync(claudeMd, 'utf8') : '';
+    const res = upsertCompactInstructions(before);
+    if (res.status !== 'unchanged') fs.writeFileSync(claudeMd, res.text);
+    compactStatus = res.status;
+  }
+
   // enabledPlugins / extraKnownMarketplaces — third-party code, opt-in only
   // (decisions/0028). Without the opt-in nothing is merged; existing user
   // entries are never touched either way.
@@ -322,6 +367,7 @@ export function syncClaudeSettings() {
     `allow:+${allowResult.added}`,
     `hooks:+${hooksResult.added}`,
     `env:+${envAdded}`,
+    ...(compactStatus ? [`compact-instructions:${compactStatus}`] : []),
     `plugins:+${pluginsResult.added}`,
     `marketplaces:+${marketsResult.added}`,
     ...(upgraded > 0 ? [`legacy-hooks-upgraded:${upgraded}`] : []),
