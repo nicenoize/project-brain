@@ -129,7 +129,7 @@ for (const file of files) currentHashes.set(file, handedOver?.get(file) ?? sha25
 let changedFiles = files.filter(file => forceRebuild || oldManifest.files?.[file]?.hash !== currentHashes.get(file));
 let deletedFiles = Object.keys(oldManifest.files || {}).filter(file => !fileSet.has(file));
 
-const existingRecords = await store.getAll(); // WITH vectors: chunk-level reuse reads them
+let existingRecords = await store.getAll(); // WITH vectors: chunk-level reuse reads them
 const existingIdsByFile = new Map();
 // Chunk-level vector reuse: when a file's top-level hash changes but most of
 // its chunks are byte-identical, we copy the previously-embedded vector instead
@@ -292,6 +292,13 @@ for (const file of changedFiles) {
 }
 
 if (records.length) await store.upsert(records);
+// Chunking is done; let the big transients go before the summary passes read
+// the store again. The TypeScript program alone was ≈ 1 GB on club-ops and
+// stayed alive to the end of the run, on top of every later full read.
+const hadRecords = existingRecords.length > 0;
+tsContextLoad = null;
+existingRecords = null;
+existingVectorByChunkSha.clear();
 if (reuseVectors && (reuseStats.reused || reuseStats.embedded)) {
   const total = reuseStats.reused + reuseStats.embedded;
   const pct = total ? Math.round((reuseStats.reused / total) * 100) : 0;
@@ -323,7 +330,7 @@ if (fleetMode) {
     if (p) dirtyProjects.add(p);
   }
   // First index in fleet mode → all projects dirty.
-  if (forceRebuild || existingRecords.length === 0) {
+  if (forceRebuild || !hadRecords) {
     for (const p of projects) dirtyProjects.add(p.name);
   }
 }
