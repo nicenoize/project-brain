@@ -51,3 +51,17 @@ function psText() {
   try { return execFileSync('ps', ['-axo', 'pid=,ppid=,rss=,etime=,command='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }); }
   catch { return ''; }
 }
+
+/**
+ * The kernel's memory-pressure verdict: 'normal' | 'warn' | 'critical', or
+ * null where there is none (Linux, sysctl failure). macOS only; swap is not a
+ * signal there (ADR 0035), this is.
+ */
+export const PRESSURE_LEVELS = Object.freeze({ 1: 'normal', 2: 'warn', 4: 'critical' });
+export function memoryPressure() {
+  if (process.platform !== 'darwin') return null;
+  try {
+    const raw = execFileSync('sysctl', ['-n', 'kern.memorystatus_vm_pressure_level'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 });
+    return PRESSURE_LEVELS[raw.trim()] || null;
+  } catch { return null; }
+}
