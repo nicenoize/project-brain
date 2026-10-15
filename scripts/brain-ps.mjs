@@ -36,7 +36,7 @@ import { isMainModule } from './is-main.mjs';
 import { BRAIN_DIR, takeFlag, takeOption, unknownFlags } from './common.mjs';
 import { listRunners, stopRunner } from './runner-supervisor.mjs';
 import { projectSlug, transcriptsRoot, listTranscripts } from './brain-tokens.mjs';
-import { parseEtime, parsePs, descendantPids, listProcesses } from './procs.mjs';
+import { parseEtime, parsePs, descendantPids, listProcesses, memoryPressure } from './procs.mjs';
 
 export { parseEtime, parsePs, descendantPids, listProcesses };
 
@@ -354,8 +354,7 @@ function systemMemory() {
       swapUsedGb: swap ? Number(swap[2]) / 1024 : null,
       swapTotalGb: swap ? Number(swap[1]) / 1024 : null,
       freePct: free ? Number(free[1]) : null,
-      // kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical.
-      pressure: ({ 1: 'normal', 2: 'warn', 4: 'critical' })[sh('sysctl', ['-n', 'kern.memorystatus_vm_pressure_level']).trim()] || null
+      pressure: memoryPressure()
     };
   }
   const info = (() => { try { return fs.readFileSync('/proc/meminfo', 'utf8'); } catch { return ''; } })();

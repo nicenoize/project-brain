@@ -27,6 +27,7 @@ import {
   clearDirtyFiles,
   writeHashHandoff
 } from './common.mjs';
+import { memoryPressure } from './procs.mjs';
 
 const SYNC_BG_LOCK = path.join(BRAIN_DIR, '.sync-bg.lock');
 const SYNC_DEBOUNCE_MS = Number(process.env.BRAIN_SYNC_DEBOUNCE_MS || 30_000);
@@ -146,6 +147,20 @@ console.log(`Project Brain sync: ${decision.action} — ${decision.reason} (chan
 
 if (dryRun) {
   console.log(JSON.stringify({ decision, changed: changed.length, deleted: deleted.length }, null, 2));
+  process.exit(0);
+}
+
+// Background work waits while the kernel reports memory pressure: an index
+// run peaks near 3 GB (club-ops, 2026-10-13), and starting it on a machine
+// that is already short is what made it unusable. The dirty list is kept, so
+// the next hook or commit picks the change up; a forced or foreground sync
+// is a deliberate ask and runs.
+const pressure = decision.action === 'background' && allowBackground && !force && process.env.BRAIN_SYNC_IGNORE_PRESSURE !== '1'
+  ? memoryPressure()
+  : null;
+if (pressure === 'warn' || pressure === 'critical') {
+  writeSyncState({ action: 'skip', reason: `deferred: memory pressure ${pressure}`, branch: gitBranchSafe(), changed: changed.length, deleted: deleted.length });
+  console.log(`Project Brain sync: deferred — memory pressure is ${pressure}; the next sync picks the changes up.`);
   process.exit(0);
 }
 

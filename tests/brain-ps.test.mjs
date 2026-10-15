@@ -196,3 +196,10 @@ test('the Control Room view keeps what the panel needs and offers commands, neve
   assert.deepEqual(v.stacks[0], { project: 'p', containers: 2, verdict: 'idle', stopCmd: 'docker stop $(…)' });
   assert.equal(v.orphans, 1);
 });
+
+test('memoryPressure: the kernel verdict or null, never anything else', async () => {
+  const { memoryPressure, PRESSURE_LEVELS } = await import('../scripts/procs.mjs');
+  const v = memoryPressure();
+  assert.ok(v === null || Object.values(PRESSURE_LEVELS).includes(v), `got ${v}`);
+  if (process.platform !== 'darwin') assert.equal(v, null);
+});

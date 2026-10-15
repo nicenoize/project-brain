@@ -44,4 +44,13 @@ Perf tuning env vars:
 BRAIN_REUSE_VECTORS=0                    # disable chunk-level vector reuse (force full re-embed)
 BRAIN_SYNC_DEBOUNCE_MS=30000             # skip bg sync if manifest was updated within window
 BRAIN_SYNC_NICE=0                        # disable nice/ionice wrapping for the bg child
+BRAIN_EMBED_THREADS=2                    # threads the local model may use (default 2; 0 = every core)
+BRAIN_SYNC_IGNORE_PRESSURE=1             # run bg syncs even under macOS memory pressure
 ```
+
+`nice` alone does not keep a Mac usable: on macOS the niced child still ran the
+model on ~4.6 of 12 cores, because ONNX Runtime starts one thread per core. The
+thread cap is what holds an index run to ~2 cores (2× longer per chunk, less
+CPU time in total). A background sync is also deferred while the kernel reports
+memory pressure (warn/critical) — a run peaks at 2–3 GB on a large repo — and
+the dirty list stays, so the next hook or commit picks the change up.

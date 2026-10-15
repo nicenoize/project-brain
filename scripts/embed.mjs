@@ -10,8 +10,64 @@
  * to lexical-only search. OpenAIProvider needs only fetch + OPENAI_API_KEY.
  */
 import { createRequire } from 'node:module';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const require = createRequire(import.meta.url);
+
+/**
+ * Threads the local model may use. ONNX Runtime's default is one per core,
+ * which made every index run take ~4.6 of 12 cores for its whole length and
+ * left the machine sluggish (measured 2026-10-13, all-MiniLM-L6-v2: 24 ms per
+ * chunk at 4.6 cores; 2 threads: 47 ms at 1.9 cores). An index is background
+ * work, so it gets 2 threads. BRAIN_EMBED_THREADS=N sets another cap, 0 lifts it.
+ */
+export const DEFAULT_EMBED_THREADS = 2;
+export function embedThreads(env = process.env) {
+  const raw = env.BRAIN_EMBED_THREADS;
+  if (raw == null || raw === '') return DEFAULT_EMBED_THREADS;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_EMBED_THREADS;
+}
+
+/**
+ * Cap ONNX Runtime's threads for every session transformers.js creates.
+ * transformers.js 2.x passes no session options and loads the model as a
+ * buffer, and onnxruntime-node 1.14 ignores the options for a buffer anyway —
+ * only a model loaded from a path honours intraOpNumThreads. So the buffer is
+ * written once to a content-addressed file and the session is made from that.
+ * Returns false when nothing was patched (no cap, or no runtime to patch).
+ */
+export function limitOnnxThreads(ort, threads, { dir = os.tmpdir() } = {}) {
+  const IS = ort && ort.InferenceSession;
+  if (!threads || !IS || typeof IS.create !== 'function' || IS.create.brainThreads) return false;
+  const create = IS.create.bind(IS);
+  const limited = (model, options = {}) => {
+    let source = model;
+    if (model instanceof Uint8Array) {
+      const sha = crypto.createHash('sha256').update(model).digest('hex').slice(0, 16);
+      source = path.join(dir, `project-brain-model-${sha}.onnx`);
+      if (!fs.existsSync(source)) {
+        const tmp = `${source}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, model);
+        fs.renameSync(tmp, source);
+      }
+    }
+    // The node runtime only knows 'cpu'; transformers.js also lists 'wasm'.
+    const providers = (options.executionProviders || []).filter((p) => p !== 'wasm');
+    return create(source, {
+      ...options,
+      ...(providers.length ? { executionProviders: providers } : {}),
+      intraOpNumThreads: threads,
+      interOpNumThreads: 1
+    });
+  };
+  limited.brainThreads = threads;
+  IS.create = limited;
+  return true;
+}
 
 /** Thrown when the local embedding stack cannot be loaded (optional dependency absent/broken). */
 export class EmbedderUnavailableError extends Error {
@@ -78,6 +134,13 @@ export class LocalProvider extends EmbedProvider {
           'Install it (npm i @xenova/transformers) or set OPENAI_API_KEY with BRAIN_EMBED_PROVIDER=openai.',
           { cause: error }
         );
+      }
+      try {
+        // The runtime transformers.js resolves, not a possibly different copy.
+        const ort = createRequire(require.resolve('@xenova/transformers'))('onnxruntime-node');
+        limitOnnxThreads(ort, embedThreads());
+      } catch (error) {
+        if (!process.env.BRAIN_QUIET) console.error(`Project Brain: embedding thread cap unavailable (${error.message || error}); using all cores.`);
       }
       this.extractor = await pipeline('feature-extraction', this.modelName);
     }
