@@ -23,6 +23,34 @@ export function sourceOf(text, hookName = '') {
 }
 
 /**
+ * A name a person recognises for whoever injected this: the plugin from the
+ * command's path, the brain, or the text's own first line ("# Vercel Plugin
+ * Session Context", "CAVEMAN MODE ACTIVE"). PURE.
+ */
+export function nameOf(text, command = '') {
+  const cmd = String(command || '');
+  const plugin = cmd.match(/plugins\/cache\/[^/]+\/([^/\s"']+)/);
+  if (plugin) return plugin[1];
+  const src = sourceOf(text);
+  if (src !== 'other') return src;
+  const tagged = String(text || '').trimStart().match(/^\[([a-z0-9][\w.-]*)@[\w.-]+\]/i); // "[impeccable@1] …"
+  if (tagged) return tagged[1];
+  if (/project-brain|brain-[a-z-]+\.mjs/.test(cmd)) return 'brain';
+  const first = String(text || '').trimStart().split('\n')[0].replace(/^[#=\s*>-]+|[=\s*:.]+$/g, '').replace(/\s+/g, ' ');
+  const words = first.split(' ').slice(0, 5).join(' ');
+  return (words.length > 40 ? words.slice(0, 39) + '…' : words) || 'unnamed hook';
+}
+
+/** Plain stdout of these events goes into the agent's context (JSON stdout is recorded as hook_additional_context). PURE. */
+export function stdoutIsContext(a) {
+  if (!a || a.type !== 'hook_success') return false;
+  const ev = String(a.hookEvent || a.hookName || '').split(':')[0];
+  if (ev !== 'SessionStart' && ev !== 'UserPromptSubmit') return false;
+  const out = String(a.content ?? a.stdout ?? '').trim();
+  return out.length > 0 && !out.startsWith('{');
+}
+
+/**
  * What kind of brain injection this is. Only a `hint` asks the agent to run
  * something, so only hints are scored for "followed":
  *   state   — the warm snapshot after a compaction (the session's own state)
@@ -56,8 +84,9 @@ export function callRuns(call, commands) {
 }
 
 export function createInjectionTracker({ keepLast = MAX_LAST, sinceMs = 0 } = {}) {
-  const totals = { count: 0, chars: 0, bySource: {}, byKind: {}, byEvent: {} };
+  const totals = { count: 0, chars: 0, bySource: {}, byKind: {}, byEvent: {}, byName: {} };
   const open = []; // { injection, commands, left }
+  const recent = new Map(); // event + text head → attachment type, to drop the second recording of one output
   const last = [];
   const bump = (bag, key, chars) => { const b = (bag[key] ||= { count: 0, chars: 0, actionable: 0, followed: 0 }); b.count += 1; b.chars += chars; return b; };
 
@@ -66,9 +95,15 @@ export function createInjectionTracker({ keepLast = MAX_LAST, sinceMs = 0 } = {}
     const ts = r.timestamp ? Date.parse(r.timestamp) : NaN;
     const inWindow = !sinceMs || ts >= sinceMs;
     const a = r.type === 'attachment' ? r.attachment : null;
-    if (a && a.type === 'hook_additional_context') {
-      const text = (Array.isArray(a.content) ? a.content.join('\n') : String(a.content || '')).trim();
+    if (a && (a.type === 'hook_additional_context' || stdoutIsContext(a))) {
+      const text = (Array.isArray(a.content) ? a.content.join('\n') : String(a.content ?? a.stdout ?? '')).trim();
       if (!text || !inWindow) return;
+      // Claude Code sometimes records the same output both ways: count it once
+      const key = `${String(a.hookEvent || a.hookName || '').split(':')[0]}\u0000${text.slice(0, 200)}`;
+      const seenAs = recent.get(key);
+      if (seenAs && seenAs !== a.type) { recent.delete(key); return; }
+      recent.set(key, a.type);
+      if (recent.size > 200) recent.delete(recent.keys().next().value);
       const source = sourceOf(text, a.hookName);
       const kind = source === 'brain' ? kindOf(text) : null;
       const event = String(a.hookName || a.hookEvent || '');
@@ -80,6 +115,10 @@ export function createInjectionTracker({ keepLast = MAX_LAST, sinceMs = 0 } = {}
       const s = bump(totals.bySource, source, text.length);
       const k = kind ? bump(totals.byKind, kind, text.length) : null;
       bump(totals.byEvent, `${source} · ${event.split(':')[0] || 'other'}`, text.length);
+      const nb = bump(totals.byName, nameOf(text, a.command), text.length);
+      const ev = event.split(':')[0] || null;
+      nb.event = nb.count === 1 ? ev : nb.event === ev ? ev : null; // one event, or none named
+      nb.source ||= source;
       if (commands.length) { s.actionable += 1; k.actionable += 1; inj.followed = false; open.push({ inj, commands, left: FOLLOW_WINDOW, bags: [s, k] }); }
       last.push(inj);
       if (last.length > keepLast) last.shift();
@@ -108,6 +147,7 @@ export function createInjectionTracker({ keepLast = MAX_LAST, sinceMs = 0 } = {}
       bySource: Object.fromEntries(Object.entries(totals.bySource).map(([k, v]) => [k, shape(v)])),
       byKind: Object.fromEntries(Object.entries(totals.byKind).map(([k, v]) => [k, shape(v)])),
       byEvent: Object.fromEntries(Object.entries(totals.byEvent).sort((a, b) => b[1].count - a[1].count).map(([k, v]) => [k, { count: v.count, chars: v.chars }])),
+      byName: topNames(totals.byName),
       last: [...last]
     };
   }
@@ -115,9 +155,18 @@ export function createInjectionTracker({ keepLast = MAX_LAST, sinceMs = 0 } = {}
   return { record, summary };
 }
 
+const NAMES_KEPT = 12;
+/** The biggest named sources, by characters. PURE. */
+export function topNames(bag, n = NAMES_KEPT) {
+  return Object.fromEntries(Object.entries(bag || {})
+    .sort((a, b) => (b[1].chars || 0) - (a[1].chars || 0))
+    .slice(0, n)
+    .map(([k, v]) => [k, { count: v.count, chars: v.chars, estTokens: Math.round((v.chars || 0) / 4), event: v.event || null, source: v.source || null }]));
+}
+
 /** Merge several summaries (per transcript → per project → everything). PURE. */
 export function mergeInjectionSummaries(list) {
-  const out = { count: 0, chars: 0, estTokens: 0, bySource: {}, byKind: {}, byEvent: {}, last: [] };
+  const out = { count: 0, chars: 0, estTokens: 0, bySource: {}, byKind: {}, byEvent: {}, byName: {}, last: [] };
   // Slim summaries (the state's) carry estTokens but no chars: fall back to
   // estTokens × 4, never to undefined (NaN serialises as null and breaks readers).
   const chars = (x) => (Number.isFinite(x && x.chars) ? x.chars : Number.isFinite(x && x.estTokens) ? x.estTokens * 4 : 0);
@@ -131,6 +180,12 @@ export function mergeInjectionSummaries(list) {
         b.count += n(v.count); b.chars += chars(v); b.actionable += n(v.actionable); b.followed += n(v.followed);
       }
     }
+    for (const [k, v] of Object.entries(s.byName || {})) {
+      const fresh = !out.byName[k];
+      const b = (out.byName[k] ||= { count: 0, chars: 0, event: v.event || null, source: v.source || null });
+      if (!fresh && b.event !== v.event) b.event = null;
+      b.count += n(v.count); b.chars += chars(v);
+    }
     for (const [k, v] of Object.entries(s.byEvent || {})) {
       const b = (out.byEvent[k] ||= { count: 0, chars: 0 });
       b.count += n(v.count); b.chars += chars(v);
@@ -142,5 +197,6 @@ export function mergeInjectionSummaries(list) {
     b.followedShare = b.actionable ? Math.round((b.followed / b.actionable) * 1000) / 1000 : null;
   }
   out.byEvent = Object.fromEntries(Object.entries(out.byEvent).sort((a, b) => b[1].count - a[1].count));
+  out.byName = topNames(out.byName);
   return out;
 }

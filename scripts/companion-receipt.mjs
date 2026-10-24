@@ -67,7 +67,7 @@ export function createTrimFold({ sinceMs = 0, into = new Map(), projectOf = (cwd
     return into.get(key);
   };
   function line(text) {
-    const maybeInjection = text.includes('hook_additional_context');
+    const maybeInjection = text.includes('hook_additional_context') || text.includes('"hook_success"');
     const usage = text.includes('"usage"');
     const boundary = !usage && text.includes('compact_boundary');
     if (!usage && !boundary && !maybeInjection) {

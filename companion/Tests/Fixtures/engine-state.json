@@ -9,8 +9,8 @@
     "newerThanTested": false,
     "issues": []
   },
-  "at": "2026-10-22T18:12:34.777Z",
-  "atMs": 1792692754777,
+  "at": "2026-10-24T13:45:38.360Z",
+  "atMs": 1792849538360,
   "engine": {
     "pid": 4242,
     "intervalMs": 1000,
@@ -52,11 +52,11 @@
         "postTokens": 60000,
         "durationMs": 9000,
         "precomputed": false,
-        "atMs": 1792692714770
+        "atMs": 1792849498356
       },
       "compactionLog": [
         {
-          "atMs": 1792692714770,
+          "atMs": 1792849498356,
           "precomputed": false,
           "durationMs": 9000
         }
@@ -106,10 +106,10 @@
           "text": "src/billing/invoice.ts"
         },
         "text": "compacted",
-        "atMs": 1792692724770
+        "atMs": 1792849508356
       },
-      "lastActivityMs": 1792692724770,
-      "startedMs": 1792692694770,
+      "lastActivityMs": 1792849508356,
+      "startedMs": 1792849478356,
       "pid": null,
       "rssMb": null,
       "transcript": "/tmp/state-contract/projects/-work-acme/5e55e55e-0000-4000-8000-00000000c0de.jsonl",
@@ -154,7 +154,7 @@
         },
         "last": [
           {
-            "at": 1792692709770,
+            "at": 1792849493356,
             "source": "brain",
             "kind": "hint",
             "event": "PreToolUse:Bash",
@@ -166,7 +166,7 @@
             "followed": false
           },
           {
-            "at": 1792692715770,
+            "at": 1792849499356,
             "source": "brain",
             "kind": "state",
             "event": "SessionStart",
@@ -176,7 +176,7 @@
             "followed": null
           },
           {
-            "at": 1792692723770,
+            "at": 1792849507356,
             "source": "brain",
             "kind": "answer",
             "event": "PreToolUse:Edit",
@@ -206,19 +206,19 @@
   ],
   "holds": [
     {
-      "id": "hmvjuzadycaf491",
+      "id": "hmvmgbpdh92ab57",
       "glob": "src/billing/**",
       "root": "/work/acme",
       "project": "acme",
       "worktrees": 1,
-      "until": 1792694554770,
+      "until": 1792851338356,
       "minutesLeft": 30,
       "note": ""
     }
   ],
   "pending": [
     {
-      "id": "pmvjuzadzdad10b",
+      "id": "pmvmgbpdi82be1e",
       "session": "5e55e55e-0000-4000-8000-00000000c0de",
       "title": "Split invoices without touching the public API",
       "tool": "Edit",
@@ -226,24 +226,24 @@
       "shortFile": "src/billing/invoice.ts",
       "glob": "src/billing/**",
       "project": "acme",
-      "at": 1792692754775,
-      "deadline": 1792692794770,
+      "at": 1792849538358,
+      "deadline": 1792849578356,
       "secondsLeft": 40
     }
   ],
   "events": [
     {
-      "at": 1792692754775,
+      "at": 1792849538358,
       "kind": "steer-delivered",
       "session": "5e55e55e-0000-4000-8000-00000000c0de",
       "id": "n1",
       "text": "keep ROUND_HALF_EVEN",
       "tool": "Bash",
-      "queuedAt": 1792692752770,
+      "queuedAt": 1792849536356,
       "title": "Split invoices without touching the public API"
     },
     {
-      "at": 1792692754775,
+      "at": 1792849538358,
       "kind": "approved",
       "session": "5e55e55e-0000-4000-8000-00000000c0de",
       "id": "p0",
@@ -254,7 +254,7 @@
     }
   ],
   "today": {
-    "sinceMs": 1792620000000,
+    "sinceMs": 1792792800000,
     "compactions": 1,
     "prepared": 0,
     "waitedSeconds": 9,
@@ -266,10 +266,10 @@
   },
   "receipt": {
     "v": 1,
-    "at": "2026-10-22T18:12:34.770Z",
-    "atMs": 1792692754770,
+    "at": "2026-10-24T13:45:38.356Z",
+    "atMs": 1792849538356,
     "days": 14,
-    "sinceMs": 1791483154770,
+    "sinceMs": 1791639938356,
     "source": {
       "transcripts": 1,
       "bytes": 2675,
@@ -335,6 +335,15 @@
         "brain · SessionStart": {
           "count": 1,
           "chars": 79
+        }
+      },
+      "byName": {
+        "brain": {
+          "count": 3,
+          "chars": 227,
+          "estTokens": 57,
+          "event": null,
+          "source": "brain"
         }
       }
     },

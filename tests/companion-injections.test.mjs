@@ -86,3 +86,22 @@ test('only hints are scored: a warm snapshot or an answer that mentions a comman
   assert.equal(s.bySource.brain.actionable, 1, 'one of three asks for a command');
   assert.deepEqual(Object.fromEntries(Object.entries(s.byKind).map(([k, v]) => [k, v.actionable])), { state: 0, answer: 0, hint: 1 });
 });
+
+test('names sources, counts plain SessionStart stdout once, and keeps the biggest by size', async () => {
+  const { createInjectionTracker, nameOf, stdoutIsContext } = await import('../scripts/companion-injections.mjs');
+  assert.equal(nameOf('# Vercel Plugin Session Context\n\nUse…', 'node "${CLAUDE_PLUGIN_ROOT}/hooks/x.mjs"'), 'Vercel Plugin Session Context');
+  assert.equal(nameOf('anything', 'bash /u/.claude/plugins/cache/caveman/caveman/18e/src/hook.sh'), 'caveman');
+  assert.equal(nameOf('=== Project Brain: Active State (digest) ===', ''), 'brain');
+  assert.equal(stdoutIsContext({ type: 'hook_success', hookEvent: 'SessionStart', content: 'plain text' }), true);
+  assert.equal(stdoutIsContext({ type: 'hook_success', hookEvent: 'SessionStart', content: '{"hookSpecificOutput":{}}' }), false);
+  assert.equal(stdoutIsContext({ type: 'hook_success', hookEvent: 'PreToolUse', content: 'plain' }), false);
+  const t = createInjectionTracker();
+  const big = '# Vercel Plugin Session Context\n' + 'x'.repeat(4000);
+  t.record({ type: 'attachment', timestamp: '2026-10-20T10:00:00Z', attachment: { type: 'hook_success', hookName: 'SessionStart:startup', hookEvent: 'SessionStart', content: big, command: 'node inject.mjs' } });
+  t.record({ type: 'attachment', timestamp: '2026-10-20T10:00:00Z', attachment: { type: 'hook_additional_context', hookName: 'SessionStart', hookEvent: 'SessionStart', content: big } });
+  t.record({ type: 'attachment', timestamp: '2026-10-20T10:00:01Z', attachment: { type: 'hook_additional_context', hookName: 'UserPromptSubmit', hookEvent: 'UserPromptSubmit', content: 'CAVEMAN MODE ACTIVE (full).' } });
+  const sum = t.summary();
+  assert.equal(sum.count, 2, 'the double recording counts once');
+  assert.deepEqual(Object.keys(sum.byName), ['Vercel Plugin Session Context', 'CAVEMAN MODE ACTIVE (full)']);
+  assert.equal(sum.byName['Vercel Plugin Session Context'].event, 'SessionStart');
+});

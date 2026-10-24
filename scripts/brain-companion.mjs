@@ -491,7 +491,7 @@ export function parseLine(line) {
  * screenshots as base64, megabytes per line — is skipped unparsed.
  */
 export function headLineWanted(line) {
-  return line.includes('"usage"') || line.includes('compact_boundary') || line.includes('hook_additional_context') ||
+  return line.includes('"usage"') || line.includes('compact_boundary') || line.includes('hook_additional_context') || line.includes('"hook_success"') ||
     line.includes('"ai-title"') || line.includes('"type":"summary"') || (line.length < 20_000 && line.includes('"type":"user"'));
 }
 
@@ -1510,6 +1510,17 @@ export function renderReceipt(r) {
     if (hint && hint.actionable >= 50 && hint.followedShare != null && hint.followedShare < 0.05) L.push('         hints are off by default now; something sets BRAIN_HINTS=1 — remove it from that settings file\'s "env"');
     const other = r.got.bySource.other;
     if (other) L.push(`         other hooks and plugins: ${other.count} snippets (≈ ${k(other.estTokens)} tokens)`);
+    L.push('');
+  }
+  const names = Object.entries((r.got && r.got.byName) || {});
+  if (names.length) {
+    const all = r.got.estTokens || 1;
+    L.push(`SOURCES  who put the most into the agents' context (≈ ${k(r.got.estTokens)} tokens from hooks in all)`);
+    for (const [name, v] of names.slice(0, 8)) {
+      const where = v.event ? ` · ${v.event}` : '';
+      L.push(`         ${name.slice(0, 34).padEnd(34)} ${String(v.count).padStart(5)}× ${('≈ ' + k(v.estTokens)).padStart(8)}  ${pctS(v.estTokens / all).padStart(4)}${where}`);
+    }
+    L.push('         a source you do not need: remove its hook (/hooks in Claude Code) or turn its plugin off (enabledPlugins)');
     L.push('');
   }
   const g = r.guard;
