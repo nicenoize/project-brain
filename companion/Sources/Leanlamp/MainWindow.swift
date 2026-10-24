@@ -407,6 +407,12 @@ struct ReceiptTab: View {
           .fixedSize(horizontal: false, vertical: true)
           .overlay(alignment: .bottom) { Theme.rule.frame(height: 1) }
 
+          if let named = r.got?.named, !named.isEmpty {
+            SourcesTable(named: Array(named.prefix(8)), total: Double(r.got?.estTokens ?? 0))
+              .padding(.horizontal, 32)
+              .padding(.top, 24)
+          }
+
           ProjectTable(projects: r.projects)
             .padding(.horizontal, 32)
             .padding(.top, 24)
@@ -415,6 +421,7 @@ struct ReceiptTab: View {
             Text("last \(r.days) days · \(r.source.transcripts) transcripts · \(String(format: "%.1f", r.source.bytes / 1e9)) GB read in \(String(format: "%.1f", r.source.ms / 1000)) s · \(computedAt(r.atMs)) · all numbers from your own transcripts and the companion bus · nothing left this machine")
               .font(Theme.body(10)).foregroundStyle(Theme.grayText).lineLimit(2)
             Spacer()
+            SquareButton(title: "Share card", fill: .clear, text: .white, border: .white, height: 30) { actions.shareReceipt() }
             SquareButton(title: actions.computingReceipt ? "…" : "Recompute", fill: .clear, text: .white, border: .white, height: 30) { actions.recomputeReceipt() }
           }
           .padding(32)
@@ -653,5 +660,48 @@ struct GotDrawer: View {
   private func verdict(_ i: CompanionState.Injections.Injection) -> String {
     if let c = i.followedCommand { return "RAN \(c.uppercased())" }
     return i.scored ? "IGNORED" : "\(i.chars) CHARS"
+  }
+}
+
+/// Who put what in front of the agents, by the name a person knows it by, and how to turn a plugin off.
+struct SourcesTable: View {
+  let named: [(name: String, value: CompanionState.Injections.Named)]
+  let total: Double
+  @State private var copied: String?
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text("SOURCES · WHO PUT IT IN FRONT OF THE AGENTS").font(Theme.label(11)).kerning(1).foregroundStyle(Theme.muted).padding(.bottom, 8)
+      ForEach(Array(named.enumerated()), id: \.offset) { i, n in
+        let share = total > 0 ? Double(n.value.estTokens ?? 0) / total : 0
+        HStack(spacing: 16) {
+          VStack(alignment: .leading, spacing: 6) {
+            Text(n.name).font(Theme.strong(13)).foregroundStyle(.white).lineLimit(1)
+            GeometryReader { g in
+              ZStack(alignment: .leading) {
+                Rectangle().fill(Theme.rule)
+                Rectangle().fill(i == 0 ? Theme.accent : Color.white).frame(width: max(2, g.size.width * share))
+              }
+            }
+            .frame(height: 6)
+          }
+          Text("\(n.value.count)×").font(Theme.body(12)).foregroundStyle(Theme.muted).frame(width: 60, alignment: .trailing)
+          Text(Gauge.k(n.value.estTokens ?? 0)).font(Theme.number(20)).foregroundStyle(.white).frame(width: 70, alignment: .trailing)
+          Text("\(Int((share * 100).rounded())) %").font(Theme.body(12)).foregroundStyle(Theme.muted).frame(width: 48, alignment: .trailing)
+          if let p = n.value.plugin {
+            SquareButton(title: copied == p ? "Copied" : "Copy off switch", fill: .clear, text: .white, border: .white, height: 26) {
+              NSPasteboard.general.clearContents()
+              NSPasteboard.general.setString("/plugin disable \(p)", forType: .string)
+              copied = p
+            }
+            .frame(width: 150, alignment: .trailing)
+          } else {
+            Color.clear.frame(width: 150, height: 1)
+          }
+        }
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) { Theme.rule.frame(height: 1) }
+      }
+    }
   }
 }

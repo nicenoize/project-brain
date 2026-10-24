@@ -27,6 +27,12 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-quiet") {
   exit(status)
 }
 
+if let i = CommandLine.arguments.firstIndex(of: "--render-sources") {
+  let out = CommandLine.arguments.count > i + 1 ? CommandLine.arguments[i + 1] : "sources.png"
+  let status = MainActor.assumeIsolated { DemoRenderer.renderSources(to: out) }
+  exit(status)
+}
+
 // A menu-bar / notch app: no Dock icon, no main window, never steals focus
 // from the terminal the agent runs in.
 let app = NSApplication.shared

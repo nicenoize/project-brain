@@ -217,6 +217,13 @@ if let p = try? JSONDecoder().decode(Parking.self, from: Data(parkJSON.utf8)) {
   eq(p.leftovers.count, 0, "no leftovers key: none")
 } else { check(false, "parking decodes") }
 eq(mbText(2170), "2.1 GB", "GB from 1024 MB on")
+let gotJSON = #"""
+{"count":3,"estTokens":424000,"byName":{"brain":{"count":636,"estTokens":220000},"vercel":{"count":232,"estTokens":191000,"event":"SessionStart","plugin":"vercel@claude-plugins-official"},"bad":{"count":"x"}}}
+"""#
+if let g = try? JSONDecoder().decode(CompanionState.Injections.self, from: Data(gotJSON.utf8)) {
+  eq(g.named.map { $0.name }, ["brain", "vercel"], "sources biggest first; a bad one costs only itself")
+  eq(g.named.last?.value.plugin, "vercel@claude-plugins-official", "the plugin behind a source")
+} else { check(false, "injections with byName decode") }
 var quietState = CompanionState(atMs: Date().timeIntervalSince1970 * 1000, sessions: [])
 quietState.parking = Parking(openMb: 4000, idleMb: 2170, open: [.init(pid: 1, sessionId: "a", title: "x", mb: 2170, park: true)])
 eq(Toast.pick(quietState)?.kind, "quiet", "2 GB in idle sessions: offer to park")

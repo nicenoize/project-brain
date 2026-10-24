@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import LeanlampCore
 
@@ -57,6 +58,14 @@ final class Actions: ObservableObject {
   func cleanLeftovers() { run(["clean"]) }
   /// Open a parked session again in a new Terminal window (`claude --resume`).
   func resume(_ sessionId: String) { run(["resume", sessionId]) }
+
+  /// Write the receipt card (receipt --share) and open it in the browser.
+  func shareReceipt() {
+    run(["receipt", "--share"], quiet: false) { ok, out in
+      guard ok, let data = out.data(using: .utf8), let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let card = j["card"] as? String else { return }
+      NSWorkspace.shared.open(URL(fileURLWithPath: card))
+    }
+  }
 
   /// Stop orphaned helpers (their agent is gone). Nothing else is touched.
   func reclaim() { run(["reclaim"]) }

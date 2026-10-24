@@ -110,6 +110,23 @@ enum DemoRenderer {
     return 0
   }
 
+  /// `leanlamp --render-sources <png>`: the receipt's SOURCES table with our own repos' numbers (2026-10-24).
+  @MainActor
+  static func renderSources(to out: String) -> Int32 {
+    Fonts.register()
+    let json = #"""
+    {"count":1024,"estTokens":424000,"byName":{"brain":{"count":636,"estTokens":220000},"vercel":{"count":182,"estTokens":191000,"event":"SessionStart","plugin":"vercel@claude-plugins-official"},"impeccable":{"count":120,"estTokens":8000,"plugin":"impeccable@impeccable"},"caveman":{"count":74,"estTokens":3000,"plugin":"caveman@caveman"}}}
+    """#
+    guard let got = try? JSONDecoder().decode(CompanionState.Injections.self, from: Data(json.utf8)) else { return 1 }
+    let view = SourcesTable(named: got.named, total: 424_000).padding(32).frame(width: 1120).background(Color.black)
+    let renderer = ImageRenderer(content: view)
+    renderer.scale = 2
+    guard let img = renderer.cgImage, let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else { return 1 }
+    do { try png.write(to: URL(fileURLWithPath: out)) } catch { return 1 }
+    print("leanlamp: sources → \(out)")
+    return 0
+  }
+
   /// `leanlamp --render-parked <png>`: the PARKED tab with made-up sessions (never the user's).
   @MainActor
   static func renderParked(to out: String) -> Int32 {

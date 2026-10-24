@@ -253,8 +253,20 @@ public struct CompanionState: Codable, Equatable {
       bySource = (try? c.decodeIfPresent([String: SourceTotals].self, forKey: .bySource)) ?? nil
       byKind = (try? c.decodeIfPresent([String: SourceTotals].self, forKey: .byKind)) ?? nil
       last = (try? c.decodeIfPresent([Lenient<Injection>].self, forKey: .last))??.compactMap { $0.value }
+      byName = (try? c.decodeIfPresent([String: Lenient<Named>].self, forKey: .byName))??.compactMapValues { $0.value }
     }
-    enum CodingKeys: String, CodingKey { case count, estTokens, bySource, byKind, last }
+    enum CodingKeys: String, CodingKey { case count, estTokens, bySource, byKind, last, byName }
+    /// Every source by the name a person knows it by (a plugin, our brain, a hook's first line).
+    public var byName: [String: Named]?
+    public struct Named: Codable, Equatable {
+      public var count: Int
+      public var estTokens: Int?
+      public var event: String?
+      /// "vercel@claude-plugins-official" when a plugin's hook put it there.
+      public var plugin: String?
+    }
+    /// The sources, biggest first.
+    public var named: [(name: String, value: Named)] { (byName ?? [:]).map { ($0.key, $0.value) }.sorted { ($0.value.estTokens ?? 0) > ($1.value.estTokens ?? 0) } }
     public var bySource: [String: SourceTotals]?
     /// The brain's injections by kind: hint (asks for a command, scored), answer (before an edit), state (after a compaction).
     public var byKind: [String: SourceTotals]?
