@@ -242,3 +242,54 @@ export function receiptPath(dir) { return path.join(dir, 'receipt.json'); }
 export function readReceipt(dir) {
   try { return JSON.parse(fs.readFileSync(receiptPath(dir), 'utf8')); } catch { return null; }
 }
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const kTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n || 0)));
+
+/**
+ * The receipt as one shareable card (1200 × 630, the social-card size): what
+ * hooks put in front of the agents, by source, and what the context did.
+ * No paths and no project names — only the sources' own names, which the
+ * person sharing it can read first. PURE.
+ */
+export function renderReceiptCard(rec) {
+  const got = rec.got || {};
+  const total = got.estTokens || 0;
+  const names = Object.entries(got.byName || {}).slice(0, 5);
+  const t = rec.trim || {};
+  const pct = (x) => (x == null ? '—' : `${Math.round(x * 100)}%`);
+  const rows = names.map(([name, v]) => {
+    const share = total ? v.estTokens / total : 0;
+    return `<div class="row"><div class="n">${esc(name.length > 38 ? name.slice(0, 37) + '…' : name)}<div class="bar"><i style="width:${Math.max(1, Math.round(share * 100))}%"></i></div></div><span class="d">${kTok(v.estTokens)}</span><span class="d s">${pct(share)}</span></div>`;
+  }).join('');
+  const hint = got.byKind && got.byKind.hint;
+  const acted = hint && hint.actionable ? `<div><span>brain hints followed</span><b class="d">${hint.followed}/${hint.actionable}</b></div>` : '';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>leanlamp receipt</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=Doto:wght@900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;border-radius:0;margin:0}
+body{background:#000;color:#fff;font:15px/1.4 'JetBrains Mono',monospace;display:grid;place-items:center;min-height:100vh}
+.card{width:1200px;height:630px;padding:48px 56px;display:grid;grid-template-columns:420px 1fr;gap:56px;border:2px solid #fff;position:relative}
+.card::before{content:"";position:absolute;inset:0 auto auto 0;width:22px;height:22px;border:3px solid #ff5a1f;border-right:0;border-bottom:0}
+.k{font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#ff5a1f}
+.big{font:900 168px/.9 'Doto',monospace;color:#ff5a1f;margin:28px 0 14px}
+h1{font:800 34px/1 'Bricolage Grotesque',sans-serif;letter-spacing:-.04em;margin-bottom:28px}
+.facts div{display:flex;justify-content:space-between;border-top:1px solid #2a2a2a;padding:10px 0}
+.facts b{font-size:26px}
+.d{font-family:'Doto',monospace;font-weight:900}
+.rows{align-self:center}
+.row{display:grid;grid-template-columns:1fr 84px 64px;gap:16px;align-items:end;padding:14px 0;border-bottom:1px solid #2a2a2a}
+.row .n{font-weight:700;font-size:16px}
+.bar{height:10px;background:#2a2a2a;margin-top:10px}.bar i{display:block;height:100%;background:#fff}
+.row:first-of-type .bar i{background:#ff5a1f}
+.row .d{font-size:28px;text-align:right}.row .s{color:#b8b8b8}
+.foot{position:absolute;left:56px;right:56px;bottom:28px;display:flex;justify-content:space-between;font-size:12px;color:#8a8a8a}
+.foot b{color:#fff;font:800 18px 'Bricolage Grotesque',sans-serif;letter-spacing:-.03em}
+</style></head><body><div class="card">
+<div><span class="k">receipt · last ${esc(rec.days)} days</span><div class="big">${kTok(total)}</div><h1>tokens hooks and plugins put in front of your agent</h1>
+<div class="facts"><div><span>context per request, median</span><b class="d">${kTok(t.contextP50)}</b></div><div><span>input above 500k context</span><b class="d">${pct(t.shareAbove500k)}</b></div>${acted}</div></div>
+<div class="rows"><span class="k">who put it there</span>${rows || '<p>no hook output in these days</p>'}</div>
+<div class="foot"><span>${esc(rec.source && rec.source.transcripts)} transcripts · read on this Mac, nothing left it</span><b>leanlamp</b></div>
+</div></body></html>
+`;
+}

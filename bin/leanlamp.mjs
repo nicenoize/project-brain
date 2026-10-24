@@ -61,7 +61,9 @@ leanlamp compact --at 300k [--shared] [--dry-run]
                               set it in .claude/settings.local.json (yours) or, with --shared,
                               .claude/settings.json (the team's); from the next session start`,
   receipt: `leanlamp receipt [--days 14] [--json]  what the last days cost, what the agents got from
-                              hooks and acted on, what the companion did`,
+                              hooks and acted on, what the companion did
+leanlamp receipt --share      the same as one card to post (HTML, 1200 × 630): sources by their own
+                              names, never your paths or projects`,
   sessions: `leanlamp sessions [--json]     every open Claude Code session: RAM (with its MCP servers),
                               when it last spoke, what it was about
 leanlamp sessions park <s>|--idle [--hours 2] [--yes]

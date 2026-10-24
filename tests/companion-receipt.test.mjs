@@ -105,3 +105,17 @@ test('an assistant turn that mentions hook_additional_context still counts as a 
   assert.equal(summarizeTrim(acc).requests, 2);
   assert.equal(acc.injections[0].count, 1);
 });
+
+test('renderReceiptCard: one card, sources by name, no paths, markup escaped', async () => {
+  const { renderReceiptCard } = await import('../scripts/companion-receipt.mjs');
+  const html = renderReceiptCard({
+    days: 14, source: { transcripts: 72 }, trim: { contextP50: 246_000, shareAbove500k: 0.27 },
+    got: { estTokens: 424_000, byKind: { hint: { actionable: 211, followed: 0 } }, byName: { brain: { estTokens: 220_000 }, '<script>x</script>': { estTokens: 184_000 } } },
+    projects: [{ project: 'secret-client', cwd: '/Users/me/secret-client' }]
+  });
+  assert.match(html, /424k/);
+  assert.match(html, /brain hints followed/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.doesNotMatch(html, /<script>x/);
+  assert.doesNotMatch(html, /secret-client|\/Users\//, 'no project names, no paths');
+});

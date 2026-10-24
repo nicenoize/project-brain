@@ -54,7 +54,7 @@ import {
   brainHome, statePath, busDir, readHolds, addHold, releaseHolds, readPending, decide, queueSteer, updateHoldRoots,
   inboxCounts, readRecentEvents, readSeen, eventsFile, appendEvent, writeConfigFile, sweepBus, engineFresh, recordChange, readChanges
 } from './companion-bus.mjs';
-import { computeReceipt, readReceipt, receiptPath } from './companion-receipt.mjs';
+import { computeReceipt, readReceipt, receiptPath, renderReceiptCard } from './companion-receipt.mjs';
 import { repoName } from './repo-name.mjs';
 import { createInjectionTracker, mergeInjectionSummaries } from './companion-injections.mjs';
 import { spawn } from 'node:child_process';
@@ -1580,7 +1580,8 @@ function main() {
   const parent = Number(takeOption(args, '--parent')) || 0;
   const daysOpt = takeOption(args, '--days');
   const write = takeFlag(args, '--write');
-  const unknown = unknownFlags(args, ['--help', '-h', '--json', '--watch', '--once', '--all', '--dry-run', '--write', '--roots=', '--state=', '--for=', '--settings=', '--parent=', '--days=', '--']);
+  const share = takeFlag(args, '--share');
+  const unknown = unknownFlags(args, ['--help', '-h', '--json', '--watch', '--once', '--all', '--dry-run', '--write', '--share', '--roots=', '--state=', '--for=', '--settings=', '--parent=', '--days=', '--']);
   if (unknown.length) { process.stderr.write(`[brain:companion] unknown flag(s): ${unknown.join(', ')}\n`); process.exit(2); }
   if (help) { console.log(USAGE); process.exit(0); }
   const roots = rootsOpt ? rootsOpt.split(',').map((s) => path.resolve(s.trim())).filter(Boolean) : null;
@@ -1645,6 +1646,13 @@ function main() {
       const days = Number(daysOpt) || 14;
       const rec = computeReceipt({ roots: roots || discoverRoots({ env: process.env, processEnvDirs: [...new Set(configDirsOf(agentSessionRows(listProcesses()).map((r) => r.pid)).values())] }), days, events: readAllEvents(dir), windowFor: (cwd) => windowFor(cwd) });
       if (write) atomicWrite(receiptPath(dir), JSON.stringify(rec));
+      if (share) {
+        const card = path.join(dir, 'receipt-card.html');
+        ensureDir(dir);
+        atomicWrite(card, renderReceiptCard(rec));
+        say(`the card: ${card}\nit names sources by their own words, never your paths or projects — read it before you post it`, { ok: true, card });
+        return;
+      }
       process.stdout.write((json ? JSON.stringify(rec, null, 2) : renderReceipt(rec)) + '\n');
       return;
     }
