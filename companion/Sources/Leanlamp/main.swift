@@ -14,6 +14,13 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-wall") {
   exit(status)
 }
 
+// `leanlamp --render-parked <png>`: the PARKED tab with made-up sessions.
+if let i = CommandLine.arguments.firstIndex(of: "--render-parked") {
+  let out = CommandLine.arguments.count > i + 1 ? CommandLine.arguments[i + 1] : "parked.png"
+  let status = MainActor.assumeIsolated { DemoRenderer.renderParked(to: out) }
+  exit(status)
+}
+
 // A menu-bar / notch app: no Dock icon, no main window, never steals focus
 // from the terminal the agent runs in.
 let app = NSApplication.shared

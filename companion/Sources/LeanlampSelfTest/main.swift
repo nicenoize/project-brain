@@ -205,5 +205,19 @@ let mapBase = ContextMap(ctx: 100_000, base: 70_000, parts: [.init(kind: "base",
 check(mapBase.advice == nil, "no note when no part the agent controls is a quarter")
 eq(ContextMap.name("base"), "system + tools", "the measured base by name")
 
+// Parking: what sessions.mjs writes, decoded forgivingly
+let parkJSON = #"""
+{"openMb":3972,"idleMb":2170,"idleHours":2,"open":[{"pid":1,"sessionId":"a","title":"vinyl-reel-42","mb":421,"park":true,"lastMessageMs":1},{"pid":"bad"}],"parked":[{"sessionId":"b","title":"export","goal":"build the export","resume":"cd ~/w && claude --resume b"},{"title":3}]}
+"""#
+if let p = try? JSONDecoder().decode(Parking.self, from: Data(parkJSON.utf8)) {
+  eq(p.open.count, 1, "a bad open row costs that row only")
+  eq(p.quiet.map { $0.sessionId }, ["a"], "quiet = parkable")
+  eq(p.parked.first?.goal, "build the export", "the card keeps the first ask")
+  eq(p.parked.count, 1, "a bad card costs that card only")
+} else { check(false, "parking decodes") }
+eq(mbText(2170), "2.1 GB", "GB from 1024 MB on")
+eq(mbText(421), "421 MB", "MB below")
+eq(agoText(Date().timeIntervalSince1970 * 1000 - 3 * 3600_000), "3 h ago", "hours ago")
+
 print(failures == 0 ? "✔ \(passed) checks passed" : "✖ \(failures) failed, \(passed) passed")
 exit(failures == 0 ? 0 : 1)

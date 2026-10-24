@@ -41,9 +41,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 }
 
 enum WindowTab: String, CaseIterable, Identifiable {
-  case sessions, receipt, machine
+  case sessions, parking, receipt, machine
   var id: String { rawValue }
-  var title: String { rawValue.uppercased() }
+  var title: String { self == .parking ? "PARKED" : rawValue.uppercased() }
 }
 
 struct WindowRoot: View {
@@ -85,6 +85,7 @@ struct WindowRoot: View {
       Group {
         switch tab {
         case .sessions: SessionsTab(store: store, actions: actions)
+        case .parking: ParkingTab(store: store, actions: actions)
         case .receipt: ReceiptTab(store: store, actions: actions)
         case .machine: MachineTab(store: store, actions: actions, connect: connect)
         }
@@ -102,6 +103,120 @@ struct WindowRoot: View {
     case .live:
       guard let s else { return "LIVE" }
       return "\(s.live.count) LIVE · CONTROL \(s.reachableCount)/\(s.sessions.count)"
+    }
+  }
+}
+
+// MARK: - Parked
+
+/// Sessions left open only to keep their context: park them (a card keeps
+/// what they were about, RAM comes back), find them here, resume in Terminal.
+struct ParkingTab: View {
+  @ObservedObject var store: StateStore
+  @ObservedObject var actions: Actions
+
+  var body: some View {
+    ScrollView { ParkingContent(store: store, actions: actions) }
+  }
+}
+
+/// The tab's content without its scroll view (ImageRenderer draws no ScrollView).
+struct ParkingContent: View {
+  @ObservedObject var store: StateStore
+  @ObservedObject var actions: Actions
+
+  var body: some View {
+    let p = store.fresh?.parking
+    Group {
+      VStack(alignment: .leading, spacing: 0) {
+        HStack(alignment: .top, spacing: 0) {
+          ReceiptColumn(label: "OPEN", lead: p.map { mbText($0.openMb) } ?? "—", leadCaption: "\(p?.open.count ?? 0) sessions with their MCP servers", rows: [], hot: false)
+          ReceiptColumn(label: "QUIET", lead: p.map { mbText($0.idleMb) } ?? "—", leadCaption: "\(p?.quiet.count ?? 0) without a message for \(Int(p?.idleHours ?? 2)) h", rows: [], hot: (p?.idleMb ?? 0) >= 1024)
+          ReceiptColumn(label: "PARKED", lead: "\(p?.parked.count ?? 0)", leadCaption: "cards: what each was about, how to resume", rows: [], hot: false)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .overlay(alignment: .bottom) { Theme.rule.frame(height: 1) }
+        if let p, !p.quiet.isEmpty {
+          HStack(spacing: 12) {
+            SquareButton(title: "Park all quiet · \(mbText(p.idleMb)) back", fill: Theme.accent, text: Theme.ink, border: Theme.accent, height: 32) {
+              actions.parkAll(p.quiet.map { $0.sessionId })
+            }
+            Text("Each keeps a card here; the transcript stays, claude --resume brings it all back.").font(Theme.body(11)).foregroundStyle(Theme.muted)
+            Spacer()
+          }
+          .padding(.horizontal, 32).padding(.vertical, 20)
+        }
+        Text("OPEN").font(Theme.label(11)).kerning(1).foregroundStyle(Theme.muted).padding(.horizontal, 32).padding(.top, 20).padding(.bottom, 8)
+        ForEach(p?.open ?? []) { o in OpenRow(open: o, parking: actions.parking.contains(o.sessionId)) { actions.park(o.sessionId) } }
+        if p == nil {
+          Text("Waiting for the engine (it looks every 30 s).").font(Theme.body(13)).foregroundStyle(Theme.muted).padding(32)
+        }
+        if let cards = p?.parked, !cards.isEmpty {
+          Text("PARKED").font(Theme.label(11)).kerning(1).foregroundStyle(Theme.muted).padding(.horizontal, 32).padding(.top, 28).padding(.bottom, 8)
+          ForEach(cards) { c in CardRow(card: c) { actions.resume(c.sessionId) } }
+        }
+      }
+      .padding(.bottom, 32)
+    }
+  }
+}
+
+struct OpenRow: View {
+  let open: Parking.Open
+  let parking: Bool
+  let park: () -> Void
+
+  var body: some View {
+    HStack(spacing: 16) {
+      Rectangle().fill(open.park ? Theme.accent : open.why == "working" ? Color.white : Theme.gray).frame(width: 8, height: 8)
+      Text(open.title).font(Theme.strong(13)).foregroundStyle(.white).lineLimit(1).frame(width: 260, alignment: .leading)
+      Text(open.project ?? "").font(Theme.body(12)).foregroundStyle(Theme.muted).lineLimit(1).frame(width: 180, alignment: .leading)
+      Text(agoText(open.lastMessageMs)).font(Theme.body(12)).foregroundStyle(Theme.muted).frame(width: 110, alignment: .leading)
+      Text(mbText(open.mb)).font(Theme.strong(12)).foregroundStyle(.white).frame(width: 80, alignment: .trailing)
+      Spacer()
+      if parking {
+        Text("PARKING").font(Theme.label(10)).kerning(1).foregroundStyle(Theme.accent)
+      } else if open.park {
+        SquareButton(title: "Park", fill: .clear, text: .white, border: .white, height: 26, action: park)
+      } else {
+        Text(open.why == "working" ? "WORKING" : open.why == "recent" ? "IN USE" : "—").font(Theme.label(10)).kerning(1).foregroundStyle(Theme.grayText)
+      }
+    }
+    .padding(.horizontal, 32)
+    .frame(height: 44)
+    .overlay(alignment: .bottom) { Theme.rule.frame(height: 1) }
+  }
+}
+
+struct CardRow: View {
+  let card: Parking.Card
+  let resume: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .firstTextBaseline, spacing: 12) {
+        Text(card.title).font(Theme.strong(14)).foregroundStyle(.white).lineLimit(1)
+        Text([card.project, card.branch].compactMap { $0 }.joined(separator: " @ ")).font(Theme.body(12)).foregroundStyle(Theme.muted).lineLimit(1)
+        Spacer()
+        Text("last message \(agoText(card.lastMessageMs))").font(Theme.label(10)).kerning(0.6).foregroundStyle(Theme.grayText)
+        SquareButton(title: "Resume in Terminal", fill: .clear, text: .white, border: .white, height: 26, action: resume)
+      }
+      if let g = card.goal { line("ASKED", g) }
+      if let a = card.lastAsk { line("LAST", a) }
+      if let s = card.lastAgent { line("STOOD", s) }
+      if let e = card.edited, !e.isEmpty { line("EDITED", e.joined(separator: ", ")) }
+      if let r = card.resume {
+        Text(r).font(Theme.body(11)).foregroundStyle(Theme.grayText).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+      }
+    }
+    .padding(.horizontal, 32).padding(.vertical, 14)
+    .overlay(alignment: .bottom) { Theme.rule.frame(height: 1) }
+  }
+
+  private func line(_ label: String, _ text: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
+      Text(label).font(Theme.label(10)).kerning(1).foregroundStyle(Theme.accent).frame(width: 56, alignment: .leading)
+      Text(text).font(Theme.body(12)).foregroundStyle(.white).lineLimit(2)
     }
   }
 }

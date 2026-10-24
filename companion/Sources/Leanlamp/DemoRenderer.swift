@@ -84,6 +84,43 @@ enum DemoRenderer {
     return 0
   }
 
+  /// `leanlamp --render-parked <png>`: the PARKED tab with made-up sessions (never the user's).
+  @MainActor
+  static func renderParked(to out: String) -> Int32 {
+    Fonts.register()
+    let now = Date().timeIntervalSince1970 * 1000
+    let h = 3_600_000.0
+    let store = StateStore(path: "/dev/null/leanlamp-demo")
+    let actions = Actions(script: nil, statePath: "/dev/null")
+    var state = script(at: 1)
+    func o(_ pid: Int, _ id: String, _ title: String, _ project: String, _ mb: Double, _ quiet: Double, park: Bool, why: String) -> Parking.Open {
+      var x = Parking.Open(pid: pid, sessionId: id, title: title, mb: mb, park: park, lastMessageMs: now - quiet * h, why: why); x.project = project; return x
+    }
+    var c1 = Parking.Card(sessionId: "c1", title: "export-csv", goal: "build the CSV export for the guest lists, one file per event", resume: "cd ~/code/guestlist && claude --resume 6f1c…")
+    c1.project = "guestlist"; c1.branch = "feature/export"; c1.lastAsk = "and the date column as ISO, please"
+    c1.lastAgent = "Export works for single events; the multi-event zip is next. Tests: 41 passing."; c1.edited = ["src/export/csv.ts", "src/export/zip.ts", "tests/export.test.ts"]
+    c1.lastMessageMs = now - 26 * h; c1.parkedAt = now - 2 * h
+    var c2 = Parking.Card(sessionId: "c2", title: "billing-retry", goal: "why do failed invoices never retry?", resume: "cd ~/code/billing && claude --resume 9a04…")
+    c2.project = "billing"; c2.branch = "fix/retry-backoff"; c2.lastAgent = "The cron skips invoices with a null next_attempt; fixed and covered, PR not opened yet."
+    c2.edited = ["jobs/retry.ts"]; c2.lastMessageMs = now - 3 * 24 * h; c2.parkedAt = now - 2 * h
+    state.parking = Parking(openMb: 3_970, idleMb: 2_170, open: [
+      o(1, "s1", "billing-api", "billing", 412, 0.05, park: false, why: "working"),
+      o(2, "s2", "landing-copy", "site", 288, 0.6, park: false, why: "recent"),
+      o(3, "s3", "vinyl-reel-42", "vinyl-reel", 421, 24, park: true, why: "idle"),
+      o(4, "s4", "notar-forms", "notar-forms", 296, 9 * 24, park: true, why: "idle"),
+      o(5, "s5", "roomplanner-10", "roomplanner", 341, 8 * 24, park: true, why: "idle")
+    ], parked: [c1, c2])
+    state.parking?.idleHours = 2
+    store.injectForDemo(state, now: now)
+    let view = ParkingContent(store: store, actions: actions).frame(width: 1120, height: 820, alignment: .top).background(Color.black)
+    let renderer = ImageRenderer(content: view)
+    renderer.scale = 2
+    guard let img = renderer.cgImage, let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else { return 1 }
+    do { try png.write(to: URL(fileURLWithPath: out)) } catch { return 1 }
+    print("leanlamp: parked → \(out)")
+    return 0
+  }
+
   /// When the edit is held: the toast springs out of the island.
   static let held = 3.5
 

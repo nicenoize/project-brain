@@ -47,6 +47,8 @@ import { isMainModule } from './is-main.mjs';
 import { atomicWrite, ensureDir, takeFlag, takeOption, unknownFlags } from './common.mjs';
 import { transcriptsRoot } from './brain-tokens.mjs';
 import { classify, findOrphans } from './brain-ps.mjs';
+import * as Parking from './sessions.mjs';
+const { parkingView } = Parking;
 import { listProcesses, memoryPressure } from './procs.mjs';
 import {
   brainHome, statePath, busDir, readHolds, addHold, releaseHolds, readPending, decide, queueSteer, updateHoldRoots,
@@ -62,7 +64,8 @@ export const STATE_VERSION = 1;
 
 export const DEFAULTS = Object.freeze({
   intervalMs: 1000,       // tick
-  slowEveryMs: 5000,      // rescan transcripts, processes, machine
+  slowEveryMs: 5000,
+  parkingEveryMs: 30_000, // open sessions' RAM and last message, parked cards (sessions.mjs)      // rescan transcripts, processes, machine
   heartbeatMs: 5000,      // write the state file even when nothing changed
   liveMinutes: 240,       // a transcript untouched this long leaves the wall
   idleMinutes: 10,        // no message this long → idle
@@ -907,6 +910,9 @@ export function createEngine({ roots = null, env = process.env, opts = DEFAULTS,
   let memory = null, lastMemory = 0;
   const sys = { listProcesses, machineMemory, configDirsOf, cwdsOf, worktreesOf, ...io }; // tests stub these
   let lastScan = 0, lastMachine = 0;
+  // Parking (sessions.mjs) reads Claude Code's session registry: the real machine only, not explicit test roots
+  let parking = null, lastParking = 0;
+  const watchParking = Boolean(io.parking) || !roots;
   let slow = { rows: [], configDirs: new Map(), quick: null, roots: roots || discoverRoots({ env }) };
 
   function windowCached(cwd, configDir) {
@@ -1028,6 +1034,11 @@ export function createEngine({ roots = null, env = process.env, opts = DEFAULTS,
     attachProcesses(sessions, slow.rows, cwdCache);
     const state = buildState({ sessions, machine: machineFrom(slow.quick, slow.rows, { scanned: Boolean(lastMachine) }), now: t, roots: slow.roots, bus: readBus(dir, t, { sweep }) });
     if (receipt) state.receipt = { ...receipt, projects: (receipt.projects || []).slice(0, 14) }; // the full list stays in receipt.json
+    if (watchParking && (!lastParking || t - lastParking >= opts.parkingEveryMs)) {
+      lastParking = t;
+      try { parking = (sys.parking || parkingView)({ env, rows: slow.rows.length ? slow.rows : undefined, now: t }); } catch { /* registry unreadable: keep the last view */ }
+    }
+    if (parking) state.parking = parking;
     return state;
   }
 
@@ -1635,6 +1646,33 @@ function main() {
       const rec = computeReceipt({ roots: roots || discoverRoots({ env: process.env, processEnvDirs: [...new Set(configDirsOf(agentSessionRows(listProcesses()).map((r) => r.pid)).values())] }), days, events: readAllEvents(dir), windowFor: (cwd) => windowFor(cwd) });
       if (write) atomicWrite(receiptPath(dir), JSON.stringify(rec));
       process.stdout.write((json ? JSON.stringify(rec, null, 2) : renderReceipt(rec)) + '\n');
+      return;
+    }
+    case 'park': case 'resume': {
+      // The app's buttons: park one session (card first, then end it), or open a parked one in Terminal.
+      const S = Parking;
+      const q = rest[0];
+      if (cmd === 'park') {
+        const hits = S.pick(S.listSessions(), q);
+        if (hits.length !== 1) { say(hits.length ? `"${q}" matches ${hits.length} sessions` : `no open session matches "${q || ''}"`, { ok: false }); process.exitCode = 2; return; }
+        const v = S.parkVerdict(hits[0], { idleMs: 0, ancestors: S.ancestorPids() });
+        if (!v.park) { say(`not parked: ${v.why === 'working' ? 'it is working right now' : v.why}`, { ok: false, why: v.why }); process.exitCode = 2; return; }
+        if (dryRun) { say(`would park ${hits[0].name || hits[0].cwd} (${hits[0].mb.total} MB)`, { ok: true, dry: true }); return; }
+        S.park(hits[0]).then((res) => {
+          if (res.ended) appendEvent(dir, { kind: 'parked', session: hits[0].sessionId, mb: hits[0].mb.total, by: process.env.BRAIN_COMPANION_FROM || 'cli' });
+          say(res.ended ? `parked ${hits[0].name || hits[0].cwd} · ${hits[0].mb.total} MB back` : 'card written, the session did not end', { ok: res.ended, mb: hits[0].mb.total, card: res.file });
+          if (!res.ended) process.exitCode = 1;
+        }, (e) => { say(`park failed: ${e.message}`, { ok: false }); process.exitCode = 1; });
+        return;
+      }
+      const hits = S.pick(S.listParked(), q);
+      if (hits.length !== 1) { say(`no single parked session matches "${q || ''}"`, { ok: false }); process.exitCode = 2; return; }
+      const line = S.resumeCommand(hits[0]);
+      if (dryRun || process.platform !== 'darwin') { say(line, { ok: true, command: line }); return; }
+      const r = spawnSync('osascript', ['-e', `tell application "Terminal" to do script ${JSON.stringify(line)}`, '-e', 'tell application "Terminal" to activate'], { stdio: 'ignore' });
+      if (r.status !== 0) { say(`could not open Terminal — run: ${line}`, { ok: false, command: line }); process.exitCode = 1; return; }
+      S.unpark(hits[0].sessionId);
+      say(`resumed ${hits[0].name || hits[0].project} in Terminal`, { ok: true, command: line });
       return;
     }
     case 'reclaim': {

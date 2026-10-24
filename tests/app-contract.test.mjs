@@ -70,6 +70,34 @@ const CONTRACT = {
     assert.equal(r.status, 0, `the app's Recompute (no --days) failed: ${r.stderr}`);
     assert.ok(fs.existsSync(path.join(s.bus, 'receipt.json')));
   },
+  park: (s) => {
+    // a stand-in session: a process, its registry entry, a transcript, quiet for a day
+    // orphaned on purpose: launchd reaps it, as a terminal reaps a real session (our own child would stay a zombie)
+    const child = { pid: Number(spawnSync('sh', ['-c', 'sleep 60 >/dev/null 2>&1 & echo $!'], { encoding: 'utf8' }).stdout.trim()) };
+    child.kill = () => process.kill(child.pid, 'SIGKILL');
+    try {
+      const cfg = path.join(s.home, 'claude'), cwd = path.join(s.home, 'work');
+      fs.mkdirSync(path.join(cfg, 'sessions'), { recursive: true });
+      const sid = 'park-contract-' + process.pid;
+      fs.writeFileSync(path.join(cfg, 'sessions', `${child.pid}.json`), JSON.stringify({ pid: child.pid, sessionId: sid, cwd, name: 'export', status: 'idle', kind: 'interactive', startedAt: Date.now() - 1000 }));
+      const tdir = path.join(cfg, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
+      fs.mkdirSync(tdir, { recursive: true });
+      fs.writeFileSync(path.join(tdir, `${sid}.jsonl`), JSON.stringify({ type: 'user', timestamp: new Date(Date.now() - 86_400_000).toISOString(), message: { content: 'build the export' } }) + '\n');
+      const r = s.app('park', sid);
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+      assert.equal(json(r).ok, true);
+      const card = JSON.parse(fs.readFileSync(path.join(s.home, 'brain-home', 'companion', 'parked', `${sid}.json`), 'utf8'));
+      assert.equal(card.goal, 'build the export');
+    } finally { try { child.kill(); } catch { /* ended by park */ } }
+  },
+  resume: (s) => {
+    const dir = path.join(s.home, 'brain-home', 'companion', 'parked');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'abc.json'), JSON.stringify({ sessionId: 'abc', name: 'export', project: 'w', cwd: '/w', configDir: path.join(os.homedir(), '.claude'), parkedAt: 1 }));
+    const r = s.app('resume', 'abc', '--dry-run'); // the app runs it without --dry-run: that opens Terminal
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(json(r).command, /claude --resume abc/);
+  },
   reclaim: (s) => {
     const r = s.app('reclaim', '--dry-run');
     assert.equal(r.status, 0, r.stderr);

@@ -45,6 +45,17 @@ final class Actions: ObservableObject {
     run(["receipt", "--write"]) { [weak self] _ in self?.computingReceipt = false }
   }
 
+  /// Sessions being parked right now: their rows show PARKING until the next state.
+  @Published private(set) var parking: Set<String> = []
+  /// Write the card, then end the session (sessions.mjs refuses a working one).
+  func park(_ sessionId: String) {
+    parking.insert(sessionId)
+    run(["park", sessionId]) { [weak self] _ in self?.parking.remove(sessionId) }
+  }
+  func parkAll(_ ids: [String]) { for id in ids { park(id) } }
+  /// Open a parked session again in a new Terminal window (`claude --resume`).
+  func resume(_ sessionId: String) { run(["resume", sessionId]) }
+
   /// Stop orphaned helpers (their agent is gone). Nothing else is touched.
   func reclaim() { run(["reclaim"]) }
 

@@ -202,6 +202,18 @@ export function foldTranscript(file) {
   return { state, lastMessageMs: last || null };
 }
 
+const foldCache = new Map(); // file → { size, mtimeMs, result }: a quiet session's transcript is read once
+export function foldTranscriptCached(file) {
+  let st;
+  try { st = fs.statSync(file); } catch { return { state: null, lastMessageMs: null }; }
+  const hit = foldCache.get(file);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.result;
+  const result = foldTranscript(file);
+  foldCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result });
+  if (foldCache.size > 200) foldCache.delete(foldCache.keys().next().value);
+  return result;
+}
+
 export function transcriptOf(s) {
   return path.join(s.configDir, 'projects', projectSlug(s.cwd), `${s.sessionId}.jsonl`);
 }
@@ -218,7 +230,7 @@ export function listSessions({ env = process.env, rows = listProcesses(), withCa
       if (!s || !alive(s.pid)) continue;
       if (pidReused(s, rows)) continue;
       const t = transcriptOf(s);
-      const folded = fs.existsSync(t) ? foldTranscript(t) : { state: null, lastMessageMs: null };
+      const folded = fs.existsSync(t) ? foldTranscriptCached(t) : { state: null, lastMessageMs: null };
       const row = { ...s, transcript: fs.existsSync(t) ? t : null, lastMessageMs: folded.lastMessageMs, mb: treeMb(rows, s.pid, footprintMb(s.pid)) };
       if (withCards && folded.state) row.card = buildCard(row, folded.state, { mb: row.mb.total });
       out.push(row);
@@ -266,4 +278,32 @@ export function listParked({ env = process.env } = {}) {
 /** A resumed session is no longer parked: drop its card. */
 export function unpark(sessionId, { env = process.env } = {}) {
   try { fs.unlinkSync(path.join(parkedDir(env), `${sessionId}.json`)); return true; } catch { return false; }
+}
+
+/** A card short enough for the state file the app reads. PURE. */
+export function slimCard(c) {
+  const clip = (t, n) => { const x = String(t || '').replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 1) + '…' : x || null; };
+  return {
+    sessionId: c.sessionId, title: c.name || c.project, project: c.project, cwd: c.cwd, branch: c.branch || null,
+    goal: clip(c.goal, 280), lastAsk: clip(c.asks && c.asks[c.asks.length - 1], 280), lastAgent: clip(c.lastAgent, 400),
+    edited: (c.edited || []).slice(0, 6), lastMessageMs: c.lastMessageMs || null, parkedAt: c.parkedAt || null,
+    freedMb: c.freedMb || null, resume: resumeCommand(c)
+  };
+}
+
+/** What the app shows under "park": open sessions with their RAM, and the parked cards. */
+export function parkingView({ env = process.env, rows = listProcesses(), now = Date.now(), idleMs = PARK_DEFAULTS.idleHours * 3600_000 } = {}) {
+  const open = listSessions({ env, rows }).map((s) => {
+    const v = parkVerdict(s, { now, idleMs });
+    return { pid: s.pid, sessionId: s.sessionId, title: s.name || path.basename(s.cwd), project: path.basename(s.cwd), cwd: s.cwd, mb: s.mb.total, helpers: s.mb.helpers, status: s.status, lastMessageMs: s.lastMessageMs, park: v.park, why: v.why };
+  }).sort((a, b) => (b.lastMessageMs || 0) - (a.lastMessageMs || 0));
+  const idle = open.filter((s) => s.park);
+  return {
+    at: now,
+    idleHours: idleMs / 3600_000,
+    openMb: open.reduce((a, s) => a + s.mb, 0),
+    idleMb: idle.reduce((a, s) => a + s.mb, 0),
+    open,
+    parked: listParked({ env }).slice(0, 30).map(slimCard)
+  };
 }

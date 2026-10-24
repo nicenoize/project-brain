@@ -15,6 +15,8 @@ public struct CompanionState: Codable, Equatable {
   public var events: [Event]?
   /// What leanlamp did since local midnight (absent from older engines).
   public var today: Today?
+  /// Open sessions with their RAM and the parked ones (sessions.mjs).
+  public var parking: Parking?
 
   public struct Today: Codable, Equatable {
     public var sinceMs: Double
