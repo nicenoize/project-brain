@@ -5,7 +5,8 @@
   "description": "Local semantic project brain scripts for agent skill usage.",
   "type": "module",
   "bin": {
-    "project-brain": "bin/cli.mjs"
+    "project-brain": "bin/cli.mjs",
+    "leanlamp": "bin/leanlamp.mjs"
   },
   "scripts": {
     "brain:init": "node scripts/brain-init.mjs",
@@ -75,7 +76,8 @@
     "brain:tokens": "node scripts/brain-tokens.mjs",
     "brain:ps": "node scripts/brain-ps.mjs",
     "brain:warm": "node scripts/brain-warm.mjs show",
-    "brain:recall": "node scripts/brain-recall.mjs"
+    "brain:recall": "node scripts/brain-recall.mjs",
+    "brain:companion": "node scripts/brain-companion.mjs"
   },
   "dependencies": {
     "fast-glob": "^3.3.2"
@@ -93,6 +95,11 @@
     "templates/",
     "ui/dist/",
     "references/",
+    "companion/Package.swift",
+    "companion/Sources/",
+    "companion/Tests/",
+    "companion/scripts/",
+    "companion/README.md",
     "SKILL.md",
     "LICENSE"
   ],

@@ -158,3 +158,26 @@ jobs:
           ! grep -q -- "--preserve-symlinks skills/" package.json
           ! grep -q "skills/project-brain/scripts" .claude/settings.json
           grep -q "project-brain x route" .claude/settings.json
+
+  companion-macos:
+    name: companion app (macOS)
+    # the notch app: its self-test decodes the engine's real state file
+    # (companion/Tests/Fixtures, kept current by tests/state-contract.test.mjs),
+    # then the install path builds the app the way `leanlamp open` does
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Self-test (state contract, toasts, geometry, setup report)
+        run: swift run --package-path companion leanlamp-selftest
+      - name: Build the app as an install would (leanlamp open --build-only)
+        env:
+          BRAIN_HOME: ${{ runner.temp }}/brain-home
+        run: |
+          set -euxo pipefail
+          node bin/leanlamp.mjs open --build-only
+          test -x "$BRAIN_HOME/app/Leanlamp.app/Contents/MacOS/leanlamp"
+          test -f "$BRAIN_HOME/app/build.json"
+          test ! -e "$BRAIN_HOME/app/.build"

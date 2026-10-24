@@ -1,0 +1,387 @@
+{
+  "v": 1,
+  "format": {
+    "ok": true,
+    "versions": [
+      "2.1.308"
+    ],
+    "newestTested": "2.1.308",
+    "newerThanTested": false,
+    "issues": []
+  },
+  "at": "2026-10-22T18:12:34.777Z",
+  "atMs": 1792692754777,
+  "engine": {
+    "pid": 4242,
+    "intervalMs": 1000,
+    "roots": [
+      "/tmp/state-contract/projects"
+    ],
+    "statePath": "/tmp/state-contract/bus/state.json"
+  },
+  "machine": {
+    "totalGb": 16,
+    "freePct": 40,
+    "pressure": "normal",
+    "swapUsedGb": 0.5,
+    "agentProcesses": 3,
+    "agentRssGb": 0.9,
+    "orphans": 0,
+    "orphanMb": 0
+  },
+  "sessions": [
+    {
+      "id": "5e55e55e-0000-4000-8000-00000000c0de",
+      "title": "Split invoices without touching the public API",
+      "project": "acme",
+      "cwd": "/work/acme",
+      "gitBranch": "split-invoices",
+      "model": "claude-opus-4-5",
+      "version": "2.1.308",
+      "ctx": 80000,
+      "limit": 300000,
+      "limitSource": "compaction",
+      "ratio": 0.267,
+      "burnPerMin": 0,
+      "requests": 2,
+      "outputTokens": 80,
+      "compactions": 1,
+      "lastCompaction": {
+        "trigger": "auto",
+        "preTokens": 290000,
+        "postTokens": 60000,
+        "durationMs": 9000,
+        "precomputed": false,
+        "atMs": 1792692714770
+      },
+      "compactionLog": [
+        {
+          "atMs": 1792692714770,
+          "precomputed": false,
+          "durationMs": 9000
+        }
+      ],
+      "contextMap": {
+        "ctx": 80000,
+        "base": 239988,
+        "scale": 1,
+        "since": "compaction",
+        "parts": [
+          {
+            "kind": "base",
+            "tokens": 239988
+          },
+          {
+            "kind": "summary",
+            "tokens": 60000
+          },
+          {
+            "kind": "hooks",
+            "tokens": 44
+          },
+          {
+            "kind": "assistant",
+            "tokens": 12
+          }
+        ],
+        "top": [
+          {
+            "kind": "hooks",
+            "label": "PreToolUse",
+            "tokens": 24
+          },
+          {
+            "kind": "hooks",
+            "label": "SessionStart",
+            "tokens": 20
+          }
+        ]
+      },
+      "state": "tool",
+      "label": "Edit · src/billing/invoice.ts",
+      "last": {
+        "kind": "tool_use",
+        "tool": {
+          "name": "Edit",
+          "text": "src/billing/invoice.ts"
+        },
+        "text": "compacted",
+        "atMs": 1792692724770
+      },
+      "lastActivityMs": 1792692724770,
+      "startedMs": 1792692694770,
+      "pid": null,
+      "rssMb": null,
+      "transcript": "/tmp/state-contract/projects/-work-acme/5e55e55e-0000-4000-8000-00000000c0de.jsonl",
+      "injections": {
+        "count": 3,
+        "estTokens": 57,
+        "bySource": {
+          "brain": {
+            "count": 3,
+            "chars": 227,
+            "estTokens": 57,
+            "actionable": 1,
+            "followed": 0,
+            "followedShare": 0
+          }
+        },
+        "byKind": {
+          "hint": {
+            "count": 1,
+            "chars": 54,
+            "estTokens": 14,
+            "actionable": 1,
+            "followed": 0,
+            "followedShare": 0
+          },
+          "state": {
+            "count": 1,
+            "chars": 79,
+            "estTokens": 20,
+            "actionable": 0,
+            "followed": 0,
+            "followedShare": null
+          },
+          "answer": {
+            "count": 1,
+            "chars": 94,
+            "estTokens": 24,
+            "actionable": 0,
+            "followed": 0,
+            "followedShare": null
+          }
+        },
+        "last": [
+          {
+            "at": 1792692709770,
+            "source": "brain",
+            "kind": "hint",
+            "event": "PreToolUse:Bash",
+            "chars": 54,
+            "text": "Project Brain: run brain:search before editing billing",
+            "commands": [
+              "search"
+            ],
+            "followed": false
+          },
+          {
+            "at": 1792692715770,
+            "source": "brain",
+            "kind": "state",
+            "event": "SessionStart",
+            "chars": 79,
+            "text": "## Brain: session state after compaction #1 (290k → 60k)\n- goal: split invoices",
+            "commands": [],
+            "followed": null
+          },
+          {
+            "at": 1792692723770,
+            "source": "brain",
+            "kind": "answer",
+            "event": "PreToolUse:Edit",
+            "chars": 94,
+            "text": "Project Brain (ambient, deterministic) — before you edit:\n- src/billing/invoice.ts danger 6/10",
+            "commands": [],
+            "followed": null
+          }
+        ]
+      },
+      "format": {
+        "ok": true,
+        "issues": [],
+        "version": "2.1.308",
+        "newerThanTested": false,
+        "counts": {
+          "assistant": 2,
+          "withUsage": 2,
+          "boundaries": 1,
+          "boundariesWithMeta": 1
+        }
+      },
+      "control": false,
+      "inbox": 0,
+      "held": 1
+    }
+  ],
+  "holds": [
+    {
+      "id": "hmvjuzadycaf491",
+      "glob": "src/billing/**",
+      "root": "/work/acme",
+      "project": "acme",
+      "worktrees": 1,
+      "until": 1792694554770,
+      "minutesLeft": 30,
+      "note": ""
+    }
+  ],
+  "pending": [
+    {
+      "id": "pmvjuzadzdad10b",
+      "session": "5e55e55e-0000-4000-8000-00000000c0de",
+      "title": "Split invoices without touching the public API",
+      "tool": "Edit",
+      "file": "/work/acme/src/billing/invoice.ts",
+      "shortFile": "src/billing/invoice.ts",
+      "glob": "src/billing/**",
+      "project": "acme",
+      "at": 1792692754775,
+      "deadline": 1792692794770,
+      "secondsLeft": 40
+    }
+  ],
+  "events": [
+    {
+      "at": 1792692754775,
+      "kind": "steer-delivered",
+      "session": "5e55e55e-0000-4000-8000-00000000c0de",
+      "id": "n1",
+      "text": "keep ROUND_HALF_EVEN",
+      "tool": "Bash",
+      "queuedAt": 1792692752770,
+      "title": "Split invoices without touching the public API"
+    },
+    {
+      "at": 1792692754775,
+      "kind": "approved",
+      "session": "5e55e55e-0000-4000-8000-00000000c0de",
+      "id": "p0",
+      "file": "/work/acme/src/billing/tax.ts",
+      "by": "app",
+      "title": "Split invoices without touching the public API",
+      "shortFile": "/work/acme/src/billing/tax.ts"
+    }
+  ],
+  "today": {
+    "sinceMs": 1792620000000,
+    "compactions": 1,
+    "prepared": 0,
+    "waitedSeconds": 9,
+    "held": 0,
+    "approved": 1,
+    "denied": 0,
+    "steered": 1,
+    "reclaimedMb": 0
+  },
+  "receipt": {
+    "v": 1,
+    "at": "2026-10-22T18:12:34.770Z",
+    "atMs": 1792692754770,
+    "days": 14,
+    "sinceMs": 1791483154770,
+    "source": {
+      "transcripts": 1,
+      "bytes": 2675,
+      "ms": 2
+    },
+    "trim": {
+      "sessions": 1,
+      "requests": 2,
+      "contextP50": 240000,
+      "contextP90": 240000,
+      "contextMax": 240000,
+      "shareAbove500k": 0,
+      "compactions": 1,
+      "precomputedShare": 0,
+      "avgWaitSeconds": 9,
+      "medianWaitSeconds": 9
+    },
+    "got": {
+      "count": 3,
+      "chars": 227,
+      "estTokens": 57,
+      "bySource": {
+        "brain": {
+          "count": 3,
+          "chars": 227,
+          "estTokens": 57,
+          "actionable": 1,
+          "followed": 0,
+          "followedShare": 0
+        }
+      },
+      "byKind": {
+        "hint": {
+          "count": 1,
+          "chars": 54,
+          "estTokens": 14,
+          "actionable": 1,
+          "followed": 0,
+          "followedShare": 0
+        },
+        "state": {
+          "count": 1,
+          "chars": 79,
+          "estTokens": 20,
+          "actionable": 0,
+          "followed": 0,
+          "followedShare": null
+        },
+        "answer": {
+          "count": 1,
+          "chars": 94,
+          "estTokens": 24,
+          "actionable": 0,
+          "followed": 0,
+          "followedShare": null
+        }
+      },
+      "byEvent": {
+        "brain · PreToolUse": {
+          "count": 2,
+          "chars": 148
+        },
+        "brain · SessionStart": {
+          "count": 1,
+          "chars": 79
+        }
+      }
+    },
+    "projects": [
+      {
+        "project": "acme",
+        "cwd": "/work/acme",
+        "window": 300000,
+        "windowSource": "settings",
+        "sessions": 1,
+        "requests": 2,
+        "contextP50": 240000,
+        "contextP90": 240000,
+        "contextMax": 240000,
+        "shareAbove500k": 0,
+        "compactions": 1,
+        "precomputedShare": 0,
+        "avgWaitSeconds": 9,
+        "medianWaitSeconds": 9,
+        "injections": {
+          "count": 3,
+          "estTokens": 57,
+          "brain": {
+            "count": 3,
+            "estTokens": 57,
+            "actionable": 1,
+            "followed": 0
+          },
+          "hints": {
+            "count": 1,
+            "estTokens": 14,
+            "actionable": 1,
+            "followed": 0
+          }
+        }
+      }
+    ],
+    "guard": {
+      "held": 0,
+      "approved": 0,
+      "approvedFromNotch": 0,
+      "denied": 0,
+      "handedBack": 0
+    },
+    "steer": {
+      "delivered": 0,
+      "medianWaitSeconds": null
+    }
+  }
+}
