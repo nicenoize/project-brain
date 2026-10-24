@@ -34,7 +34,7 @@ function scratch() {
   fs.writeFileSync(state, JSON.stringify({ v: 1, atMs: Date.now(), sessions: [{ id: SID, title: 'billing refactor', project: 'acme', state: 'tool', control: true }] }));
   const roots = path.join(home, 'transcripts');
   fs.mkdirSync(roots);
-  const env = { ...process.env, BRAIN_HOME: path.join(home, 'brain-home'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), BRAIN_COMPANION_FROM: 'app', BRAIN_USAGE_LOG: '0', BRAIN_SCRATCH_ROOT: home }; // clean must never reach this machine's real leftovers
+  const env = { ...process.env, BRAIN_HOME: path.join(home, 'brain-home'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), BRAIN_COMPANION_FROM: 'app', BRAIN_USAGE_LOG: '0', BRAIN_SCRATCH_ROOT: home, BRAIN_LEFTOVER_MIN_AGE_SEC: '0' }; // clean must never reach this machine's real leftovers
   delete env.LEANLAMP_CLI;
   // exactly as Actions.run builds it: flags first, then the verb and its words
   const app = (...args) => spawnSync(process.execPath, [ENGINE, '--state', state, '--json', ...args], { encoding: 'utf8', env, cwd: home });

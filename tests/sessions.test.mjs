@@ -143,7 +143,10 @@ test('leftovers: BRAIN_SCRATCH_ROOT keeps a run to its own folder', async () => 
     { pid: 20, ppid: 1, rssKb: 1024, ageSec: 9, command: `sleep 60 /t/home/claude-501/p/${id}/scratchpad` },
     { pid: 21, ppid: 1, rssKb: 1024, ageSec: 9, command: `python -m http.server /private/tmp/claude-501/p/${id}/scratchpad` }
   ];
-  const got = leftovers({ env: { BRAIN_SCRATCH_ROOT: '/t/home' }, rows, sessions: [], cwds: new Map() });
+  const got = leftovers({ env: { BRAIN_SCRATCH_ROOT: '/t/home', BRAIN_LEFTOVER_MIN_AGE_SEC: '0' }, rows, sessions: [], cwds: new Map() });
   assert.deepEqual(got.map((x) => x.pid), [20]);
-  assert.equal(leftovers({ env: {}, rows, sessions: [], cwds: new Map() }).length, 2);
+  assert.equal(leftovers({ env: { BRAIN_LEFTOVER_MIN_AGE_SEC: '0' }, rows, sessions: [], cwds: new Map() }).length, 2);
+  assert.equal(leftovers({ env: {}, rows, sessions: [], cwds: new Map() }).length, 0, 'younger than an hour: not surely left behind');
+  const resumed = [...rows, { pid: 30, ppid: 1, rssKb: 1, ageSec: 9, command: `claude --resume ${id}` }];
+  assert.equal(leftovers({ env: { BRAIN_LEFTOVER_MIN_AGE_SEC: '0' }, rows: resumed, sessions: [], cwds: new Map() }).length, 0, 'its session runs under a config dir we do not know');
 });

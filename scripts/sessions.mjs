@@ -362,7 +362,23 @@ export function leftovers({ env = process.env, rows = listProcesses(), sessions 
   const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
   const roots = env.BRAIN_SCRATCH_ROOT ? [...new Set([path.resolve(env.BRAIN_SCRATCH_ROOT), real(env.BRAIN_SCRATCH_ROOT)])].map((p) => p + path.sep) : null;
   const inside = (x) => !roots || roots.some((r) => x.command.includes(r) || String(where.get(x.pid) || '').startsWith(r));
-  return all.filter((x) => !live.has(x.owner) && inside(x));
+  // Only what is surely left behind: old enough, and its owner shows no sign of life — a session under a
+  // config dir we do not know has no registry entry here, but its transcript (or its id on a command line) does
+  const minAgeSec = Number(env.BRAIN_LEFTOVER_MIN_AGE_SEC ?? 3600);
+  const commands = rows.map((r) => r.command).join('\n');
+  return all.filter((x) => !live.has(x.owner) && inside(x) && x.ageSec >= minAgeSec && !commands.includes(`--resume ${x.owner}`) && !recentlyWritten(x.owner, env));
+}
+
+/** A transcript named <id>.jsonl, in any projects folder of a config dir we know, written within the last day. */
+function recentlyWritten(id, env, dayMs = 86_400_000) {
+  for (const dir of configDirs({ env })) {
+    let projects = [];
+    try { projects = fs.readdirSync(path.join(dir, 'projects')); } catch { continue; }
+    for (const p of projects) {
+      try { if (Date.now() - fs.statSync(path.join(dir, 'projects', p, `${id}.jsonl`)).mtimeMs < dayMs) return true; } catch { /* not here */ }
+    }
+  }
+  return false;
 }
 
 /** End leftovers and their children. Returns the pids that are gone. */
