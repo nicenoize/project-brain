@@ -21,6 +21,11 @@
  * an estimate, labelled as one. Usage numbers are exact (from the API).
  *
  *   npm run brain:tokens -- [--days 7] [--all-projects] [--root DIR] [--json]
+ *   npm run brain:tokens -- --compare 2026-10-12 [--until 2026-10-21] [--days 14] [--json]
+ *
+ * --compare <date> puts the `--days` before the date next to everything
+ * since, cost-weighted: what a change (a compaction window, a proxy, a new
+ * hook) did to the same repo's sessions — the receipt, in one command.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -29,6 +34,16 @@ import { isMainModule } from './is-main.mjs';
 import { ROOT, takeFlag, takeOption, unknownFlags } from './common.mjs';
 
 const CHARS_PER_TOKEN = 4;
+
+/**
+ * Price of each usage class relative to one fresh input token — Anthropic's
+ * list-price ratios: a cache read costs 0.1×, a 1-hour cache write 2× (Claude
+ * Code writes 1-hour entries), output 5× (Opus). Usage limits on a plan follow
+ * the same economics, so this is what "cheaper" means even without a bill.
+ */
+export const COST_WEIGHTS = Object.freeze({ input: 1, cacheRead: 0.1, cacheWrite: 2, output: 5 });
+/** A gap longer than the cache's lifetime: the next request writes the context again. */
+export const CACHE_TTL_MS = 3600_000;
 export const KINDS = ['json', 'log', 'search', 'html', 'diff', 'code', 'prose'];
 /**
  * Content kinds that compression proxies shrink substantially (Headroom's own
@@ -103,7 +118,11 @@ export function emptyReport() {
     // once-counted volume — is what a compression proxy acts on.
     reread: {},
     // Loss guards (ADR 0035): what compaction and compression may cost.
-    loss: { compactions: 0, droppedTokens: 0, rereadCalls: 0, rereadChars: 0 },
+    loss: { compactions: 0, droppedTokens: 0, rereadCalls: 0, rereadChars: 0, precomputed: 0, waitMs: 0, timed: 0 },
+    // Cache writes by cause: the first request after a compaction writes the
+    // new, short context; one after a pause longer than the cache lifetime
+    // writes the whole context again; the rest is new content arriving.
+    writes: { afterCompaction: 0, afterPause: 0, steady: 0 },
     edits: { total: 0, failed: 0, reasons: {} },
     firstTs: null,
     lastTs: null
@@ -150,7 +169,7 @@ export const CONTENT_FAILURES = Object.freeze(['no-match', 'stale', 'not-read', 
  *  - failed edits: Edit/Write calls answered with an error, by reason —
  *    "no-match" is what a stale or compressed view of a file produces.
  */
-export function foldLoss(report, records, { sinceMs = 0 } = {}) {
+export function foldLoss(report, records, { sinceMs = 0, untilMs = 0 } = {}) {
   const read = new Set();
   let known = null; // files read before the open compaction window
   let left = 0;
@@ -159,12 +178,20 @@ export function foldLoss(report, records, { sinceMs = 0 } = {}) {
   for (const r of records) {
     if (!r) continue;
     const ts = r.timestamp ? Date.parse(r.timestamp) : NaN;
-    const inWindow = !sinceMs || ts >= sinceMs;
+    const inWindow = inside(ts, sinceMs, untilMs);
     if (r.type === 'system' && r.subtype === 'compact_boundary') {
       if (!inWindow) continue;
       const m = r.compactMetadata || {};
       report.loss.compactions += 1;
       report.loss.droppedTokens += Math.max(0, (m.preTokens || 0) - (m.postTokens || 0));
+      // A precomputed summary is prepared in the background and swapped in at
+      // the threshold; only the rest makes the user wait.
+      if (m.precomputed) report.loss.precomputed = (report.loss.precomputed || 0) + 1;
+      // Older transcripts carry no duration; only timed ones enter the average.
+      if (Number.isFinite(Number(m.durationMs)) && m.durationMs != null) {
+        report.loss.waitMs = (report.loss.waitMs || 0) + Number(m.durationMs);
+        report.loss.timed = (report.loss.timed || 0) + 1;
+      }
       known = new Set(read);
       left = REREAD_WINDOW_CALLS;
       continue;
@@ -203,21 +230,34 @@ export function foldLoss(report, records, { sinceMs = 0 } = {}) {
   return report;
 }
 
+/** Is `ts` inside [sinceMs, untilMs)? 0 means unbounded. PURE. */
+function inside(ts, sinceMs, untilMs) {
+  return (!sinceMs || ts >= sinceMs) && (!untilMs || ts < untilMs);
+}
+
 /**
  * Fold one transcript (array of parsed JSONL records) into `report`.
- * Records older than `sinceMs` are ignored.
+ * Only records in [sinceMs, untilMs) count; earlier ones still set the
+ * clocks (last request, open compaction) the first counted request needs.
  */
-export function addTranscript(report, records, { sinceMs = 0 } = {}) {
-  foldLoss(report, records, { sinceMs });
+export function addTranscript(report, records, { sinceMs = 0, untilMs = 0 } = {}) {
+  foldLoss(report, records, { sinceMs, untilMs });
+  report.writes ||= { afterCompaction: 0, afterPause: 0, steady: 0 };
   const seenRequests = new Set();
   const toolNames = new Map(); // tool_use_id → tool name
   const live = {}; // kind → chars in the live context
   let counted = false;
+  let lastRequestMs = 0;
+  let afterCompaction = false;
   for (const r of records) {
-    if (r && r.type === 'system' && r.subtype === 'compact_boundary') { for (const k in live) live[k] = 0; continue; }
+    if (r && r.type === 'system' && r.subtype === 'compact_boundary') { for (const k in live) live[k] = 0; afterCompaction = true; continue; }
     const ts = r && r.timestamp ? Date.parse(r.timestamp) : NaN;
-    if (sinceMs && !(ts >= sinceMs)) continue;
     const msg = r && r.message;
+    if (!inside(ts, sinceMs, untilMs)) {
+      const key = r && r.type === 'assistant' && msg && msg.usage ? (r.requestId || msg.id) : null;
+      if (key && !seenRequests.has(key)) { seenRequests.add(key); lastRequestMs = ts; afterCompaction = false; }
+      continue;
+    }
     if (!msg) continue;
     if (r.type === 'assistant') {
       for (const c of Array.isArray(msg.content) ? msg.content : []) {
@@ -236,6 +276,11 @@ export function addTranscript(report, records, { sinceMs = 0 } = {}) {
         report.usage.cacheRead += u.cache_read_input_tokens || 0;
         report.usage.output += u.output_tokens || 0;
         report.contexts.push((u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0));
+        const gap = lastRequestMs && Number.isFinite(ts) ? ts - lastRequestMs : 0;
+        const cause = afterCompaction ? 'afterCompaction' : gap > CACHE_TTL_MS ? 'afterPause' : 'steady';
+        report.writes[cause] += u.cache_creation_input_tokens || 0;
+        afterCompaction = false;
+        if (Number.isFinite(ts)) lastRequestMs = ts;
         report.reread ||= {};
         for (const k in live) report.reread[k] = (report.reread[k] || 0) + live[k];
         counted = true;
@@ -288,13 +333,40 @@ export function summarize(report) {
   const q = (p) => (ctx.length ? ctx[Math.min(ctx.length - 1, Math.floor(p * ctx.length))] : 0);
   const ctxSum = ctx.reduce((a, b) => a + b, 0);
   const above = (n) => (ctxSum ? round(ctx.filter((c) => c > n).reduce((a, b) => a + b, 0) / ctxSum) : 0);
+  const per = (n) => (report.requests ? Math.round(n / report.requests) : 0);
+  const W = COST_WEIGHTS;
+  const outputEq = u.output * W.output;
+  const costEq = u.input * W.input + u.cacheRead * W.cacheRead + u.cacheWrite * W.cacheWrite + outputEq;
+  const w = report.writes || { afterCompaction: 0, afterPause: 0, steady: 0 };
+  const l0 = report.loss || {};
   return {
     sessions: report.sessions,
     requests: report.requests,
     window: { from: iso(report.firstTs), to: iso(report.lastTs) },
     usage: { ...u, freshInput: fresh, totalInput: totalIn },
     cacheHitRatio: totalIn ? round(u.cacheRead / totalIn) : 0,
+    // Input-token equivalents (COST_WEIGHTS): one number for "what did it cost".
+    cost: {
+      weights: W,
+      total: Math.round(costEq),
+      perRequest: per(costEq),
+      inputSidePerRequest: per(costEq - outputEq),
+      outputPerRequest: per(u.output)
+    },
+    writes: {
+      perRequest: per(u.cacheWrite),
+      afterCompaction: per(w.afterCompaction),
+      afterPause: per(w.afterPause),
+      steady: per(w.steady)
+    },
+    compaction: {
+      count: l0.compactions || 0,
+      per100Requests: report.requests ? round(((l0.compactions || 0) / report.requests) * 100) : 0,
+      precomputedShare: l0.compactions ? round((l0.precomputed || 0) / l0.compactions) : 0,
+      avgWaitSeconds: l0.timed ? round((l0.waitMs || 0) / l0.timed / 1000) : null
+    },
     context: {
+      mean: per(ctxSum),
       p50: q(0.5), p90: q(0.9), max: ctx.length ? ctx[ctx.length - 1] : 0,
       // Share of ALL input tokens spent in requests whose context exceeded the mark.
       inputShareAbove200k: above(200_000),
@@ -367,6 +439,43 @@ export function proxyVerdict(s) {
     text: `a compression proxy would cut re-read input by ≈ ${pct(low)}–${pct(high)} here (${pct(comp)} json/log/search/html, ${pct(r.code || 0)} code, ${pct(r.prose || 0)} prose of what requests re-read)` +
       (worth ? ' — worth an A/B with brain:tokens before/after; watch for edits that miss after compressed reads.' : ' — not worth it; context length is the lever.')
   };
+}
+
+/**
+ * Before vs after, row by row, from two summaries. Amounts change by a
+ * relative delta; shares and rates by percentage points. `lowerIsBetter`
+ * lets a renderer say which way is good without knowing the metric. PURE.
+ */
+export const COMPARE_ROWS = Object.freeze([
+  { key: 'requests', label: 'API requests', get: (s) => s.requests, unit: 'n', noDelta: true },
+  { key: 'cost', label: 'cost per request (input-token equivalents)', get: (s) => s.cost.perRequest, unit: 'tok', lowerIsBetter: true, headline: true },
+  { key: 'inputSide', label: '  of it input side (without output)', get: (s) => s.cost.inputSidePerRequest, unit: 'tok', lowerIsBetter: true },
+  { key: 'ctxMean', label: 'context per request', get: (s) => s.context.mean, unit: 'tok', lowerIsBetter: true, headline: true },
+  { key: 'ctxP90', label: 'context p90', get: (s) => s.context.p90, unit: 'tok', lowerIsBetter: true },
+  { key: 'over500k', label: 'input spent above 500k context', get: (s) => s.context.inputShareAbove500k, unit: 'share', lowerIsBetter: true },
+  { key: 'cacheHit', label: 'cache-hit ratio', get: (s) => s.cacheHitRatio, unit: 'share' },
+  { key: 'writes', label: 'cache writes per request', get: (s) => s.writes.perRequest, unit: 'tok', lowerIsBetter: true },
+  { key: 'writesCompaction', label: '  after a compaction', get: (s) => s.writes.afterCompaction, unit: 'tok', lowerIsBetter: true },
+  { key: 'writesPause', label: '  after a pause > 1 h', get: (s) => s.writes.afterPause, unit: 'tok', lowerIsBetter: true },
+  { key: 'writesSteady', label: '  new content', get: (s) => s.writes.steady, unit: 'tok', lowerIsBetter: true },
+  { key: 'output', label: 'output per request', get: (s) => s.cost.outputPerRequest, unit: 'tok' },
+  { key: 'compactions', label: 'compactions per 100 requests', get: (s) => s.compaction.per100Requests, unit: 'n' },
+  { key: 'compactionWait', label: 'wait per compaction (s)', get: (s) => s.compaction.avgWaitSeconds, unit: 'n', lowerIsBetter: true },
+  { key: 'reread', label: 're-read after compaction / dropped', get: (s) => s.loss.rereadVsDropped, unit: 'share', lowerIsBetter: true },
+  { key: 'editFail', label: 'edits failing on file content', get: (s) => s.edits.contentFailRate, unit: 'share', lowerIsBetter: true }
+]);
+
+export function compareSummaries(before, after) {
+  return COMPARE_ROWS.map((row) => {
+    const rawB = row.get(before);
+    const rawA = row.get(after);
+    const known = rawB != null && rawA != null;
+    const b = Number(rawB) || 0;
+    const a = Number(rawA) || 0;
+    const delta = row.noDelta || !known ? null : row.unit === 'share' ? round(a - b) : b ? round((a - b) / b) : null;
+    const better = row.lowerIsBetter == null || delta == null || delta === 0 ? null : row.lowerIsBetter ? delta < 0 : delta > 0;
+    return { key: row.key, label: row.label, unit: row.unit, before: rawB == null ? null : b, after: rawA == null ? null : a, delta, better, headline: Boolean(row.headline) };
+  });
 }
 
 function round(x) { return Math.round(x * 1000) / 1000; }
@@ -454,19 +563,77 @@ export function renderText(s, { scope }) {
   return L.join('\n');
 }
 
+function cell(unit, v) {
+  if (v == null) return '—';
+  if (unit === 'share') return pct(v);
+  if (unit === 'tok') return fmt(Math.round(v));
+  return String(v);
+}
+
+function deltaCell(r) {
+  if (r.delta == null) return '';
+  const sign = r.delta > 0 ? '+' : '';
+  // A ratio reads better than "+4779 %" once something multiplied.
+  const text = r.unit === 'share' ? `${sign}${(r.delta * 100).toFixed(1)} pp`
+    : r.delta >= 3 ? `×${Math.round(r.after / r.before)}`
+      : `${sign}${Math.round(r.delta * 100)} %`;
+  return r.better == null ? text : `${text} ${r.better ? '✓' : '✗'}`;
+}
+
+export function renderCompare(rows, { scope, before, after }) {
+  const L = [`brain:tokens --compare — ${scope}`];
+  L.push(`  before: ${before.window.from?.slice(0, 10) || '—'} → ${before.window.to?.slice(0, 10) || '—'} (${before.sessions} transcripts)`);
+  L.push(`  after:  ${after.window.from?.slice(0, 10) || '—'} → ${after.window.to?.slice(0, 10) || '—'} (${after.sessions} transcripts)`);
+  L.push('');
+  L.push(`  ${''.padEnd(44)} ${'before'.padStart(9)} ${'after'.padStart(9)}  change`);
+  for (const r of rows) L.push(`  ${r.label.padEnd(44).slice(0, 44)} ${cell(r.unit, r.before).padStart(9)} ${cell(r.unit, r.after).padStart(9)}  ${deltaCell(r)}`);
+  L.push('');
+  const W = COST_WEIGHTS;
+  L.push(`Cost = input + ${W.cacheRead}× cache reads + ${W.cacheWrite}× cache writes + ${W.output}× output (list-price ratios).`);
+  L.push('Compare like with like: a quieter week, more subagents or more output move');
+  L.push('these numbers too. Small "after" windows (a few hundred requests) are noise.');
+  return L.join('\n');
+}
+
 function main(argv) {
   const args = [...argv];
   const json = takeFlag(args, '--json');
   const all = takeFlag(args, '--all-projects');
-  const days = Number(takeOption(args, '--days') || 7);
+  const compareRaw = takeOption(args, '--compare');
+  const untilRaw = takeOption(args, '--until');
+  const days = Number(takeOption(args, '--days') || (compareRaw ? 14 : 7));
   const root = takeOption(args, '--root') || transcriptsRoot();
   const bad = unknownFlags(args, []);
-  if (bad.length || !(days > 0)) {
-    process.stderr.write('Usage: npm run brain:tokens -- [--days 7] [--all-projects] [--root DIR] [--json]\n');
+  const cutMs = compareRaw ? Date.parse(compareRaw) : 0;
+  // --until closes the "after" window, so a published comparison stays reproducible as days pass
+  const untilMs = untilRaw ? Date.parse(untilRaw) : 0;
+  if (bad.length || !(days > 0) || (compareRaw && !Number.isFinite(cutMs)) || (untilRaw && !(compareRaw && Number.isFinite(untilMs) && untilMs > cutMs))) {
+    process.stderr.write('Usage: npm run brain:tokens -- [--days 7] [--all-projects] [--root DIR] [--json]\n' +
+      '       npm run brain:tokens -- --compare <date, e.g. 2026-10-12 or 2026-10-12T09:50Z> [--until <date>] [--days 14] [--json]\n');
     process.exit(1);
   }
   const dir = all ? root : path.join(root, projectSlug(ROOT));
   const files = listTranscripts(dir);
+  const label = all ? 'all projects' : path.basename(ROOT);
+  if (compareRaw) {
+    const fromMs = cutMs - days * 86400_000;
+    const before = emptyReport();
+    const after = emptyReport();
+    for (const f of files) {
+      try { if (fs.statSync(f).mtimeMs < fromMs) continue; } catch { continue; }
+      const records = readJsonl(f);
+      addTranscript(before, records, { sinceMs: fromMs, untilMs: cutMs });
+      addTranscript(after, records, { sinceMs: cutMs, untilMs });
+    }
+    const b = summarize(before);
+    const a = summarize(after);
+    const rows = compareSummaries(b, a);
+    const scope = `${label} · ${days} d before ${new Date(cutMs).toISOString().slice(0, 16)}Z vs ${untilMs ? `until ${new Date(untilMs).toISOString().slice(0, 16)}Z` : 'since'}`;
+    if (json) process.stdout.write(JSON.stringify({ scope, cut: new Date(cutMs).toISOString(), until: untilMs ? new Date(untilMs).toISOString() : null, rows, before: b, after: a }, null, 2) + '\n');
+    else process.stdout.write(renderCompare(rows, { scope, before: b, after: a }) + '\n');
+    if (!files.length) process.stderr.write(`[brain:tokens] no transcripts under ${dir}\n`);
+    return;
+  }
   const sinceMs = Date.now() - days * 86400_000;
   const report = emptyReport();
   for (const f of files) {
@@ -474,7 +641,7 @@ function main(argv) {
     addTranscript(report, readJsonl(f), { sinceMs });
   }
   const s = summarize(report);
-  const scope = `${all ? 'all projects' : path.basename(ROOT)} · last ${days} d`;
+  const scope = `${label} · last ${days} d`;
   if (json) process.stdout.write(JSON.stringify({ scope, ...s }, null, 2) + '\n');
   else process.stdout.write(renderText(s, { scope }) + '\n');
   if (!files.length) process.stderr.write(`[brain:tokens] no transcripts under ${dir}\n`);
