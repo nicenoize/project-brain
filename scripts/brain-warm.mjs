@@ -424,6 +424,7 @@ function main(argv) {
     const payload = readStdinJson();
     const args = { sessionId: payload.session_id, transcriptPath: payload.transcript_path };
     if (mode === 'prompt') {
+      if (process.env.BRAIN_HINTS !== '1') return; // a delegate suggestion is a hint: opt-in like the others
       const ctx = tailContextTokens(args.transcriptPath);
       const state = readState(args.sessionId, WARM_DIR);
       if (!shouldSuggestDelegate(payload.prompt, ctx, state)) return;
@@ -457,6 +458,9 @@ function main(argv) {
       return;
     }
     if (payload.source && payload.source !== 'compact') return;
+    // Injecting the snapshot after compaction is opt-in (BRAIN_WARM=1): of 1,524 paths only it
+    // carried, 8 were used in the next 8 tool calls. The snapshot itself is still kept (show, park).
+    if (process.env.BRAIN_WARM !== '1') return;
     const state = snapshot(args) || readState(args.sessionId, WARM_DIR);
     if (!state.goal && !state.lastAgent && !Object.keys(state.files).length) return;
     const additionalContext = renderWarm(state, {

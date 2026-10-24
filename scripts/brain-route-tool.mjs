@@ -285,6 +285,9 @@ function readStdin() {
 }
 
 async function main() {
+  // Command hints are opt-in (BRAIN_HINTS=1 in a settings file's "env"): measured over 14 days,
+  // 2 of 782 were followed, so by default they cost context and change nothing
+  if (process.env.BRAIN_HINTS !== '1') return 0;
   const args = process.argv.slice(2);
   const surface = (takeOption(args, '--surface') || '').toLowerCase();
   try {

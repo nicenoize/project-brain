@@ -238,7 +238,12 @@ Rules that make this acceptable rather than annoying (ADR 0029):
   goes first, the lease line never — an unseen lease is the one failure that
   costs real work.
 - **Fails open**: no stdin, no git, no brain → exit 0, emit nothing.
-- Opt out: `BRAIN_ANSWER_HOOK=0`.
+- Opt in: `BRAIN_ANSWER_HOOK=1` (off by default since ADR 0037). This answer is
+  not a hint; the command hints (prompt-time routing and the Bash/Read tool
+  nudges) have their own switch, `BRAIN_HINTS=1`, e.g. as
+  `"env": { "BRAIN_HINTS": "1" }` in a settings file. `leanlamp receipt` shows the three kinds apart: hints (scored:
+  did the agent run the command within five calls?), answers before edits, and
+  the warm state after a compaction.
 
 ---
 

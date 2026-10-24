@@ -136,7 +136,9 @@ function readStdin() {
 
 async function main() {
   try {
-    if (process.env.BRAIN_ANSWER_HOOK === '0') return 0;  // explicit opt-out
+    // Opt-in (BRAIN_ANSWER_HOOK=1): measured over 14 days, 61 of 80 answers were the same generic
+    // line and no file they named was picked up; BRAIN_HINTS does not apply (an answer is not a hint)
+    if (process.env.BRAIN_ANSWER_HOOK !== '1') return 0;
 
     const envelope = readStdin();
     if (!envelope) return 0;                               // no/!json stdin → silent

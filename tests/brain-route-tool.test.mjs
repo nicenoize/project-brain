@@ -201,7 +201,7 @@ const runHook = (cwd, envelope, { surface = 'bash', env = {}, rawInput } = {}) =
   spawnSync(process.execPath, [TOOL_SCRIPT, '--surface', surface], {
     cwd, encoding: 'utf8',
     input: rawInput !== undefined ? rawInput : JSON.stringify(envelope),
-    env: { ...process.env, ...env }
+    env: { ...process.env, BRAIN_HINTS: '1', ...env }
   });
 
 test('CLI: fresh index + raw search → emits a PreToolUse additionalContext nudge, exit 0', () => {
@@ -264,4 +264,15 @@ test('CLI: --surface read ignores Bash envelopes (matcher scoping)', () => {
   const r = runHook(cwd, { session_id: 's1', tool_name: 'Bash', tool_input: { command: 'grep -r foo scripts/' } }, { surface: 'read' });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout.trim(), '');
+});
+
+test('CLI: BRAIN_HINTS=0 silences the nudge that would otherwise be emitted', () => {
+  const cwd = freshRepo();
+  const envelope = { session_id: 's-hints', tool_name: 'Bash', tool_input: { command: 'grep -r hybridScore scripts/' } };
+  const off = runHook(cwd, envelope, { env: { BRAIN_HINTS: '0', BRAIN_TOOL_NUDGE_DEDUPE: '0' } });
+  assert.equal(runHook(cwd, envelope, { env: { BRAIN_HINTS: '', BRAIN_TOOL_NUDGE_DEDUPE: '0' } }).stdout.trim(), '', 'hints are opt-in: unset is silent');
+  assert.equal(off.status, 0, off.stderr);
+  assert.equal(off.stdout.trim(), '', 'no hint with BRAIN_HINTS=0');
+  const on = runHook(cwd, envelope, { env: { BRAIN_TOOL_NUDGE_DEDUPE: '0' } });
+  assert.match(JSON.parse(on.stdout).hookSpecificOutput.additionalContext, /brain:search/, 'unset: as before');
 });
