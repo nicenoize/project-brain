@@ -1,5 +1,10 @@
 # Control Room — the complete guide
 
+> **Legacy surface (2026-10-24).** The product leads with the receipt, session
+> parking and the companion (see the README). The Control Room, leases, briefs
+> and orchestration stay available under `project-brain serve` / `leanlamp x`;
+> our own usage ledger shows they are hardly used, so they get no new work.
+
 The Control Room is the local surface over the brain. It answers the questions
 an agent-manager actually asks, and it lets you act on the answers. Nothing in
 it calls an LLM: every number is computed from your git history and your
