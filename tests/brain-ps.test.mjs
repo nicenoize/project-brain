@@ -111,7 +111,7 @@ test('the report suggests killing idle sessions but never active ones', () => {
     { now }
   );
   assert.match(text, /swap 19\.4 \/ 20\.0 GB/);
-  assert.match(text, /kill -TERM 11 /);
+  assert.match(text, /kill -TERM 11\b/);
   assert.doesNotMatch(text, /kill -TERM[^\n]*\b22\b/);
   assert.match(text, /docker: 7\.9 GB/);
 });
@@ -202,4 +202,14 @@ test('memoryPressure: the kernel verdict or null, never anything else', async ()
   const v = memoryPressure();
   assert.ok(v === null || Object.values(PRESSURE_LEVELS).includes(v), `got ${v}`);
   if (process.platform !== 'darwin') assert.equal(v, null);
+});
+
+test('sessionVerdicts: a session\'s own transcript beats its project folder', () => {
+  const now = 100 * 3600_000;
+  const sessions = [{ pid: 1, cwd: '/w/app', ageSec: 99 * 3600 }, { pid: 2, cwd: '/w/app', ageSec: 99 * 3600 }];
+  const byCwd = new Map([['/w/app', now - 60_000]]); // one busy session makes the folder look active
+  const byPid = new Map([[1, now - 60_000], [2, now - 30 * 3600_000]]);
+  const v = sessionVerdicts(sessions, byCwd, { now, activityByPid: byPid });
+  assert.deepEqual(v.map((s) => s.verdict), ['active', 'idle']);
+  assert.deepEqual(sessionVerdicts(sessions, byCwd, { now }).map((s) => s.verdict), ['active', 'active'], 'without the registry: folder fallback');
 });

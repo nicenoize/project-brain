@@ -37,6 +37,7 @@ import { BRAIN_DIR, takeFlag, takeOption, unknownFlags } from './common.mjs';
 import { listRunners, stopRunner } from './runner-supervisor.mjs';
 import { projectSlug, transcriptsRoot, listTranscripts } from './brain-tokens.mjs';
 import { parseEtime, parsePs, descendantPids, listProcesses, memoryPressure } from './procs.mjs';
+import { listSessions } from './sessions.mjs';
 
 export { parseEtime, parsePs, descendantPids, listProcesses };
 
@@ -93,9 +94,10 @@ export function lastRealMessageMs(records) {
  * Verdict per agent session. `activityByCwd` maps cwd → last real message ms
  * for that project. Unknown activity is never called idle.
  */
-export function sessionVerdicts(sessions, activityByCwd, { now = Date.now(), idleMs = 4 * 3600_000 } = {}) {
+export function sessionVerdicts(sessions, activityByCwd, { now = Date.now(), idleMs = 4 * 3600_000, activityByPid = new Map() } = {}) {
   return sessions.map((s) => {
-    const last = s.cwd ? activityByCwd.get(s.cwd) : undefined;
+    // a session's own transcript wins; the project folder's newest one only when the registry has no entry
+    const last = activityByPid.has(s.pid) ? activityByPid.get(s.pid) : s.cwd ? activityByCwd.get(s.cwd) : undefined;
     let verdict;
     if (!last) verdict = 'unknown';
     else if (now - last < idleMs || s.ageSec * 1000 < idleMs) verdict = 'active';
@@ -273,6 +275,13 @@ function projectActivity(cwds, { now, windowMs }) {
   return map;
 }
 
+/** pid → last real message of that session's own transcript, from Claude Code's session registry. */
+function sessionActivity(rows) {
+  const map = new Map();
+  try { for (const s of listSessions({ rows })) if (s.lastMessageMs) map.set(s.pid, s.lastMessageMs); } catch { /* registry unreadable: fall back to folders */ }
+  return map;
+}
+
 function readConfig(dir = BRAIN_DIR) {
   try { return JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')); } catch { return {}; }
 }
@@ -404,7 +413,7 @@ export function collect({ idleHours, now = Date.now(), config = readConfig() } =
   });
   const snap = {
     system: systemMemory(),
-    sessions: sessionVerdicts(sessions, activity, { now, idleMs }),
+    sessions: sessionVerdicts(sessions, activity, { now, idleMs, activityByPid: sessionActivity(rows) }),
     helpers: Object.fromEntries([...HELPER_KINDS].map((k) => [k, k === 'dev-server' ? devServers : byKind[k] || []])),
     dockerMb: docker.reduce((s, r) => s + footprintMb(r), 0),
     stacks: dockerStacks({ now, windowMs: cfg.stackIdleHours * 3600_000 }),
@@ -487,7 +496,7 @@ export function renderText(r, { now = Date.now() } = {}) {
   const idle = r.sessions.filter((x) => x.verdict === 'idle');
   if (idle.length) {
     L.push(`Idle sessions (no message for > ${r.idleHours} h): ${idle.length} · ${gb(idle.reduce((a, x) => a + x.mb, 0))} — yours to close`);
-    L.push(`  → kill -TERM ${idle.map((x) => x.pid).join(' ')}    (transcripts are kept: claude --resume)`);
+    L.push(`  → leanlamp sessions park --idle    keeps a card of each (what it was about, how to resume); or kill -TERM ${idle.map((x) => x.pid).join(' ')}`);
   }
   for (const st of (r.stacks || []).filter((x) => x.verdict === 'idle')) {
     L.push(`Idle docker stack ${st.project} (no message in its project for > ${r.config.stackIdleHours} h) — yours to stop`);
