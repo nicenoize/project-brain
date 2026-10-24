@@ -227,12 +227,35 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * No model at all: the index keeps chunks, symbols and text, and search runs
+ * BM25 + symbols (retrieve() takes the lexical path for it). Used when the
+ * optional @xenova/transformers is not installed, or with
+ * BRAIN_EMBED_PROVIDER=none. Measured on the 138 own eval cases: hit@8
+ * 0.674 against 0.710 with MiniLM, 8 cases won and 13 lost, not significant
+ * (sign test p ≈ 0.38) — for 350 MB less to install.
+ */
+export class LexicalProvider {
+  get modelName() { return 'lexical'; }
+  get dims() { return 1; }
+  get lexical() { return true; }
+  async available() { return true; }
+  async embed() { return [0]; }
+  async embedBatch(texts) { return texts.map(() => [0]); }
+}
+
+function localModelInstalled() {
+  try { require.resolve('@xenova/transformers'); return true; } catch { return false; }
+}
+
 export function openEmbedder(options = {}) {
   const provider = options.provider || process.env.BRAIN_EMBED_PROVIDER || 'local';
+  if (provider === 'none' || provider === 'lexical') return new LexicalProvider();
   if (provider === 'openai') {
     const openai = new OpenAIProvider(options);
     if (openai.apiKey) return openai;
     console.warn('BRAIN_EMBED_PROVIDER=openai requested but OPENAI_API_KEY is missing. Falling back to local embeddings.');
   }
+  if (!localModelInstalled() && !options.requireModel) return new LexicalProvider();
   return new LocalProvider();
 }

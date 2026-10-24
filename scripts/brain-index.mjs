@@ -302,7 +302,8 @@ existingVectorByChunkSha.clear();
 if (reuseVectors && (reuseStats.reused || reuseStats.embedded)) {
   const total = reuseStats.reused + reuseStats.embedded;
   const pct = total ? Math.round((reuseStats.reused / total) * 100) : 0;
-  console.log(`Project Brain: embedded ${reuseStats.embedded} new chunks, reused ${reuseStats.reused} (${pct}% cache hit).`);
+  if (embedder.lexical) console.log(`Project Brain: indexed ${reuseStats.embedded} new chunks for keyword search (no embedding model installed).`);
+  else console.log(`Project Brain: embedded ${reuseStats.embedded} new chunks, reused ${reuseStats.reused} (${pct}% cache hit).`);
 }
 
 const dirtyFiles = new Set([...changedFiles, ...deletedFiles]);
