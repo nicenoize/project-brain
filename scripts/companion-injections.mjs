@@ -10,6 +10,8 @@
  * calls runs that command. Only hints are scored (kindOf): a warm snapshot or
  * an answer before an edit may mention a command without asking for it.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 
 export const FOLLOW_WINDOW = 5;
 const MAX_LAST = 20;
@@ -27,8 +29,10 @@ export function sourceOf(text, hookName = '') {
  * command's path, the brain, or the text's own first line ("# Vercel Plugin
  * Session Context", "CAVEMAN MODE ACTIVE"). PURE.
  */
-export function nameOf(text, command = '') {
+export function nameOf(text, command = '', plugins = null) {
   const cmd = String(command || '');
+  const owner = plugins && cmd ? plugins.get(cmd) : null;
+  if (owner) return owner.split('@')[0];
   const plugin = cmd.match(/plugins\/cache\/[^/]+\/([^/\s"']+)/);
   if (plugin) return plugin[1];
   const src = sourceOf(text);
@@ -85,10 +89,11 @@ export function callRuns(call, commands) {
   return null;
 }
 
-export function createInjectionTracker({ keepLast = MAX_LAST, sinceMs = 0 } = {}) {
+export function createInjectionTracker({ keepLast = MAX_LAST, sinceMs = 0, plugins = null } = {}) {
   const totals = { count: 0, chars: 0, bySource: {}, byKind: {}, byEvent: {}, byName: {} };
   const open = []; // { injection, commands, left }
   const recent = new Map(); // event + text head → attachment type, to drop the second recording of one output
+  const learned = new Map(); // opening words → plugin, from outputs that named their command
   const last = [];
   const bump = (bag, key, chars) => { const b = (bag[key] ||= { count: 0, chars: 0, actionable: 0, followed: 0 }); b.count += 1; b.chars += chars; return b; };
 
@@ -117,7 +122,13 @@ export function createInjectionTracker({ keepLast = MAX_LAST, sinceMs = 0 } = {}
       const s = bump(totals.bySource, source, text.length);
       const k = kind ? bump(totals.byKind, kind, text.length) : null;
       bump(totals.byEvent, `${source} · ${event.split(':')[0] || 'other'}`, text.length);
-      const nb = bump(totals.byName, nameOf(text, a.command), text.length);
+      // a plugin's prompt-time note carries no command; its session-start output did, with the same opening words
+      const opening = text.split(/\s+/).slice(0, 3).join(' ').toLowerCase();
+      let owner = plugins && a.command ? plugins.get(String(a.command)) : null;
+      if (owner) learned.set(opening, owner);
+      else if (learned.has(opening)) owner = learned.get(opening);
+      const nb = bump(totals.byName, owner ? owner.split('@')[0] : nameOf(text, a.command, plugins), text.length);
+      if (owner) nb.plugin = owner;
       const ev = event.split(':')[0] || null;
       nb.event = nb.count === 1 ? ev : nb.event === ev ? ev : null; // one event, or none named
       nb.source ||= source;
@@ -163,7 +174,7 @@ export function topNames(bag, n = NAMES_KEPT) {
   return Object.fromEntries(Object.entries(bag || {})
     .sort((a, b) => (b[1].chars || 0) - (a[1].chars || 0))
     .slice(0, n)
-    .map(([k, v]) => [k, { count: v.count, chars: v.chars, estTokens: Math.round((v.chars || 0) / 4), event: v.event || null, source: v.source || null }]));
+    .map(([k, v]) => [k, { count: v.count, chars: v.chars, estTokens: Math.round((v.chars || 0) / 4), event: v.event || null, source: v.source || null, ...(v.plugin ? { plugin: v.plugin } : {}) }]));
 }
 
 /** Merge several summaries (per transcript → per project → everything). PURE. */
@@ -185,6 +196,7 @@ export function mergeInjectionSummaries(list) {
     for (const [k, v] of Object.entries(s.byName || {})) {
       const fresh = !out.byName[k];
       const b = (out.byName[k] ||= { count: 0, chars: 0, event: v.event || null, source: v.source || null });
+      if (v.plugin) b.plugin = v.plugin;
       if (!fresh && b.event !== v.event) b.event = null;
       b.count += n(v.count); b.chars += chars(v);
     }
@@ -201,4 +213,46 @@ export function mergeInjectionSummaries(list) {
   out.byEvent = Object.fromEntries(Object.entries(out.byEvent).sort((a, b) => b[1].count - a[1].count));
   out.byName = topNames(out.byName);
   return out;
+}
+
+/**
+ * Hook command → the plugin that registered it ("vercel@claude-plugins-official"),
+ * from the hooks.json of every plugin in the config dirs' plugin cache. A
+ * transcript records the command as written (with ${CLAUDE_PLUGIN_ROOT}
+ * unexpanded), so the text alone names the plugin. A command two plugins share
+ * names neither.
+ */
+export function pluginHookIndex(configDirs = []) {
+  const candidates = new Map(); // command → Set of plugin keys
+  const enabled = new Set();
+  for (const dir of configDirs) {
+    try { for (const [k, on] of Object.entries(JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')).enabledPlugins || {})) if (on) enabled.add(k); } catch { /* no settings */ }
+    const cache = path.join(dir, 'plugins', 'cache');
+    let markets = [];
+    try { markets = fs.readdirSync(cache); } catch { continue; }
+    for (const market of markets) {
+      let plugins = [];
+      try { plugins = fs.readdirSync(path.join(cache, market)); } catch { continue; }
+      for (const plugin of plugins) {
+        let versions = [];
+        try { versions = fs.readdirSync(path.join(cache, market, plugin)); } catch { continue; }
+        for (const v of versions) {
+          // hooks/hooks.json, or inline under "hooks" in .claude-plugin/plugin.json
+          const read = (f) => { try { const h = JSON.parse(fs.readFileSync(path.join(cache, market, plugin, v, f), 'utf8')).hooks; return h && typeof h === 'object' ? h : null; } catch { return null; } };
+          const hooks = { ...(read(path.join('.claude-plugin', 'plugin.json')) || {}), ...(read(path.join('hooks', 'hooks.json')) || {}) };
+          for (const groups of Object.values(hooks)) for (const g of Array.isArray(groups) ? groups : []) for (const h of g.hooks || []) {
+            for (const c of [h.command, h.statusMessage].filter(Boolean)) (candidates.get(c) || candidates.set(c, new Set()).get(c)).add(`${plugin}@${market}`);
+          }
+        }
+      }
+    }
+  }
+  // one owner, or the one of several that is switched on; two switched on name neither
+  const map = new Map();
+  for (const [c, keys] of candidates) {
+    const on = [...keys].filter((k) => enabled.has(k));
+    const pick = keys.size === 1 ? [...keys] : on;
+    if (pick.length === 1) map.set(c, pick[0]);
+  }
+  return map;
 }

@@ -1531,7 +1531,9 @@ export function renderReceipt(r) {
       const where = v.event ? ` · ${v.event}` : '';
       L.push(`         ${name.slice(0, 34).padEnd(34)} ${String(v.count).padStart(5)}× ${('≈ ' + k(v.estTokens)).padStart(8)}  ${pctS(v.estTokens / all).padStart(4)}${where}`);
     }
-    L.push('         a source you do not need: remove its hook (/hooks in Claude Code) or turn its plugin off (enabledPlugins)');
+    const plugins = [...new Set(names.slice(0, 8).map(([, v]) => v.plugin).filter(Boolean))];
+    for (const p of plugins) L.push(`         off: /plugin disable ${p}   (or "enabledPlugins": { "${p}": false })`);
+    L.push(`         ${plugins.length ? 'any other' : 'a'} source you do not need: remove its hook (/hooks in Claude Code)`);
     L.push('');
   }
   const g = r.guard;

@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import { createInjectionTracker, mergeInjectionSummaries } from './companion-injections.mjs';
+import { createInjectionTracker, mergeInjectionSummaries, pluginHookIndex } from './companion-injections.mjs';
 import { repoName } from './repo-name.mjs';
 
 export const RECEIPT_VERSION = 1;
@@ -56,11 +56,11 @@ export function emptyTrim() {
  * usage is skipped (subagents have their own contexts); streamed duplicates
  * of one request count once.
  */
-export function createTrimFold({ sinceMs = 0, into = new Map(), projectOf = (cwd) => repoName(cwd) || 'unknown' } = {}) {
+export function createTrimFold({ sinceMs = 0, into = new Map(), projectOf = (cwd) => repoName(cwd) || 'unknown', plugins = null } = {}) {
   const seen = new Set();
   let cwd = null;
   let counted = false;
-  const tracker = createInjectionTracker({ keepLast: 0, sinceMs });
+  const tracker = createInjectionTracker({ keepLast: 0, sinceMs, plugins });
   const scope = () => {
     const key = projectOf(cwd);
     if (!into.has(key)) into.set(key, { ...emptyTrim(), cwd });
@@ -206,10 +206,20 @@ export function computeReceipt({ roots, days = 14, now = Date.now(), events = []
   const t0 = Date.now();
   const byProject = new Map();
   const files = transcriptsSince(roots, sinceMs);
+  // a transcript lives in <config dir>/projects/…: that config dir's plugins and settings name its plugin hooks
+  const indexes = new Map();
+  const pluginsFor = (file) => {
+    const parts = file.split(path.sep);
+    const i = parts.lastIndexOf('projects');
+    const dir = i > 0 ? parts.slice(0, i).join(path.sep) : null;
+    if (!dir) return null;
+    if (!indexes.has(dir)) indexes.set(dir, pluginHookIndex([dir]));
+    return indexes.get(dir);
+  };
   let bytes = 0;
   for (const f of files) {
     try { bytes += fs.statSync(f).size; } catch { /* raced */ }
-    const fold = createTrimFold({ sinceMs, into: byProject });
+    const fold = createTrimFold({ sinceMs, into: byProject, plugins: pluginsFor(f) });
     forEachLine(f, fold.line);
     fold.finish();
   }

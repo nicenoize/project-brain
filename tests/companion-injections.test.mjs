@@ -105,3 +105,24 @@ test('names sources, counts plain SessionStart stdout once, and keeps the bigges
   assert.deepEqual(Object.keys(sum.byName), ['Vercel Plugin Session Context', 'CAVEMAN MODE ACTIVE (full)']);
   assert.equal(sum.byName['Vercel Plugin Session Context'].event, 'SessionStart');
 });
+
+test('pluginHookIndex names the plugin behind a hook command; the switched-on one when two share it', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const { pluginHookIndex, createInjectionTracker } = await import('../scripts/companion-injections.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfg-'));
+  const put = (market, plugin, file, hooks) => { const p = path.join(dir, 'plugins', 'cache', market, plugin, '1.0.0', file); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify({ hooks })); };
+  const cmd = 'node "${CLAUDE_PLUGIN_ROOT}/hooks/inject.mjs"';
+  put('official', 'vercel', 'hooks/hooks.json', { SessionStart: [{ hooks: [{ type: 'command', command: cmd }] }] });
+  put('other', 'vercel-plugin', 'hooks/hooks.json', { SessionStart: [{ hooks: [{ type: 'command', command: cmd }] }] });
+  put('cave', 'caveman', '.claude-plugin/plugin.json', { SessionStart: [{ hooks: [{ type: 'command', command: 'x', statusMessage: 'Loading caveman mode...' }] }] });
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ enabledPlugins: { 'vercel@official': true } }));
+  const idx = pluginHookIndex([dir]);
+  assert.equal(idx.get(cmd), 'vercel@official', 'the enabled one of two');
+  assert.equal(idx.get('Loading caveman mode...'), 'caveman@cave', 'inline hooks in plugin.json count');
+  const t = createInjectionTracker({ plugins: idx });
+  t.record({ type: 'attachment', attachment: { type: 'hook_success', hookEvent: 'SessionStart', content: 'CAVEMAN MODE ACTIVE — level: full', command: 'Loading caveman mode...' } });
+  t.record({ type: 'attachment', attachment: { type: 'hook_additional_context', hookEvent: 'UserPromptSubmit', content: 'CAVEMAN MODE ACTIVE (full). Drop articles.' } });
+  const by = t.summary().byName;
+  assert.equal(by.caveman.count, 2, 'the prompt-time note inherits the plugin from the session-start output');
+  assert.equal(by.caveman.plugin, 'caveman@cave');
+});
