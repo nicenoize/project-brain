@@ -25,12 +25,13 @@ import { isMainModule } from './is-main.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync, execSync } from 'node:child_process';
+import { spawnSync, execFile } from 'node:child_process';
 import {
   ROOT, BRAIN_DIR, exists, read, atomicWrite, sha256, takeFlag, takeOption, gitBranchSafe,
   staleIndexFromRecords, isFastMode, ensureLocalStateIgnored
 } from './common.mjs';
 import { noteFriction } from './friction.mjs';
+import { refExists, headSha } from './git-files.mjs';
 import { BUDGETS } from './footprint.mjs';
 
 const CONTEXT_INDEX = path.join(BRAIN_DIR, 'context_index.md');
@@ -250,18 +251,22 @@ function finalize(recs, signals, opts = {}) {
 // Sensing (I/O; cheap/model-free by default, one optional soft index open).
 // ---------------------------------------------------------------------------
 
-function gitChangedFiles() {
-  try {
-    return execSync('git status --porcelain', { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-      .split('\n').map(l => l.slice(3).trim()).filter(Boolean)
-      .map(p => (p.includes(' -> ') ? p.split(' -> ').pop() : p));
-  } catch { return []; }
+/** `git status --porcelain` → changed paths (a rename counts as its new name). PURE. */
+function parseChanged(out) {
+  return String(out || '').split('\n').map(l => l.slice(3).trim()).filter(Boolean)
+    .map(p => (p.includes(' -> ') ? p.split(' -> ').pop() : p));
 }
-function gitStagedFiles() {
-  try {
-    return execSync('git diff --cached --name-only --diff-filter=ACMR', { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-      .split('\n').map(s => s.trim()).filter(Boolean);
-  } catch { return []; }
+/** `git diff --cached --name-only` → staged paths. PURE. */
+function parseStaged(out) {
+  return String(out || '').split('\n').map(s => s.trim()).filter(Boolean);
+}
+/** A git command's stdout, or null when it fails; several run at once instead of one after another. */
+function gitOut(args) {
+  return new Promise((resolve) => {
+    try {
+      execFile('git', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => resolve(err ? null : stdout));
+    } catch { resolve(null); }
+  });
 }
 
 /** Module of a file via the indexer's path heuristic (kept local, no import cost). */
@@ -291,8 +296,16 @@ export function scoreChange(files = [], branch = '') {
 async function senseState(opts = {}) {
   const branch = gitBranchSafe();
   const detachedHead = !branch || branch === 'HEAD';
-  const changedFiles = opts.files || gitChangedFiles();
-  const stagedFiles = gitStagedFiles();
+  // The three git questions that need git run side by side (this is on every prompt).
+  const wantAhead = !detachedHead && /^(feature|fix|refactor|chore|docs|test|hotfix)\//.test(branch);
+  const aheadBase = wantAhead ? pickBase() : '';
+  const [statusOut, stagedOut, aheadOut] = await Promise.all([
+    opts.files ? null : gitOut(['status', '--porcelain']),
+    gitOut(['diff', '--cached', '--name-only', '--diff-filter=ACMR']),
+    wantAhead ? gitOut(['rev-list', '--count', `${aheadBase}..HEAD`]) : null
+  ]);
+  const changedFiles = opts.files || parseChanged(statusOut);
+  const stagedFiles = parseStaged(stagedOut);
   const brainInitialized = exists(BRAIN_DIR) && exists(CONTEXT_INDEX);
   const indexed = exists(JSON_INDEX) || exists(MANIFEST);
 
@@ -326,18 +339,15 @@ async function senseState(opts = {}) {
 
   // Commits-ahead-no-PR (best-effort; gh is optional).
   let commitsAhead = 0, commitsAheadNoPr = false, base = '';
-  if (!detachedHead && /^(feature|fix|refactor|chore|docs|test|hotfix)\//.test(branch)) {
-    base = pickBase();
-    try {
-      const out = spawnSync('git', ['rev-list', '--count', `${base}..HEAD`], { cwd: ROOT, encoding: 'utf8' });
-      commitsAhead = Number((out.stdout || '0').trim()) || 0;
-    } catch { /* soft */ }
+  if (wantAhead) {
+    base = aheadBase;
+    commitsAhead = Number(String(aheadOut || '0').trim()) || 0;
     if (commitsAhead > 0) {
       // `gh pr list` is a network round-trip, and this runs on EVERY prompt
       // (UserPromptSubmit). Cache the answer per branch+HEAD in the hook state
       // file; a HEAD move or the TTL re-asks. The timeout keeps a hung network
       // from ever holding a prompt.
-      const head = (spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout || '').trim();
+      const head = headSha(ROOT) ?? (spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout || '').trim();
       const now = Date.now();
       const cached = prCacheLookup(readHookState()?.prCache, { branch, head, now });
       let hasPr;
@@ -385,6 +395,9 @@ async function senseState(opts = {}) {
 
 function pickBase() {
   for (const b of ['develop', 'dev', 'main', 'master']) {
+    const known = refExists(ROOT, b); // from .git's files; null when only git can tell
+    if (known === true) return b;
+    if (known === false) continue;
     const r = spawnSync('git', ['rev-parse', '--verify', '--quiet', b], { cwd: ROOT, encoding: 'utf8' });
     if (r.status === 0) return b;
   }
@@ -666,6 +679,7 @@ async function main() {
   // Auto-activation hook: fast (model-free), silent on a quiet repo, exit 0
   // always — it runs on every prompt / session start and must never block.
   if (hook) {
+    if (process.env.BRAIN_HINTS !== '1') return 0; // command hints are opt-in (BRAIN_HINTS=1); the CLI itself still answers
     noIndex = true;
     try {
       const signals = await senseState({ files, noIndex });

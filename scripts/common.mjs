@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { headBranch } from './git-files.mjs';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -270,6 +271,9 @@ export function clearDirtyFiles(dirtyPath = DIRTY_FILES) {
 }
 
 export function gitBranchSafe() {
+  // read from .git when it can say for certain (hooks call this on every prompt); else ask git as always
+  const fast = headBranch(process.cwd());
+  if (fast !== null) return fast;
   try {
     return execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch { return ''; }
@@ -377,7 +381,8 @@ export function mergePackageScripts(pkg) {
     'brain:tokens': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-tokens.mjs',
     'brain:ps': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-ps.mjs',
     'brain:warm': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-warm.mjs show',
-    'brain:recall': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-recall.mjs'
+    'brain:recall': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-recall.mjs',
+    'brain:companion': 'node --preserve-symlinks --preserve-symlinks-main skills/project-brain/scripts/brain-companion.mjs'
   };
   for (const [k, v] of Object.entries(scripts)) {
     if (!pkg.scripts[k] || pkg.scripts[k].includes('skills/project-brain/')) pkg.scripts[k] = v;

@@ -45,13 +45,14 @@ import { gitLogArgs, parseLog, fileHealth, coChange } from './git-intel.mjs';
 import { applyRules, scoreChange } from './brain-route.mjs';
 import { gateDanger, DANGER_EMIT_MIN } from './decision.mjs';
 // Doc-Navigator matching, reused VERBATIM from /api/why so the ambient answer
-// and the Control Room can never disagree about which ADR governs a file.
-// brain-serve.mjs is import-side-effect-free (isMain guard, asserted by its own
-// tests) — the same reuse brain-serve itself does for brain-route/brain-brief.
+// and the Control Room can never disagree about which ADR governs a file. Taken
+// from serve/records.mjs (where brain-serve gets them too), not from
+// brain-serve.mjs: the server module drags http, tls and undici along, ~25 ms
+// on every edit this hook answers.
 import {
   parseFrontmatter, frontmatterTitle, moduleGlobs,
   globMatchesFile, inferModuleFromPath, moduleAliases
-} from './brain-serve.mjs';
+} from './serve/records.mjs';
 import { isMainModule } from './is-main.mjs';
 
 // ---------------------------------------------------------------------------
