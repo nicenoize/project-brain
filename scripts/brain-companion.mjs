@@ -1675,6 +1675,17 @@ function main() {
       say(`resumed ${hits[0].name || hits[0].project} in Terminal`, { ok: true, command: line });
       return;
     }
+    case 'clean': {
+      // What closed sessions left running from their scratchpad (the app's "Stop leftovers").
+      const left = Parking.leftovers();
+      const mb = left.reduce((a, x) => a + x.mb, 0);
+      if (dryRun || !left.length) { say(left.length ? `would stop ${left.length} · ${mb} MB` : 'nothing left behind', { ok: true, pids: left.map((x) => x.pid), mb }); return; }
+      Parking.stopLeftovers(left).then((gone) => {
+        appendEvent(dir, { kind: 'reclaimed', count: gone.length, mb, by: process.env.BRAIN_COMPANION_FROM || 'cli' });
+        say(`stopped ${gone.length} left behind · ${mb} MB back`, { ok: true, stopped: gone.length, mb });
+      });
+      return;
+    }
     case 'reclaim': {
       // Only what is provably ours and dead: helpers whose agent is gone
       // (re-parented to PID 1) and their children. Sessions, docker stacks

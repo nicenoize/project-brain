@@ -10,6 +10,18 @@ public struct Parking: Codable, Equatable {
   public var idleMb: Double
   public var open: [Open]
   public var parked: [Card]
+  /// Processes closed sessions left running from their scratchpad (a dev server, an http.server).
+  public var leftovers: [Leftover]
+  public var leftoverMb: Double
+
+  public struct Leftover: Codable, Equatable, Identifiable {
+    public var pid: Int
+    public var owner: String?
+    public var mb: Double
+    public var ageSec: Double?
+    public var command: String?
+    public var id: Int { pid }
+  }
 
   public struct Open: Codable, Equatable, Identifiable {
     public var pid: Int
@@ -52,7 +64,7 @@ public struct Parking: Codable, Equatable {
   }
 
   public init(openMb: Double = 0, idleMb: Double = 0, open: [Open] = [], parked: [Card] = []) {
-    self.openMb = openMb; self.idleMb = idleMb; self.open = open; self.parked = parked
+    self.openMb = openMb; self.idleMb = idleMb; self.open = open; self.parked = parked; self.leftovers = []; self.leftoverMb = 0
   }
 
   public init(from decoder: Decoder) throws {
@@ -63,8 +75,10 @@ public struct Parking: Codable, Equatable {
     idleMb = ((try? c.decodeIfPresent(Double.self, forKey: .idleMb)) ?? nil) ?? 0
     open = ((try? c.decodeIfPresent([Lenient<Open>].self, forKey: .open)) ?? nil)?.compactMap { $0.value } ?? []
     parked = ((try? c.decodeIfPresent([Lenient<Card>].self, forKey: .parked)) ?? nil)?.compactMap { $0.value } ?? []
+    leftovers = ((try? c.decodeIfPresent([Lenient<Leftover>].self, forKey: .leftovers)) ?? nil)?.compactMap { $0.value } ?? []
+    leftoverMb = ((try? c.decodeIfPresent(Double.self, forKey: .leftoverMb)) ?? nil) ?? 0
   }
-  enum CodingKeys: String, CodingKey { case at, idleHours, openMb, idleMb, open, parked }
+  enum CodingKeys: String, CodingKey { case at, idleHours, openMb, idleMb, open, parked, leftovers, leftoverMb }
 
   /// Sessions quiet long enough to park.
   public var quiet: [Open] { open.filter { $0.park } }

@@ -68,6 +68,8 @@ leanlamp sessions park <s>|--idle [--hours 2] [--yes]
                               write a card (first ask, latest asks, where it stood, files),
                               then end the session; busy sessions and this one are never parked
 leanlamp sessions parked      the cards, newest first, each with its resume command
+leanlamp sessions clean [--yes]  stop what closed sessions left running from their scratchpad
+                              (a dev server, python -m http.server); nothing else is touched
 leanlamp sessions resume <s> [--open]  print the resume command (--open: in a new Terminal window)
                               <s>: pid, id prefix, or a word from the name or project`,
   x: `leanlamp x                    list every other brain command
@@ -495,6 +497,18 @@ async function sessions(args) {
       console.log(`  ${String(s.pid).padStart(6)}  ${mark.padEnd(4)}  ${mbText(s.mb.total).padStart(7)}  ${last.padEnd(13)}  ${(s.name || path.basename(s.cwd)).slice(0, 28).padEnd(28)}  ${s.cwd.replace(os.homedir(), '~')}`);
     }
     if (idle.length) console.log(`\n${idle.length} quiet for over ${idleMs / 3600_000} h · ${mbText(free)} — leanlamp sessions park --idle (each keeps a card; leanlamp sessions parked)`);
+    const left = S.leftovers({ sessions: list });
+    if (left.length) console.log(`${left.length} process${left.length === 1 ? '' : 'es'} left behind by closed sessions · ${mbText(left.reduce((a, x) => a + x.mb, 0))} — leanlamp sessions clean`);
+    return 0;
+  }
+  if (sub === 'clean') {
+    const left = S.leftovers({ sessions: list });
+    if (!left.length) { console.log('nothing left behind: every process from a scratchpad belongs to an open session'); return 0; }
+    for (const x of left) console.log(`  ${String(x.pid).padStart(6)}  ${mbText(x.mb).padStart(7)}  up ${S.ago(x.ageSec * 1000).replace(' ago', '')}  ${x.command.slice(0, 80)}`);
+    if (flag('--dry-run')) { console.log(`would stop ${left.length}`); return 0; }
+    if (!flag('--yes') && !(await confirm(`stop ${left.length} process${left.length === 1 ? '' : 'es'} left behind by closed sessions?`))) { console.log('nothing stopped (--yes to skip the question)'); return 1; }
+    const gone = await S.stopLeftovers(left);
+    console.log(`stopped ${gone.length} process${gone.length === 1 ? '' : 'es'}`);
     return 0;
   }
   if (sub === 'park') {

@@ -146,6 +146,15 @@ struct ParkingContent: View {
           }
           .padding(.horizontal, 32).padding(.vertical, 20)
         }
+        if let p, !p.leftovers.isEmpty {
+          HStack(spacing: 12) {
+            SquareButton(title: "Stop leftovers · \(mbText(p.leftoverMb))", fill: .clear, text: .white, border: .white, height: 32) { actions.cleanLeftovers() }
+            Text("\(p.leftovers.count) process\(p.leftovers.count == 1 ? "" : "es") closed sessions left running from their scratchpad: \(p.leftovers.compactMap { $0.command.map { String($0.split(separator: " ").first.map { ($0 as NSString).lastPathComponent } ?? "") } }.joined(separator: ", "))")
+              .font(Theme.body(11)).foregroundStyle(Theme.muted).lineLimit(1)
+            Spacer()
+          }
+          .padding(.horizontal, 32).padding(.bottom, 8)
+        }
         Text("OPEN").font(Theme.label(11)).kerning(1).foregroundStyle(Theme.muted).padding(.horizontal, 32).padding(.top, 20).padding(.bottom, 8)
         ForEach(p?.open ?? []) { o in OpenRow(open: o, parking: actions.parking.contains(o.sessionId)) { actions.park(o.sessionId) } }
         if p == nil {

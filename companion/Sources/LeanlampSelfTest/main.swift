@@ -214,6 +214,7 @@ if let p = try? JSONDecoder().decode(Parking.self, from: Data(parkJSON.utf8)) {
   eq(p.quiet.map { $0.sessionId }, ["a"], "quiet = parkable")
   eq(p.parked.first?.goal, "build the export", "the card keeps the first ask")
   eq(p.parked.count, 1, "a bad card costs that card only")
+  eq(p.leftovers.count, 0, "no leftovers key: none")
 } else { check(false, "parking decodes") }
 eq(mbText(2170), "2.1 GB", "GB from 1024 MB on")
 var quietState = CompanionState(atMs: Date().timeIntervalSince1970 * 1000, sessions: [])

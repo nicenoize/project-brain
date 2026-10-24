@@ -57,6 +57,31 @@ export function treeMb(rows, pid, ownMb = null) {
 }
 
 /**
+ * The session a process belongs to by its scratchpad: Claude Code gives each
+ * session /…/claude-<uid>/<project>/<sessionId>/scratchpad, and servers an
+ * agent starts there (`python -m http.server`, a dev server) outlive it,
+ * detached from its process tree. PURE.
+ */
+export function scratchpadOwner(text) {
+  const m = String(text || '').match(/\/claude-\d+\/[^/\s]+\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|\s|$)/);
+  return m ? m[1] : null;
+}
+
+/** Processes started from a session's scratchpad, by owner; agent sessions themselves excluded. PURE. */
+export function findStrays(rows, cwds = new Map(), { exclude = new Set() } = {}) {
+  const out = [];
+  for (const r of rows) {
+    if (exclude.has(r.pid) || /(^|\/)claude(\s|$)/.test(r.command)) continue;
+    const owner = scratchpadOwner(r.command) || scratchpadOwner((cwds.get(r.pid) || '') + '/');
+    if (!owner) continue;
+    out.push({ pid: r.pid, ppid: r.ppid, owner, mb: Math.round((r.rssKb || 0) / 1024), ageSec: r.ageSec || 0, command: String(r.command).replace(/\s+/g, ' ').slice(0, 120) });
+  }
+  // a stray's own children ride along: only the top of each tree is listed
+  const pids = new Set(out.map((x) => x.pid));
+  return out.filter((x) => !pids.has(x.ppid));
+}
+
+/**
  * Should this session be parked? Never when busy, never our own ancestor,
  * never without a known last message. PURE.
  */
@@ -219,8 +244,9 @@ export function transcriptOf(s) {
 }
 
 /** Every live interactive session on this machine, with RAM and its own last message. */
-export function listSessions({ env = process.env, rows = listProcesses(), withCards = false } = {}) {
+export function listSessions({ env = process.env, rows = listProcesses(), withCards = false, strays = null } = {}) {
   const out = [];
+  const all = strays || findStrays(rows, processCwds());
   for (const dir of configDirs({ env })) {
     let files = [];
     try { files = fs.readdirSync(path.join(dir, 'sessions')).filter((f) => /^\d+\.json$/.test(f)); } catch { continue; }
@@ -231,12 +257,26 @@ export function listSessions({ env = process.env, rows = listProcesses(), withCa
       if (pidReused(s, rows)) continue;
       const t = transcriptOf(s);
       const folded = fs.existsSync(t) ? foldTranscriptCached(t) : { state: null, lastMessageMs: null };
-      const row = { ...s, transcript: fs.existsSync(t) ? t : null, lastMessageMs: folded.lastMessageMs, mb: treeMb(rows, s.pid, footprintMb(s.pid)) };
+      const mine = all.filter((x) => x.owner === s.sessionId);
+      const mb = treeMb(rows, s.pid, footprintMb(s.pid));
+      const extra = mine.reduce((a, x) => a + x.mb, 0);
+      const row = { ...s, transcript: fs.existsSync(t) ? t : null, lastMessageMs: folded.lastMessageMs, strays: mine, mb: { ...mb, strays: extra, total: mb.total + extra } };
       if (withCards && folded.state) row.card = buildCard(row, folded.state, { mb: row.mb.total });
       out.push(row);
     }
   }
   return out.sort((a, b) => (a.lastMessageMs || 0) - (b.lastMessageMs || 0));
+}
+
+/** pid → cwd for every process of this user, one lsof call (~0.3 s). */
+export function processCwds() {
+  const map = new Map();
+  try {
+    const out = execFileSync('lsof', ['-a', '-d', 'cwd', '-u', String(process.getuid()), '-Fpn'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, maxBuffer: 16 * 2 ** 20 });
+    let pid = 0;
+    for (const line of out.split('\n')) { if (line[0] === 'p') pid = Number(line.slice(1)); else if (line[0] === 'n' && pid) map.set(pid, line.slice(1)); }
+  } catch { /* lsof missing or slow: no strays found, nothing breaks */ }
+  return map;
 }
 
 export function ancestorPids(rows = listProcesses(), pid = process.pid) {
@@ -255,11 +295,11 @@ export async function park(s, { env = process.env, waitMs = 4000, rows = listPro
   const file = path.join(dir, `${s.sessionId}.json`);
   fs.writeFileSync(file + '.tmp', JSON.stringify(card, null, 2));
   fs.renameSync(file + '.tmp', file); // the card exists before the process ends
-  const tree = [s.pid, ...descendantPids(rows, s.pid)];
+  const tree = [s.pid, ...descendantPids(rows, s.pid), ...(s.strays || []).flatMap((x) => [x.pid, ...descendantPids(rows, x.pid)])];
   try { process.kill(s.pid, 'SIGTERM'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
   const settle = async (ms) => { const until = Date.now() + ms; while (Date.now() < until && tree.some(alive)) await new Promise((r) => setTimeout(r, 200)); };
   await settle(waitMs);
-  // Helpers it started (MCP servers, browsers) that outlived it are orphans now: end them too.
+  // Helpers it started (MCP servers, browsers, servers from its scratchpad) that outlived it: end them too.
   if (!alive(s.pid)) for (const pid of tree.slice(1).filter(alive)) { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } }
   await settle(1500);
   const left = tree.filter(alive);
@@ -293,7 +333,10 @@ export function slimCard(c) {
 
 /** What the app shows under "park": open sessions with their RAM, and the parked cards. */
 export function parkingView({ env = process.env, rows = listProcesses(), now = Date.now(), idleMs = PARK_DEFAULTS.idleHours * 3600_000 } = {}) {
-  const open = listSessions({ env, rows }).map((s) => {
+  const strays = findStrays(rows, processCwds());
+  const sessions = listSessions({ env, rows, strays });
+  const left = leftovers({ env, rows, sessions, strays });
+  const open = sessions.map((s) => {
     const v = parkVerdict(s, { now, idleMs });
     return { pid: s.pid, sessionId: s.sessionId, title: s.name || path.basename(s.cwd), project: path.basename(s.cwd), cwd: s.cwd, mb: s.mb.total, helpers: s.mb.helpers, status: s.status, lastMessageMs: s.lastMessageMs, park: v.park, why: v.why };
   }).sort((a, b) => (b.lastMessageMs || 0) - (a.lastMessageMs || 0));
@@ -304,6 +347,29 @@ export function parkingView({ env = process.env, rows = listProcesses(), now = D
     openMb: open.reduce((a, s) => a + s.mb, 0),
     idleMb: idle.reduce((a, s) => a + s.mb, 0),
     open,
-    parked: listParked({ env }).slice(0, 30).map(slimCard)
+    parked: listParked({ env }).slice(0, 30).map(slimCard),
+    leftovers: left.map((x) => ({ pid: x.pid, owner: x.owner, mb: x.mb, ageSec: x.ageSec, command: x.command })),
+    leftoverMb: left.reduce((a, x) => a + x.mb, 0)
   };
+}
+
+/** Processes left behind by sessions that are no longer open (their scratchpad's owner is gone). */
+export function leftovers({ env = process.env, rows = listProcesses(), sessions = null, strays = null, cwds = null } = {}) {
+  const where = cwds || processCwds();
+  const all = strays || findStrays(rows, where);
+  const live = new Set((sessions || listSessions({ env, rows, strays: all })).map((s) => s.sessionId));
+  // BRAIN_SCRATCH_ROOT keeps a run (a test) to scratchpads under one folder: it must never reach the machine's
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  const roots = env.BRAIN_SCRATCH_ROOT ? [...new Set([path.resolve(env.BRAIN_SCRATCH_ROOT), real(env.BRAIN_SCRATCH_ROOT)])].map((p) => p + path.sep) : null;
+  const inside = (x) => !roots || roots.some((r) => x.command.includes(r) || String(where.get(x.pid) || '').startsWith(r));
+  return all.filter((x) => !live.has(x.owner) && inside(x));
+}
+
+/** End leftovers and their children. Returns the pids that are gone. */
+export async function stopLeftovers(list, { rows = listProcesses(), waitMs = 2000 } = {}) {
+  const pids = list.flatMap((x) => [x.pid, ...descendantPids(rows, x.pid)]);
+  for (const p of pids) { try { process.kill(p, 'SIGTERM'); } catch { /* gone */ } }
+  const until = Date.now() + waitMs;
+  while (Date.now() < until && pids.some(alive)) await new Promise((r) => setTimeout(r, 200));
+  return pids.filter((p) => !alive(p));
 }

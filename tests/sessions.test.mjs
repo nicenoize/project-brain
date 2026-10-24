@@ -117,3 +117,33 @@ test('listParked reads cards newest first; unpark drops one', () => {
   assert.equal(unpark('a', { env }), true);
   assert.deepEqual(listParked({ env }).map((c) => c.sessionId), ['b']);
 });
+
+test('scratchpadOwner and findStrays: servers an agent started from its scratchpad belong to that session', async () => {
+  const { scratchpadOwner, findStrays } = await import('../scripts/sessions.mjs');
+  const id = '2ff8f575-f866-4a28-bf53-7aa20400bdcf';
+  assert.equal(scratchpadOwner(`python -m http.server 8791 --directory /private/tmp/claude-501/-Users-me-app/${id}/scratchpad/mockups`), id);
+  assert.equal(scratchpadOwner('/Users/me/app'), null);
+  const rows = [
+    { pid: 10, ppid: 1, rssKb: 4096, ageSec: 99, command: `python -m http.server --directory /tmp/claude-501/p/${id}/scratchpad` },
+    { pid: 11, ppid: 10, rssKb: 1024, ageSec: 99, command: 'python worker' },
+    { pid: 12, ppid: 1, rssKb: 1024, ageSec: 9, command: 'vite' },
+    { pid: 13, ppid: 1, rssKb: 1024, ageSec: 9, command: '/Users/me/.local/bin/claude' }
+  ];
+  const cwds = new Map([[11, `/tmp/claude-501/p/${id}/scratchpad`], [12, '/Users/me/app'], [13, `/tmp/claude-501/p/${id}/scratchpad`]]);
+  const s = findStrays(rows, cwds);
+  assert.deepEqual(s.map((x) => x.pid), [10], 'the child rides along with its parent; the session itself is no stray');
+  assert.equal(s[0].owner, id);
+  assert.equal(s[0].mb, 4);
+});
+
+test('leftovers: BRAIN_SCRATCH_ROOT keeps a run to its own folder', async () => {
+  const { leftovers } = await import('../scripts/sessions.mjs');
+  const id = '00000000-0000-4000-8000-0000000000aa';
+  const rows = [
+    { pid: 20, ppid: 1, rssKb: 1024, ageSec: 9, command: `sleep 60 /t/home/claude-501/p/${id}/scratchpad` },
+    { pid: 21, ppid: 1, rssKb: 1024, ageSec: 9, command: `python -m http.server /private/tmp/claude-501/p/${id}/scratchpad` }
+  ];
+  const got = leftovers({ env: { BRAIN_SCRATCH_ROOT: '/t/home' }, rows, sessions: [], cwds: new Map() });
+  assert.deepEqual(got.map((x) => x.pid), [20]);
+  assert.equal(leftovers({ env: {}, rows, sessions: [], cwds: new Map() }).length, 2);
+});

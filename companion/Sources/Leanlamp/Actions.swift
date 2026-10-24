@@ -53,6 +53,8 @@ final class Actions: ObservableObject {
     run(["park", sessionId]) { [weak self] _ in self?.parking.remove(sessionId) }
   }
   func parkAll(_ ids: [String]) { for id in ids { park(id) } }
+  /// Stop what closed sessions left running from their scratchpad.
+  func cleanLeftovers() { run(["clean"]) }
   /// Open a parked session again in a new Terminal window (`claude --resume`).
   func resume(_ sessionId: String) { run(["resume", sessionId]) }
 

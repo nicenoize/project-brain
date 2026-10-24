@@ -34,7 +34,7 @@ function scratch() {
   fs.writeFileSync(state, JSON.stringify({ v: 1, atMs: Date.now(), sessions: [{ id: SID, title: 'billing refactor', project: 'acme', state: 'tool', control: true }] }));
   const roots = path.join(home, 'transcripts');
   fs.mkdirSync(roots);
-  const env = { ...process.env, BRAIN_HOME: path.join(home, 'brain-home'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), BRAIN_COMPANION_FROM: 'app', BRAIN_USAGE_LOG: '0' };
+  const env = { ...process.env, BRAIN_HOME: path.join(home, 'brain-home'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), BRAIN_COMPANION_FROM: 'app', BRAIN_USAGE_LOG: '0', BRAIN_SCRATCH_ROOT: home }; // clean must never reach this machine's real leftovers
   delete env.LEANLAMP_CLI;
   // exactly as Actions.run builds it: flags first, then the verb and its words
   const app = (...args) => spawnSync(process.execPath, [ENGINE, '--state', state, '--json', ...args], { encoding: 'utf8', env, cwd: home });
@@ -97,6 +97,19 @@ const CONTRACT = {
     const r = s.app('resume', 'abc', '--dry-run'); // the app runs it without --dry-run: that opens Terminal
     assert.equal(r.status, 0, r.stderr);
     assert.match(json(r).command, /claude --resume abc/);
+  },
+  clean: (s) => {
+    // a server a closed session left in its scratchpad (the owner id is no open session)
+    const pad = path.join(s.home, 'claude-501', 'proj', '00000000-0000-4000-8000-00000000c1ea', 'scratchpad');
+    fs.mkdirSync(pad, { recursive: true });
+    const pid = Number(spawnSync('sh', ['-c', `cd '${pad}' && exec sleep 60 >/dev/null 2>&1 & echo $!`], { encoding: 'utf8' }).stdout.trim());
+    try {
+      const r = s.app('clean');
+      assert.equal(r.status, 0, r.stderr);
+      assert.ok(json(r).stopped >= 1, r.stdout);
+      let up = true; try { process.kill(pid, 0); } catch { up = false; }
+      assert.equal(up, false, 'the leftover is gone');
+    } finally { try { process.kill(pid, 'SIGKILL'); } catch { /* stopped */ } }
   },
   reclaim: (s) => {
     const r = s.app('reclaim', '--dry-run');
