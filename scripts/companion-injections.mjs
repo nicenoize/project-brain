@@ -55,6 +55,7 @@ export function stdoutIsContext(a) {
  * something, so only hints are scored for "followed":
  *   state   — the warm snapshot after a compaction (the session's own state)
  *   answer  — the ambient answer before an edit (danger, decisions, leases)
+ *   digest  — the repo state file, budgeted, at session start
  *   hint    — routing and tool nudges ("run brain:search instead")
  * PURE.
  */
@@ -62,6 +63,7 @@ export function kindOf(text) {
   const t = String(text || '').trimStart();
   if (/^## Brain: session state/.test(t) || /^(=== )?Project Brain state\b/i.test(t)) return 'state';
   if (/^Project Brain \(ambient, deterministic\)/.test(t)) return 'answer';
+  if (/^=== Project Brain: Active State/.test(t)) return 'digest'; // SessionStart: the repo's state file, budgeted
   return 'hint';
 }
 
