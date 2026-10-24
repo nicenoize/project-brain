@@ -193,6 +193,16 @@ struct ToastRow: View {
         }
         SquareButton(title: "Later", fill: .clear, text: Theme.ink, border: Theme.ink) { actions.snooze(toast.key) }
       }
+      if toast.isQuiet {
+        let ink = toast.attention ? Theme.ink : Color.white
+        SquareButton(title: "Park all", fill: toast.attention ? Theme.ink : Theme.accent, text: toast.attention ? .white : Theme.ink, border: toast.attention ? Theme.ink : Theme.accent) {
+          actions.parkAll(toast.parkIds); actions.snooze(toast.key, for: 120)
+        }
+        SquareButton(title: "Show", fill: .clear, text: ink, border: ink) {
+          NotificationCenter.default.post(name: .leanlampOpenWindow, object: WindowTab.parking)
+        }
+        SquareButton(title: "Later", fill: .clear, text: ink, border: ink) { actions.snooze(toast.key, for: Toast.quietSnooze) }
+      }
       if toast.welcome {
         if actions.hooksInstalled != true {
           SquareButton(title: "Connect…", fill: .white, text: Theme.ink, border: .white) {

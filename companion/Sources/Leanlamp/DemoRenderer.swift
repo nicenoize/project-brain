@@ -84,6 +84,32 @@ enum DemoRenderer {
     return 0
   }
 
+  /// `leanlamp --render-quiet <png>`: the folded island offering to park idle sessions (made-up state).
+  @MainActor
+  static func renderQuiet(to out: String) -> Int32 {
+    Fonts.register()
+    let store = StateStore(path: "/dev/null/leanlamp-demo")
+    let actions = Actions(script: nil, statePath: "/dev/null")
+    let layout = NotchLayout(
+      screen: CGRect(x: 0, y: 0, width: size.width, height: 600),
+      notch: CGRect(x: (size.width - 185) / 2, y: 600 - 32, width: 185, height: 32),
+      menuBarHeight: 37)
+    let model = IslandModel(layout: layout)
+    model.boot = .done
+    var state = script(at: 1)
+    state.events = []
+    state.parking = Parking(openMb: 3_970, idleMb: 2_170, open: (1...3).map { .init(pid: $0, sessionId: "q\($0)", title: "s\($0)", mb: 723, park: true) })
+    store.injectForDemo(state, now: state.atMs)
+    model.toast = Toast.pick(state, now: Date(timeIntervalSince1970: state.atMs / 1000))
+    let view = DemoFrame(store: store, model: model, actions: actions, t: DemoRenderer.held + 2).frame(width: size.width, height: size.height)
+    let renderer = ImageRenderer(content: view)
+    renderer.scale = 2
+    guard let img = renderer.cgImage, let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else { return 1 }
+    do { try png.write(to: URL(fileURLWithPath: out)) } catch { return 1 }
+    print("leanlamp: quiet → \(out)")
+    return 0
+  }
+
   /// `leanlamp --render-parked <png>`: the PARKED tab with made-up sessions (never the user's).
   @MainActor
   static func renderParked(to out: String) -> Int32 {

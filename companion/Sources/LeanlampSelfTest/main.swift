@@ -216,6 +216,15 @@ if let p = try? JSONDecoder().decode(Parking.self, from: Data(parkJSON.utf8)) {
   eq(p.parked.count, 1, "a bad card costs that card only")
 } else { check(false, "parking decodes") }
 eq(mbText(2170), "2.1 GB", "GB from 1024 MB on")
+var quietState = CompanionState(atMs: Date().timeIntervalSince1970 * 1000, sessions: [])
+quietState.parking = Parking(openMb: 4000, idleMb: 2170, open: [.init(pid: 1, sessionId: "a", title: "x", mb: 2170, park: true)])
+eq(Toast.pick(quietState)?.kind, "quiet", "2 GB in idle sessions: offer to park")
+eq(Toast.pick(quietState)?.parkIds, ["a"], "the toast parks exactly the quiet ones")
+check(Toast.pick(quietState, dismissed: ["quiet|1"]) == nil, "Later keeps it away")
+quietState.parking?.idleMb = 600
+check(Toast.pick(quietState) == nil, "600 MB with memory to spare: no interruption")
+quietState.machine.pressure = "warn"
+eq(Toast.pick(quietState)?.kind, "quiet", "memory tight: 600 MB is worth it")
 eq(mbText(421), "421 MB", "MB below")
 eq(agoText(Date().timeIntervalSince1970 * 1000 - 3 * 3600_000), "3 h ago", "hours ago")
 

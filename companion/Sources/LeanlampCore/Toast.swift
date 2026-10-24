@@ -19,6 +19,12 @@ public struct Toast: Equatable {
   /// A memory toast with something of ours to give back: Reclaim / Later.
   public var reclaimable: Bool = false
   public var isMemory: Bool { kind == "memory" }
+  /// Quiet sessions holding memory: Park all / Show / Later act on these session ids.
+  public var parkIds: [String] = []
+  public var isQuiet: Bool { kind == "quiet" }
+  /// Below this, quiet sessions are not worth an interruption (unless memory is tight).
+  public static let quietMb: Double = 2048
+  public static let quietSnooze: TimeInterval = 4 * 3600
   /// The one-time hello on first launch: what the island is, how to open it, Connect.
   public var welcome: Bool = false
   public static let welcomeKey = "welcome"
@@ -70,6 +76,16 @@ public struct Toast: Equatable {
       candidates.append((at, t))
     }
     if let t = candidates.max(by: { $0.0 < $1.0 })?.1 { return t }
+    // Sessions left open only for their context, holding memory: park them (a card keeps what they were about).
+    if let p = state.parking, !p.quiet.isEmpty {
+      let tight = state.machine.pressure == "warn" || state.machine.pressure == "critical"
+      let key = "quiet|\(p.quiet.count)"
+      if (p.idleMb >= quietMb || (tight && p.idleMb >= 512)) && !dismissed.contains(key) {
+        var t = Toast(key: key, kind: "quiet", subject: "\(p.quiet.count) idle session\(p.quiet.count == 1 ? "" : "s")", text: "context kept", number: mbText(p.idleMb), attention: state.machine.pressure == "critical")
+        t.parkIds = p.quiet.map { $0.sessionId }
+        return t
+      }
+    }
     // Lowest of all: the first-launch hello, while nothing else has anything to say.
     if let until = welcomeUntil, now < until, !dismissed.contains(welcomeKey) { return welcomeToast(state) }
     return nil
