@@ -38,7 +38,7 @@ export const PACK_MAX_TOKENS_DEFAULT = 2600;
 // (12000 B ≈ 3k tok, 8000 B ≈ 2k tok).
 export const BUDGETS = {
   // SKILL.md core — injected on every skill activation; detail belongs in references/*.md.
-  skillBytes: 12000,
+  skillBytes: 6000, // 2026-10-24: the command map moved to references/command-map.md (core ≈ 5 KB)
   // SessionStart state digest (brain-state-digest.mjs stdout) — replaces the
   // historical raw `cat active_state.md` (≈30 kB ≈ 7.5k tok in the field, see
   // header note + decisions/0024).

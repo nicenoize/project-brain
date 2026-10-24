@@ -273,7 +273,7 @@ let layoutOk = missing.length === 0;
 // consumer on an old checkout has SKILL.md but not yet the references, and should
 // be nudged to update rather than have health fail (which would abort setup.sh).
 const skillRoot = isCanonicalPackage ? '.' : 'skills/project-brain';
-const REFERENCE_FILES = ['commands.md', 'workflows.md', 'retrieval-internals.md', 'tuning.md', 'fleet.md'];
+const REFERENCE_FILES = ['command-map.md', 'commands.md', 'workflows.md', 'retrieval-internals.md', 'tuning.md', 'fleet.md'];
 const missingReferences = fs.existsSync(path.join(skillRoot, 'SKILL.md'))
   ? REFERENCE_FILES.map((f) => path.join(skillRoot, 'references', f)).filter((p) => !fs.existsSync(p))
   : [];
