@@ -26,7 +26,7 @@ const run = (root, script, args = [], env = {}) => spawnSync(process.execPath, [
 test('a freshly indexed fleet is up to date for brain-sync (it lists the same files as the indexer)', () => {
   const root = fleet();
   assert.equal(run(root, 'brain-index.mjs').status, 0);
-  const out = run(root, 'brain-sync.mjs', ['--no-block']).stdout;
+  const out = run(root, 'brain-sync.mjs', ['--no-block'], { BRAIN_INDEX: '1' }).stdout;
   assert.match(out, /index is up to date/, out);
 });
 
@@ -34,12 +34,21 @@ test('brain-sync leaves a rebuild to the foreground: model change or too many fi
   const root = fleet();
   run(root, 'brain-index.mjs');
   fs.appendFileSync(path.join(root, 'alpha', 'docs', 'a.md'), 'more\n');
-  const big = run(root, 'brain-sync.mjs', ['--no-block'], { BRAIN_SYNC_BG_MAX_FILES: '0' });
+  const big = run(root, 'brain-sync.mjs', ['--no-block'], { BRAIN_INDEX: '1', BRAIN_SYNC_BG_MAX_FILES: '0' });
   assert.match(big.stdout, /not in the background — 1 files changed/);
   const manifest = path.join(root, '.project-brain', 'index_manifest.json');
   fs.writeFileSync(manifest, JSON.stringify({ ...JSON.parse(fs.readFileSync(manifest, 'utf8')), model: 'Xenova/all-MiniLM-L6-v2' }));
   fs.appendFileSync(path.join(root, 'alpha', 'docs', 'a.md'), 'again\n');
-  const model = run(root, 'brain-sync.mjs', ['--no-block']);
+  const model = run(root, 'brain-sync.mjs', ['--no-block'], { BRAIN_INDEX: '1' });
   assert.match(model.stdout, /embedding model changed/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.project-brain', '.sync-state.json'), 'utf8')).action, 'skip');
+});
+
+test('hooks keep no index up to date unless BRAIN_INDEX=1 (ADR 0039); a person still can', () => {
+  const root = fleet();
+  const hook = run(root, 'brain-sync.mjs', ['--if-stale', '--no-block']);
+  assert.match(hook.stdout, /opt-in for hooks/);
+  assert.equal(fs.existsSync(path.join(root, '.project-brain', 'index_manifest.json')), false);
+  assert.equal(run(root, 'brain-sync.mjs').status, 0);
+  assert.equal(fs.existsSync(path.join(root, '.project-brain', 'index_manifest.json')), true);
 });

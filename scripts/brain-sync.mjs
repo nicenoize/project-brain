@@ -104,6 +104,18 @@ if (isFastMode() && !force) {
   process.exit(0);
 }
 
+// ADR 0039: hooks keep no index up to date unless the repo asks for it with
+// BRAIN_INDEX=1. In 30 days of own transcripts the one index-backed tool
+// (brain_search) was called 0 times, while hook-driven syncs ran 375 times in
+// shop-app alone and one on the large workspace filled the swap. A person running
+// `brain:sync` or `brain:index` still gets the index.
+const fromHook = noBlock || ifStale || process.env.BRAIN_BACKGROUND === '1';
+if (fromHook && !force && process.env.BRAIN_INDEX !== '1') {
+  clearDirtyFiles();
+  console.log('Project Brain sync: skipped — the index is opt-in for hooks (BRAIN_INDEX=1).');
+  process.exit(0);
+}
+
 // M2: embedding stack is optional. Without a usable index provider a sync has
 // nothing to re-embed — skip with a warning and exit 0 (hook-safe), before any
 // hash-scan work. Cheap: the availability probe resolves the module without
