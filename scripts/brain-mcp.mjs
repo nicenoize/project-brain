@@ -637,6 +637,10 @@ const TOOLS = [
   },
   {
     name: 'brain_search',
+    // ADR 0039: listed only where the repo keeps its index (BRAIN_INDEX=1).
+    // 0 calls in 30 days of own transcripts; elsewhere its schema is only
+    // tokens in every session.
+    optIn: 'BRAIN_INDEX',
     description:
       'Semantic + keyword search over the indexed repo and its brain records. Degrades to a ' +
       'lexical pass with an explicit warning when no embedding index is available.',
@@ -1233,13 +1237,13 @@ const handlers = {
   },
   ping() { return {}; },
   'tools/list'() {
-    return { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) };
+    return { tools: activeTools().map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) };
   },
   async 'tools/call'(params) {
     const name = String(params?.name || '');
-    const tool = TOOLS.find((t) => t.name === name);
+    const tool = activeTools().find((t) => t.name === name);
     if (!tool) {
-      const err = new Error(`unknown tool "${name}" — available: ${TOOLS.map((t) => t.name).join(', ')}`);
+      const err = new Error(`unknown tool "${name}" — available: ${activeTools().map((t) => t.name).join(', ')}`);
       err.rpcCode = -32602;
       throw err;
     }
@@ -1254,6 +1258,11 @@ const handlers = {
     }
   }
 };
+
+/** The tools this server offers: an opt-in tool only where its env flag is 1. */
+function activeTools(env = process.env) {
+  return TOOLS.filter((t) => !t.optIn || env[t.optIn] === '1');
+}
 
 async function dispatch(message) {
   const isRequest = Object.prototype.hasOwnProperty.call(message, 'id') && message.id !== null;
@@ -1425,4 +1434,4 @@ if (isMainModule(import.meta.url)) {
 }
 
 // Exported for unit tests / reuse — the tool table and the pure-ish helpers.
-export { TOOLS, provenanceLine, rankBlast, leaseLine, ageHuman, SUPPORTED_PROTOCOLS, LATEST_PROTOCOL };
+export { TOOLS, activeTools, provenanceLine, rankBlast, leaseLine, ageHuman, SUPPORTED_PROTOCOLS, LATEST_PROTOCOL };

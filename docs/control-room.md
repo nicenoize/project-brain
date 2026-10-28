@@ -211,7 +211,7 @@ Eight task-shaped tools:
 | `brain_why` | module, governing decisions, recent history for one file |
 | `brain_danger` | per-file danger ranking with receipt |
 | `brain_leases` | who holds what, TTL, conflicts against an actor |
-| `brain_search` | indexed search (degrades to lexical with a warning) |
+| `brain_search` | indexed search (degrades to lexical with a warning); listed only with `BRAIN_INDEX=1` (ADR 0039) |
 | `brain_next` | ranked next actions with auto/human boundary |
 
 Every result carries a **provenance line** and a staleness warning when the
