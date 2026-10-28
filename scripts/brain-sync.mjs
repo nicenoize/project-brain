@@ -22,7 +22,7 @@ import {
   classifyChanges,
   writeSyncState,
   gitBranchSafe,
-  listIndexableFiles,
+  listIndexSet,
   readDirtyFiles,
   clearDirtyFiles,
   writeHashHandoff
@@ -32,6 +32,13 @@ import { memoryPressure } from './procs.mjs';
 const SYNC_BG_LOCK = path.join(BRAIN_DIR, '.sync-bg.lock');
 const SYNC_DEBOUNCE_MS = Number(process.env.BRAIN_SYNC_DEBOUNCE_MS || 30_000);
 const SYNC_NICE = process.env.BRAIN_SYNC_NICE !== '0';
+// A detached run works on what one edit touched. More than this many files, or
+// a changed embedding model (which forces a full rebuild), is a rebuild, and a
+// rebuild runs only when someone asks for it, never behind a hook.
+const BG_MAX_FILES = Number(process.env.BRAIN_SYNC_BG_MAX_FILES || 400);
+// Hard caps for that detached run: the V8 heap, and the indexer's own
+// watchdog (brain-index.mjs) over everything it allocated.
+const BG_MAX_MB = Number(process.env.BRAIN_INDEX_MAX_MB || 3072);
 
 function pidAlive(pid) {
   if (!pid || !Number.isFinite(pid)) return false;
@@ -121,7 +128,7 @@ if (fs.existsSync(MANIFEST)) {
   try { oldManifest = JSON.parse(read(MANIFEST)); } catch { oldManifest = { files: {} }; }
 }
 
-const files = await listIndexableFiles();
+const { files } = await listIndexSet();
 const current = {};
 const changed = [];
 const deleted = [];
@@ -147,6 +154,21 @@ console.log(`Project Brain sync: ${decision.action} — ${decision.reason} (chan
 
 if (dryRun) {
   console.log(JSON.stringify({ decision, changed: changed.length, deleted: deleted.length }, null, 2));
+  process.exit(0);
+}
+
+const bg = decision.action === 'background' && allowBackground && !force;
+const modelNow = bg && oldManifest.model ? (await import('./embed.mjs')).openEmbedder().modelName : null;
+const tooBig = !bg ? null
+  : modelNow && modelNow !== oldManifest.model ? `the embedding model changed (${oldManifest.model} → ${modelNow}), which rebuilds the whole index`
+  : changed.length + deleted.length > BG_MAX_FILES ? `${changed.length + deleted.length} files changed (more than ${BG_MAX_FILES})`
+  : null;
+if (tooBig) {
+  // The dirty list is drained: keeping it would re-hash the whole tree on
+  // every turn only to refuse again. brain:health reports the stale index.
+  clearDirtyFiles();
+  writeSyncState({ action: 'skip', reason: `not in the background: ${tooBig}`, branch: gitBranchSafe(), changed: changed.length, deleted: deleted.length });
+  console.log(`Project Brain sync: not in the background — ${tooBig}. Run \`npm run brain:sync\` yourself when it suits you.`);
   process.exit(0);
 }
 
@@ -218,11 +240,11 @@ if (decision.action === 'background' && allowBackground) {
 
   const out = fs.openSync(SYNC_BG_LOG, 'a');
   fs.writeSync(out, `\n--- ${new Date().toISOString()} bg sync (changed=${changed.length}, deleted=${deleted.length})\n`);
-  const { cmd, args: spawnArgs } = wrapWithNice(process.execPath, [indexScript, ...indexArgs]);
+  const { cmd, args: spawnArgs } = wrapWithNice(process.execPath, [`--max-old-space-size=${BG_MAX_MB}`, indexScript, ...indexArgs]);
   const child = spawn(cmd, spawnArgs, {
     detached: true,
     stdio: ['ignore', out, out],
-    env: { ...withHashes(), BRAIN_SYNC_LOCK: SYNC_BG_LOCK }
+    env: { ...withHashes(), BRAIN_SYNC_LOCK: SYNC_BG_LOCK, BRAIN_INDEX_MAX_MB: String(BG_MAX_MB) }
   });
   child.unref();
   writeLock(child.pid);

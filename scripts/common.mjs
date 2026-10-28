@@ -11,6 +11,7 @@ import { buildUsageRecord, usageCmdFromScript } from './usage.mjs';
 // require, so importing it here does NOT evaluate findings.mjs during common's
 // own init. See friction.mjs's header + the createRequire note there.
 import { instrumentFriction } from './friction.mjs';
+import { discoverProjects, isFleetMode } from './projects.mjs';
 
 /**
  * PURE-ish (reads fs + one env var, never writes). Resolve the project root the
@@ -537,6 +538,33 @@ export function parseDoc(file, content) {
 export function truthyFrontmatter(value) {
   const s = String(value ?? '').trim().toLowerCase();
   return s === 'true' || s === '1' || s === 'yes' || s === 'on';
+}
+
+/**
+ * The file set the indexer works on: in a fleet, every project's listing
+ * prefixed with its dir; otherwise the root listing. brain-sync diffs against
+ * this same set. With the root listing alone every fleet file looked deleted,
+ * so a fleet was never up to date and every Stop hook after an edit started a
+ * background run over all projects (the large workspace, 38 projects, 2026-10-28: one
+ * indexer at 29 GB, swap full, machine frozen).
+ */
+export async function listIndexSet(root = ROOT) {
+  const projects = discoverProjects(root);
+  const fleetMode = isFleetMode(projects);
+  const projectByFile = new Map();
+  if (!fleetMode) {
+    return { files: filterGitignoredRelativePaths(await listIndexableFiles({ root }), { root }), projects, fleetMode, projectByFile };
+  }
+  const files = [];
+  for (const project of projects) {
+    const projAbs = path.join(root, project.dir);
+    for (const f of filterGitignoredRelativePaths(await listIndexableFiles({ root: projAbs }), { root: projAbs })) {
+      const fleetRel = path.posix.join(project.dir, f);
+      files.push(fleetRel);
+      projectByFile.set(fleetRel, project.name);
+    }
+  }
+  return { files, projects, fleetMode, projectByFile };
 }
 
 /**
