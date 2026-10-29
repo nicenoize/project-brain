@@ -63,6 +63,7 @@ Full policy, splitting heuristics, and step-by-step operating-mode runbooks: [`w
 - `brain:security` — advisories ordered by REACHABILITY (does our code import it), not severity alone.
 - `brain:tokens` / `brain:ps` — where agent tokens go (context size, compressible tool output) / which sessions, runners, stacks and orphans hold RAM, and whether another agent fits.
 - `brain_recall` (MCP) / `brain:recall` — fetch a detail from earlier in this session, including what a compaction dropped, instead of re-running or re-reading.
+- `brain:mobbin search <terms>` — earlier Mobbin results kept on this Mac with their screenshots; look here before asking Mobbin (the `brain:mobbin hook` PreToolUse answers a close search locally, a repeat of the same call goes through).
 
 **Code intelligence (measured from git + imports, no index needed)**
 - `brain:outline <file>` — the file's functions with line ranges; `--symbol <name>` prints just that one. Read 90 lines instead of 1,300.
