@@ -69,3 +69,32 @@ test('decide: a close search is answered locally once; the same call again goes 
   assert.equal(decide({ ...payload, tool_name: 'mcp__claude_ai_Mobbin__save_content' }, { env }), null, 'only searches');
   assert.equal(decide(payload, { env: { ...env, BRAIN_MOBBIN_LOCAL: '0' } }), null, 'switch off');
 });
+
+test('tags: an id prefix names one screen, tags gather on its search, untag drops them', async () => {
+  const { resolveId, tag, untag, tagsOf } = await import('../scripts/brain-mobbin.mjs');
+  const { env } = fixture();
+  ingest({ env });
+  const entries = loadEntries(env);
+  assert.equal(resolveId(entries, 'sc'), 'sc1');
+  assert.equal(resolveId(entries, 'nope'), null);
+  const tags = tag({}, 'sc1', ['Onboarding', 'notar'], 'good for step 3');
+  assert.deepEqual(tagsOf(entries[0], tags), ['onboarding', 'notar']);
+  assert.equal(search(entries, '', { tag: 'notar', tags, min: 0 }).length, 1);
+  assert.equal(search(entries, '', { tag: 'other', tags, min: 0 }).length, 0);
+  assert.deepEqual(untag(tags, 'sc1', ['notar']).sc1.tags, ['onboarding']);
+  assert.equal(untag(tags, 'sc1').sc1, undefined);
+});
+
+test('gallery: one card per screenshot with a path the page can load, and nothing unescaped', async () => {
+  const { galleryCards, renderGallery, writeGallery } = await import('../scripts/brain-mobbin.mjs');
+  const { env } = fixture();
+  ingest({ env });
+  const dir = libDir(env);
+  const cards = galleryCards(loadEntries(env), { sc1: { tags: ['x'], note: '</script><b>' } }, dir);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].app, 'Wise');
+  assert.ok(fs.existsSync(path.join(dir, cards[0].img)));
+  const html = renderGallery(cards);
+  assert.ok(!html.includes('</script><b>'), 'notes cannot close the script');
+  assert.ok(fs.existsSync(writeGallery(env)));
+});

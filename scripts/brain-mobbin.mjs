@@ -7,6 +7,11 @@
  *   brain:mobbin ingest            read new Mobbin results from every transcript
  *   brain:mobbin search <terms>    local results, closest first (--tool, --platform)
  *   brain:mobbin stats             searches kept, calls answered locally
+ *   brain:mobbin gallery [--no-open] every kept screen on one page, filter by app,
+ *                                  platform, tag or words (gallery.html in the library)
+ *   brain:mobbin tag <id> <tag…> [--note text]   your own tags and a note on a
+ *                                  screen, flow or whole search (id or its prefix)
+ *   brain:mobbin untag <id> [tag…] drop those tags, or all of them and the note
  *   brain:mobbin hook              PreToolUse for mcp__*Mobbin__search_*: a close
  *                                  earlier search answers instead (the call is
  *                                  denied with the local result); the same call
@@ -167,6 +172,7 @@ export function ingest({ env = process.env } = {}) {
   if (added.length) {
     fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(path.join(dir, 'entries.jsonl'), added.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    if (fs.existsSync(path.join(dir, 'gallery.html'))) writeGallery(env);
   }
   writeJson(scanFile, scan);
   return added;
@@ -187,9 +193,10 @@ function keepImages(entry, dir) {
 }
 
 /** Earlier searches closest to `query`, same tool and platform when given. */
-export function search(entries, query, { tool = null, platform = null, min = 0.2, limit = 5 } = {}) {
+export function search(entries, query, { tool = null, platform = null, tag = null, tags = {}, min = 0.2, limit = 5 } = {}) {
   return entries
     .filter((e) => (!tool || e.tool === tool) && (!platform || !e.platform || e.platform === platform))
+    .filter((e) => !tag || tagsOf(e, tags).includes(tag))
     .map((e) => ({ entry: e, score: similarity(query, e.query) }))
     .filter((h) => h.score >= min)
     .sort((a, b) => b.score - a.score || String(b.entry.ts).localeCompare(String(a.entry.ts)))
@@ -204,6 +211,113 @@ export function renderHit({ entry, score }) {
   });
   if (entry.images?.length && entry.items.length !== entry.images.length) lines.push(`  screenshots: ${entry.images.join(', ')}`);
   return lines.join('\n');
+}
+
+/** Tags and notes by id: an entry (the search) or one of its items (a screen, a flow). */
+export const loadTags = (env = process.env) => readJson(path.join(libDir(env), 'tags.json'), {});
+
+/** Every tag on an entry or on any of its items. */
+export function tagsOf(entry, tags) {
+  return [...new Set([entry.id, ...entry.items.map((i) => i.id)].flatMap((id) => tags[id]?.tags || []))];
+}
+
+/** The one id among entries and items that `ref` names or starts; null when none or several. */
+export function resolveId(entries, ref) {
+  const ids = new Set(entries.flatMap((e) => [e.id, ...e.items.map((i) => i.id)]).filter(Boolean));
+  if (ids.has(ref)) return ref;
+  const hits = [...ids].filter((id) => ref && id.startsWith(ref));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+export function tag(tags, id, add = [], note = null) {
+  const t = tags[id] || { tags: [] };
+  t.tags = [...new Set([...t.tags, ...add.map((x) => x.toLowerCase())])];
+  if (note != null) t.note = note;
+  tags[id] = t;
+  return tags;
+}
+
+export function untag(tags, id, drop = []) {
+  if (!tags[id]) return tags;
+  if (!drop.length) { delete tags[id]; return tags; }
+  tags[id].tags = tags[id].tags.filter((x) => !drop.includes(x.toLowerCase()));
+  if (!tags[id].tags.length && !tags[id].note) delete tags[id];
+  return tags;
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/**
+ * One card per screenshot: when a search returned as many images as items,
+ * each image is its item; otherwise the images belong to the search as a whole.
+ */
+export function galleryCards(entries, tags, dir) {
+  const cards = [];
+  for (const e of entries) {
+    const paired = e.images?.length && e.images.length === e.items.length;
+    const imgs = e.images || [];
+    imgs.forEach((img, i) => {
+      const item = paired ? e.items[i] : null;
+      const own = item ? tags[item.id] : null;
+      cards.push({
+        id: item?.id || e.id,
+        img: path.relative(dir, img),
+        app: item?.app || [...new Set(e.items.map((x) => x.app).filter(Boolean))].slice(0, 3).join(', '),
+        name: item?.name || '',
+        url: item?.url || e.items[i]?.url || '',
+        query: e.query, tool: e.tool, platform: e.platform || 'any', ts: String(e.ts || '').slice(0, 10), project: e.project,
+        tags: [...new Set([...(own?.tags || []), ...(tags[e.id]?.tags || [])])],
+        note: own?.note || tags[e.id]?.note || ''
+      });
+    });
+  }
+  return cards.sort((a, b) => b.ts.localeCompare(a.ts));
+}
+
+export function renderGallery(cards) {
+  const data = JSON.stringify(cards).replace(/</g, '\\u003c');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mobbin Library</title><style>
+:root{--bg:#f4f2ee;--fg:#111;--mute:#6b6b6b;--line:#d6d2ca;--acc:#ff5a1f;--card:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#0b0b0b;--fg:#f2f2f2;--mute:#8a8a8a;--line:#262626;--card:#141414}}
+*{box-sizing:border-box;border-radius:0}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif}
+header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:2px solid var(--fg);padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+h1{margin:0 12px 0 0;font-size:15px;letter-spacing:.12em;text-transform:uppercase}h1 b{color:var(--acc)}
+input,select{font:inherit;background:var(--card);color:var(--fg);border:1px solid var(--line);padding:7px 9px;min-width:0}input{flex:1 1 220px}
+#count{color:var(--mute);font-variant-numeric:tabular-nums}
+main{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
+.c{background:var(--card);display:flex;flex-direction:column}.c img{width:100%;aspect-ratio:9/19.5;object-fit:cover;object-position:top;display:block;background:var(--bg);cursor:zoom-in}
+.m{padding:9px 10px 11px;display:flex;flex-direction:column;gap:3px}.a{font-weight:650}.a a{color:inherit;text-decoration:none}.a a:hover{color:var(--acc)}
+.q,.n{color:var(--mute);font-size:12px}.n{color:var(--fg)}.t{display:flex;flex-wrap:wrap;gap:4px}.t span{font-size:11px;border:1px solid var(--acc);color:var(--acc);padding:0 5px;cursor:pointer}
+.id{font:11px ui-monospace,monospace;color:var(--mute);cursor:copy;border:0;background:none;padding:0;text-align:left}.id:hover{color:var(--acc)}
+#z{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;align-items:center;justify-content:center;z-index:5;cursor:zoom-out}#z img{max-height:94vh;max-width:94vw}
+.e{padding:48px 16px;color:var(--mute)}
+</style></head><body>
+<header><h1>Mobbin <b>Library</b></h1><input id="f" placeholder="app, words, tag…" autofocus>
+<select id="p"><option value="">all platforms</option></select><select id="g"><option value="">all tags</option></select><span id="count"></span></header>
+<main id="m"></main><div id="z"><img alt=""></div>
+<script>
+const C=${data};const $=(s)=>document.querySelector(s);const E=(s)=>String(s??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+for(const p of [...new Set(C.map(c=>c.platform))].sort())$('#p').add(new Option(p,p));
+for(const t of [...new Set(C.flatMap(c=>c.tags))].sort())$('#g').add(new Option(t,t));
+function draw(){const w=$('#f').value.toLowerCase().split(/\\s+/).filter(Boolean),p=$('#p').value,g=$('#g').value;
+const v=C.filter(c=>(!p||c.platform===p)&&(!g||c.tags.includes(g))&&w.every(x=>[c.app,c.name,c.query,c.note,c.project,...c.tags].join(' ').toLowerCase().includes(x)));
+$('#count').textContent=v.length+' / '+C.length+' screens';
+$('#m').innerHTML=v.length?v.map(c=>'<div class="c"><img loading="lazy" src="'+E(c.img)+'" alt="'+E(c.app+' '+c.name)+'"><div class="m"><div class="a">'+(c.url?'<a href="'+E(c.url)+'" target="_blank" rel="noopener">'+E(c.app||'—')+'</a>':E(c.app||'—'))+(c.name?' · '+E(c.name):'')+'</div><div class="q">“'+E(c.query)+'” · '+E(c.platform)+' · '+E(c.ts)+'</div>'+(c.note?'<div class="n">'+E(c.note)+'</div>':'')+(c.tags.length?'<div class="t">'+c.tags.map(t=>'<span data-t="'+E(t)+'">'+E(t)+'</span>').join('')+'</div>':'')+'<button class="id" title="copy the tag command" data-id="'+E(c.id)+'">'+E(c.id.slice(-8))+'</button></div></div>').join(''):'<div class="e">nothing matches</div>';}
+$('#m').addEventListener('click',e=>{const t=e.target;if(t.dataset.t){$('#g').value=t.dataset.t;draw();}
+else if(t.dataset.id){navigator.clipboard?.writeText('leanlamp x mobbin tag '+t.dataset.id+' ').then(()=>{t.textContent='copied';setTimeout(draw,900);}).catch(()=>{});}
+else if(t.tagName==='IMG'){$('#z img').src=t.src;$('#z').style.display='flex';}});
+$('#z').addEventListener('click',()=>{$('#z').style.display='none';});
+for(const s of ['#f','#p','#g'])$(s).addEventListener('input',draw);draw();
+</script></body></html>`;
+}
+
+export function writeGallery(env = process.env) {
+  const dir = libDir(env);
+  const file = path.join(dir, 'gallery.html');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, renderGallery(galleryCards(loadEntries(env), loadTags(env), dir)));
+  return file;
 }
 
 const retryKey = (session, tool, input) => crypto.createHash('sha256').update(`${session}\0${tool}\0${JSON.stringify(input)}`).digest('hex').slice(0, 16);
@@ -271,15 +385,35 @@ async function main(argv) {
   }
   if (cmd === 'search') {
     const opt = (f) => { const i = rest.indexOf(f); return i >= 0 ? rest.splice(i, 2)[1] : null; };
-    const tool = opt('--tool'), platform = opt('--platform');
+    const tool = opt('--tool'), platform = opt('--platform'), tagged = opt('--tag');
     ingest({ env });
-    const hits = search(loadEntries(env), rest.join(' '), { tool, platform, limit: 5 });
+    const hits = search(loadEntries(env), rest.join(' '), { tool, platform, tag: tagged, tags: loadTags(env), min: tagged && !rest.length ? 0 : 0.2, limit: 5 });
     if (!hits.length) { console.log('nothing close in the Mobbin library'); return 1; }
     console.log(hits.map(renderHit).join('\n\n'));
     return 0;
   }
   if (cmd === 'stats') { stats(env); return 0; }
-  console.error('usage: brain:mobbin ingest | search <terms> [--tool search_screens] [--platform ios] | stats | hook');
+  if (cmd === 'gallery') {
+    ingest({ env });
+    const file = writeGallery(env);
+    console.log(file);
+    if (!rest.includes('--no-open') && process.platform === 'darwin') (await import('node:child_process')).spawnSync('open', [file]);
+    return 0;
+  }
+  if (cmd === 'tag' || cmd === 'untag') {
+    const i = rest.indexOf('--note');
+    const note = i >= 0 ? rest.splice(i, 2)[1] ?? '' : null;
+    const [ref, ...words] = rest;
+    const entries = loadEntries(env);
+    const id = resolveId(entries, ref || '');
+    if (!id) { console.error(`no single screen, flow or search starts with "${ref || ''}"`); return 1; }
+    const tags = cmd === 'tag' ? tag(loadTags(env), id, words, note) : untag(loadTags(env), id, words);
+    writeJson(path.join(libDir(env), 'tags.json'), tags);
+    if (fs.existsSync(path.join(libDir(env), 'gallery.html'))) writeGallery(env);
+    console.log(`${id}: ${(tags[id]?.tags || []).join(', ') || 'no tags'}${tags[id]?.note ? ` — ${tags[id].note}` : ''}`);
+    return 0;
+  }
+  console.error('usage: brain:mobbin ingest | search <terms> [--tool search_screens] [--platform ios] [--tag t] | gallery [--no-open] | tag <id> <tag…> [--note text] | untag <id> [tag…] | stats | hook');
   return 2;
 }
 
