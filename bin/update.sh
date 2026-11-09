@@ -48,7 +48,7 @@ else
   if [ -n "${PROJECT_BRAIN_REMOTE:-}" ]; then
     remote="$PROJECT_BRAIN_REMOTE"
   else
-    canonical_url="${PROJECT_BRAIN_UPSTREAM_URL:-https://github.com/nicenoize/project-brain.git}"
+    canonical_url="${PROJECT_BRAIN_UPSTREAM_URL:-https://github.com/nicenoize/leanlamp.git}"
     remote="${PROJECT_BRAIN_UPSTREAM_REMOTE:-project-brain-upstream}"
     if git -C "$SKILL_DIR" remote get-url "$remote" >/dev/null 2>&1; then
       git -C "$SKILL_DIR" remote set-url "$remote" "$canonical_url"

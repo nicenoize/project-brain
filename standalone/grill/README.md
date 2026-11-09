@@ -23,19 +23,19 @@ Make your coding agent defend its plan **before** it writes a line of code.
 With the [`skills` CLI](https://github.com/vercel-labs/skills):
 
 ```sh
-npx skills add https://github.com/nicenoize/project-brain/tree/main/standalone/grill
+npx skills add https://github.com/nicenoize/leanlamp/tree/main/standalone/grill
 ```
 
 Or select it from the repo by name:
 
 ```sh
-npx skills add nicenoize/project-brain --skill grill
+npx skills add nicenoize/leanlamp --skill grill
 ```
 
 Or manually — copy this directory into your skills folder:
 
 ```sh
-git clone --depth 1 https://github.com/nicenoize/project-brain /tmp/pb &&
+git clone --depth 1 https://github.com/nicenoize/leanlamp /tmp/pb &&
   mkdir -p ~/.claude/skills && cp -r /tmp/pb/standalone/grill ~/.claude/skills/grill
 ```
 
@@ -49,4 +49,4 @@ MIT — see [LICENSE](./LICENSE).
 
 ---
 
-Extracted from [Project Brain](https://github.com/nicenoize/project-brain) — the shared work-state layer for parallel coding agents.
+Extracted from [Project Brain](https://github.com/nicenoize/leanlamp) — the shared work-state layer for parallel coding agents.

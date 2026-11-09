@@ -302,8 +302,5 @@ things it does do:
 | Blast shows only inferred edges | Normal outside TypeScript projects — history edges still hold |
 | Board looks stale | The freshness line in the header tells you the state age; SSE reconnects on file change |
 
-Related: [`docs/strategy-agent-ops.md`](strategy-agent-ops.md) (why this exists),
-[`docs/design-direction.md`](design-direction.md) (how it is designed),
-[`DESIGN.md`](../DESIGN.md) (the visual system),
-[`.project-brain/decisions/0028`](../.project-brain/decisions/0028-commercial-agent-ops-direction.md)
-and [`0029`](../.project-brain/decisions/0029-ambient-answer-hook.md).
+Related: [`DESIGN.md`](../DESIGN.md) (the visual system) and
+[`brain-architecture.md`](brain-architecture.md) (the data flow underneath).

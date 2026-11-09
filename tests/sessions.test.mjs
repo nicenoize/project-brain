@@ -86,7 +86,7 @@ test('pick matches by pid, id prefix, then a word of the name or project', () =>
   ];
   assert.deepEqual(pick(list, '2').map((s) => s.pid), [2]);
   assert.deepEqual(pick(list, 'aaa').map((s) => s.pid), [1]);
-  assert.deepEqual(pick(list, 'club').map((s) => s.pid), [2]);
+  assert.deepEqual(pick(list, 'shop').map((s) => s.pid), [2]);
   assert.deepEqual(pick(list, ''), []);
 });
 

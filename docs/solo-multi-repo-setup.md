@@ -7,7 +7,7 @@ same repos without brain discipline.
 
 > Sweet spot: 3–20 repos, 1 brain user, AI agents (Claude / Cursor / Codex) as
 > first-class collaborators. If your team grows past ~5 brain users you'll want
-> to revisit federation; see [`vision-constellation.md`](vision-constellation.md).
+> to revisit federation.
 
 ## TL;DR
 
@@ -52,7 +52,7 @@ git clone git@github.com:org/platform-k8s.git
 git clone git@github.com:org/shared-protos.git
 
 # Get the brain itself
-git clone git@github.com:nicenoize/project-brain.git
+git clone git@github.com:nicenoize/leanlamp.git
 mkdir -p skills
 ln -sfn ../project-brain skills/project-brain
 

@@ -128,7 +128,7 @@ npm run brain:skill-audit -- https://github.com/owner/skill  # scan a remote ski
 npm run brain:skill-audit -- ./skill --max-risk 40 --json    # gate: exit 1 if risk > 40
 ```
 
-First primitive of the trust axis / Constellation federation (`docs/vision-constellation.md`): verify-before-trust for any skill or brain fragment entering your brain. Dogfood it before adopting ecosystem skills (caveman, drawio-skill, ponytail, improve).
+First primitive of the trust axis: verify-before-trust for any skill or brain fragment entering your brain. Dogfood it before adopting ecosystem skills (caveman, drawio-skill, ponytail, improve).
 
 ### Adversarial pre-implementation grill (`brain:grill`)
 
@@ -397,7 +397,7 @@ When asked to update the reusable skill:
 npm run brain:update-skill
 ```
 
-Without a configured upstream branch (`git branch -u …`), this fast-forwards from **https://github.com/nicenoize/project-brain** via a Git remote named `project-brain-upstream` (set `PROJECT_BRAIN_UPSTREAM_URL` or `PROJECT_BRAIN_UPSTREAM_REMOTE` to override, or set `PROJECT_BRAIN_REMOTE` to use an existing remote such as `origin`).
+Without a configured upstream branch (`git branch -u …`), this fast-forwards from **https://github.com/nicenoize/leanlamp** via a Git remote named `project-brain-upstream` (set `PROJECT_BRAIN_UPSTREAM_URL` or `PROJECT_BRAIN_UPSTREAM_REMOTE` to override, or set `PROJECT_BRAIN_REMOTE` to use an existing remote such as `origin`).
 
 When asked to guard/check:
 

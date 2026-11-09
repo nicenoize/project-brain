@@ -5,7 +5,7 @@ This is the global Project Brain package: shared scripts, templates, conventions
 ## Getting set up
 
 ```bash
-git clone git@github.com:nicenoize/project-brain.git
+git clone git@github.com:nicenoize/leanlamp.git
 cd project-brain
 npm install
 npm test
@@ -112,7 +112,7 @@ Two entry points, one rule of thumb: **`update.sh` must refresh everything a con
 
 ## Reporting issues
 
-Open an issue at <https://github.com/nicenoize/project-brain/issues> with:
+Open an issue at <https://github.com/nicenoize/leanlamp/issues> with:
 
 - The consuming repo's setup style (symlink / submodule / vendored).
 - `node --version`, OS, and store backend (`BRAIN_STORE`).

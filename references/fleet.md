@@ -101,4 +101,4 @@ BRAIN_SPEC_BOOST=0.04                          additive boost on spec/plan/tasks
 PROJECT_BRAIN_SKIP_CLAUDE_COMMANDS=1           skip /brain-speckit-* command install during brain:update-skill
 ```
 
-See [`modules/spec-kit.md`](.project-brain/modules/spec-kit.md) for the full module overview and [`decisions/0012-spec-kit-integration.md`](.project-brain/decisions/0012-spec-kit-integration.md) for the rationale.
+

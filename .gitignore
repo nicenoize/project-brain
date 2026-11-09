@@ -28,3 +28,9 @@ ui/node_modules/
 .impeccable/review/
 .obsidian/
 .impeccable/questions/
+
+# kept in the private working repo, never published
+/.project-brain/
+/site/
+/.impeccable/
+/PRODUCT.md
