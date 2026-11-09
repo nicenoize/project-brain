@@ -65,6 +65,8 @@ jobs:
         working-directory: host
         env:
           BRAIN_QUIET: '1'
+          # setup builds an index only on opt-in (ADR 0039); this job tests that path
+          BRAIN_INDEX: '1'
           # offline-friendly: use the local provider, no OpenAI key needed
           BRAIN_EMBED_PROVIDER: local
         run: bash skills/project-brain/bin/setup.sh
