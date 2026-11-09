@@ -164,7 +164,7 @@ jobs:
     # the notch app: its self-test decodes the engine's real state file
     # (companion/Tests/Fixtures, kept current by tests/state-contract.test.mjs),
     # then the install path builds the app the way `leanlamp open` does
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
