@@ -137,3 +137,89 @@ test('loss guards: re-reads after a compaction count only for files read before 
   foldLoss(rep2, [call('a', 'Read', { file_path: '/r/a.ts' }), { type: 'system', subtype: 'compact_boundary', compactMetadata: {} }, ...filler, call('z', 'Read', { file_path: '/r/a.ts' }), res('z', 'late')]);
   assert.equal(rep2.loss.rereadCalls, 0);
 });
+
+function at(rec, iso) { return { ...rec, timestamp: iso }; }
+const boundary = (iso, meta = {}) => ({ type: 'system', subtype: 'compact_boundary', timestamp: iso, compactMetadata: { trigger: 'auto', preTokens: 300_000, postTokens: 50_000, ...meta } });
+
+test('addTranscript: untilMs closes the window; earlier records still set the clocks', async () => {
+  const { addTranscript: add, emptyReport: empty, summarize: sum } = await import('../scripts/brain-tokens.mjs');
+  const u = (cw) => ({ input_tokens: 1, cache_creation_input_tokens: cw, cache_read_input_tokens: 100, output_tokens: 1 });
+  const records = [
+    at(assistant('a', u(10)), '2026-10-01T10:00:00Z'),
+    at(assistant('b', u(20)), '2026-10-02T10:00:00Z'),
+    at(assistant('c', u(40)), '2026-10-03T10:00:00Z')
+  ];
+  const s = sum(add(empty(), records, { sinceMs: Date.parse('2026-10-02T00:00:00Z'), untilMs: Date.parse('2026-10-03T00:00:00Z') }));
+  assert.equal(s.requests, 1);
+  assert.equal(s.usage.cacheWrite, 20);
+  // 'b' follows 'a' by a day: the cache had expired, so its write counts as after a pause.
+  assert.equal(s.writes.afterPause, 20);
+});
+
+test('cache writes are attributed to their cause: compaction, pause, new content', async () => {
+  const { addTranscript: add, emptyReport: empty, summarize: sum } = await import('../scripts/brain-tokens.mjs');
+  const u = (cw) => ({ input_tokens: 0, cache_creation_input_tokens: cw, cache_read_input_tokens: 0, output_tokens: 0 });
+  const records = [
+    at(assistant('r1', u(1000)), '2026-10-12T10:00:00Z'),
+    boundary('2026-10-12T10:01:00Z', { precomputed: true, durationMs: 10 }),
+    at(assistant('r2', u(50_000)), '2026-10-12T10:01:05Z'),
+    at(assistant('r3', u(300)), '2026-10-12T10:02:00Z'),
+    at(assistant('r4', u(60_000)), '2026-10-12T12:00:00Z')
+  ];
+  const s = sum(add(empty(), records));
+  assert.equal(s.requests, 4);
+  assert.deepEqual(
+    { c: s.writes.afterCompaction * 4, p: s.writes.afterPause * 4, n: s.writes.steady * 4 },
+    { c: 50_000, p: 60_000, n: 1300 }
+  );
+  assert.equal(s.compaction.count, 1);
+  assert.equal(s.compaction.precomputedShare, 1);
+  assert.equal(s.compaction.avgWaitSeconds, 0.01);
+});
+
+test('cost per request weighs usage by list-price ratios', async () => {
+  const { addTranscript: add, emptyReport: empty, summarize: sum, COST_WEIGHTS } = await import('../scripts/brain-tokens.mjs');
+  assert.deepEqual({ ...COST_WEIGHTS }, { input: 1, cacheRead: 0.1, cacheWrite: 2, output: 5 });
+  const s = sum(add(empty(), [assistant('x', { input_tokens: 10, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 20 })]));
+  // 10 + 0.1·1000 + 2·100 + 5·20 = 410; input side drops the 100 of output.
+  assert.equal(s.cost.perRequest, 410);
+  assert.equal(s.cost.inputSidePerRequest, 310);
+  assert.equal(s.context.mean, 1110);
+});
+
+test('compareSummaries: relative deltas for amounts, points for shares, unknown stays unknown', async () => {
+  const { addTranscript: add, emptyReport: empty, summarize: sum, compareSummaries } = await import('../scripts/brain-tokens.mjs');
+  const big = sum(add(empty(), [assistant('b', { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 600_000, output_tokens: 0 })]));
+  const small = sum(add(empty(), [assistant('s', { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 300_000, output_tokens: 0 })]));
+  const rows = Object.fromEntries(compareSummaries(big, small).map((r) => [r.key, r]));
+  assert.equal(rows.ctxMean.delta, -0.5);
+  assert.equal(rows.ctxMean.better, true);
+  assert.equal(rows.over500k.delta, -1, 'a share moves by points: 100 % → 0 %');
+  assert.equal(rows.requests.delta, null, 'window lengths differ, so request counts get no delta');
+  assert.equal(rows.compactionWait.before, null);
+  assert.equal(rows.compactionWait.delta, null);
+});
+
+test('--compare --until closes the after window, so a published comparison stays reproducible', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tokens-until-'));
+  fs.mkdirSync(path.join(root, '-r-app'));
+  const rec = (iso, id) => JSON.stringify({ type: 'assistant', timestamp: iso, requestId: id, message: { id, usage: { input_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 9000, output_tokens: 10 } } });
+  fs.writeFileSync(path.join(root, '-r-app', 's.jsonl'), [rec('2026-10-10T10:00:00Z', 'a'), rec('2026-10-14T10:00:00Z', 'b'), rec('2026-10-25T10:00:00Z', 'c')].join('\n') + '\n');
+  const script = fileURLToPath(new URL('../scripts/brain-tokens.mjs', import.meta.url));
+  const run = (...extra) => {
+    const r = spawnSync(process.execPath, [script, '--compare', '2026-10-12', '--all-projects', '--root', root, '--json', ...extra], { encoding: 'utf8', env: { ...process.env, BRAIN_USAGE_LOG: '0' } });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  assert.equal(run().after.requests, 2, 'open-ended: everything since the cut');
+  const fixed = run('--until', '2026-10-21');
+  assert.equal(fixed.after.requests, 1, 'the request after --until is left out');
+  assert.match(fixed.scope, /until 2026-10-21/);
+  const bad = spawnSync(process.execPath, [script, '--compare', '2026-10-12', '--until', '2026-10-01', '--root', root], { encoding: 'utf8' });
+  assert.equal(bad.status, 1, '--until before the cut is refused');
+});

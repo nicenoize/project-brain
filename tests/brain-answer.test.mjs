@@ -389,14 +389,15 @@ function makeRepo({ withLease = true, withBrain = true } = {}) {
 function runCli(dir, args, env = {}) {
   return spawnSync(process.execPath, [ANSWER_SCRIPT, ...args], {
     cwd: dir, encoding: 'utf8',
-    env: { ...process.env, BRAIN_ROOT: dir, BRAIN_USAGE_LOG: '0', BRAIN_ACTOR: '', ...env }
+    env: { ...process.env, BRAIN_ROOT: dir, BRAIN_USAGE_LOG: '0', BRAIN_ACTOR: '', BRAIN_ANSWER_HOOK: '1', ...env }
   });
 }
 
+// the hook is opt-in (BRAIN_ANSWER_HOOK=1); these tests exercise the opted-in path unless they override it
 function runHook(dir, stdin, env = {}) {
   return spawnSync(process.execPath, [HOOK_SCRIPT], {
     cwd: dir, encoding: 'utf8', input: stdin,
-    env: { ...process.env, BRAIN_ROOT: dir, BRAIN_USAGE_LOG: '0', BRAIN_ACTOR: '', ...env }
+    env: { ...process.env, BRAIN_ROOT: dir, BRAIN_USAGE_LOG: '0', BRAIN_ACTOR: '', BRAIN_ANSWER_HOOK: '1', ...env }
   });
 }
 

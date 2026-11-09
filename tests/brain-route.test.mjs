@@ -273,7 +273,7 @@ function actionableRepo() {
   return cwd;
 }
 const runHook = (cwd, env = {}) => spawnSync(process.execPath, [ROUTE_SCRIPT, '--hook'], {
-  cwd, encoding: 'utf8', input: '{"session_id":"t1"}', env: { ...process.env, ...env }
+  cwd, encoding: 'utf8', input: '{"session_id":"t1"}', env: { ...process.env, BRAIN_HINTS: '1', ...env }
 });
 
 test('CLI dedupe: second identical call in the same session emits nothing', () => {
@@ -316,7 +316,7 @@ test('CLI: brain:route --hook emits a UserPromptSubmit JSON envelope or nothing'
   // An open finding makes the hook actionable (improve next).
   fs.writeFileSync(path.join(cwd, '.project-brain', 'findings', 'bug.md'),
     '---\ntype: finding\ntitle: Bug\ncategory: correctness\nstatus: open\nimpact: 4\ncreated: x\nupdated: x\nactor: \nmodule: \nsymbols: \nsources:\n---\nbody\n');
-  const r = spawnSync(process.execPath, [ROUTE_SCRIPT, '--hook'], { cwd, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [ROUTE_SCRIPT, '--hook'], { cwd, encoding: 'utf8', env: { ...process.env, BRAIN_HINTS: '1' } });
   assert.equal(r.status, 0, r.stderr); // never blocks
   if (r.stdout.trim()) {
     const env = JSON.parse(r.stdout);
@@ -370,4 +370,13 @@ test('budget: the route hook worst case fits BUDGETS.routeHookBytes untruncated'
   assert.equal(capHookText(text, BUDGETS.routeHookBytes), text, 'no truncation at the budget');
   assert.ok(Buffer.byteLength(text, 'utf8') <= BUDGETS.routeHookBytes,
     `worst case ${Buffer.byteLength(text, 'utf8')} B > ${BUDGETS.routeHookBytes} B`);
+});
+
+test('CLI: BRAIN_HINTS=0 silences the routing hook on an actionable repo', () => {
+  const cwd = actionableRepo();
+  const off = runHook(cwd, { BRAIN_HINTS: '0', BRAIN_HOOK_DEDUPE: '0' });
+  assert.equal(runHook(cwd, { BRAIN_HINTS: '', BRAIN_HOOK_DEDUPE: '0' }).stdout.trim(), '', 'hints are opt-in: unset is silent');
+  assert.equal(off.status, 0, off.stderr);
+  assert.equal(off.stdout.trim(), '', 'no hint with BRAIN_HINTS=0');
+  assert.ok(runHook(cwd, { BRAIN_HOOK_DEDUPE: '0' }).stdout.trim(), 'unset: as before');
 });

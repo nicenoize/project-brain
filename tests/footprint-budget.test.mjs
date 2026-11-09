@@ -6,7 +6,7 @@
  * audit and cited by docs/eval-methodology.md.
  *
  * Asserted surfaces:
- *   (a) SKILL.md core ≤ BUDGETS.skillBytes (≈3k tok, len/4)
+ *   (a) SKILL.md core ≤ BUDGETS.skillBytes (≈1.5k tok, len/4)
  *   (b) brain-state-digest output ≤ BUDGETS.stateDigestBytes (≈2k tok) even on
  *       a worst-case active_state.md (30 workstreams, 20 leases, long notes) —
  *       both through the pure core and end-to-end through the real CLI
@@ -270,9 +270,9 @@ test('recentSessionPointers: newest 3, lexical-chronological, missing dir → []
 });
 
 test('BUDGETS: documents the agreed hard budgets (docs cite these numbers)', () => {
-  assert.equal(BUDGETS.skillBytes, 12000); // ≈3k tok
+  assert.equal(BUDGETS.skillBytes, 6000); // ≈1.5k tok (the command map lives in references/command-map.md)
   assert.equal(BUDGETS.stateDigestBytes, 8000); // ≈2k tok
-  assert.equal(estimateTokens(BUDGETS.skillBytes), 3000);
+  assert.equal(estimateTokens(BUDGETS.skillBytes), 1500);
   assert.equal(estimateTokens(BUDGETS.stateDigestBytes), 2000);
 });
 

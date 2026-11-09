@@ -104,3 +104,19 @@ test('limitOnnxThreads: no cap or no runtime means nothing is patched', () => {
   assert.equal(limitOnnxThreads(null, 2), false);
   assert.equal(limitOnnxThreads({}, 2), false);
 });
+
+test('no model installed or BRAIN_EMBED_PROVIDER=none: the lexical provider, and retrieve takes the keyword path', async () => {
+  const { openEmbedder, LexicalProvider } = await import('../scripts/embed.mjs');
+  const e = openEmbedder({ provider: 'none' });
+  assert.ok(e instanceof LexicalProvider);
+  assert.equal(e.lexical, true);
+  assert.deepEqual(await e.embedBatch(['a', 'b']), [[0], [0]]);
+  const { retrieve } = await import('../scripts/retrieval.mjs');
+  const records = [
+    { id: '1', file: 'src/billing.ts', type: 'code', text: 'invoice total with tax per line', vector: [0] },
+    { id: '2', file: 'src/retry.ts', type: 'code', text: 'retry backoff seconds', vector: [0] }
+  ];
+  const store = { getAll: async () => records, search: async () => { throw new Error('a lexical index has no vectors to search'); } };
+  const found = await retrieve('tax on invoice lines', store, e, { topK: 2 });
+  assert.equal(found[0].file, 'src/billing.ts');
+});

@@ -23,10 +23,10 @@ npm install
 npm run brain:init
 npm run brain:install-hooks
 
-# brain:index can legitimately fail on a fresh, empty repo with no source files,
-# but a hard failure here usually means a misconfigured embedder or store and
-# the user needs to see it. Surface non-zero exit codes rather than swallowing.
-if ! npm run brain:index; then
+# The search index is opt-in (ADR 0039): hooks keep it fresh only with
+# BRAIN_INDEX=1, and only then does setup build the first one. A hard failure
+# here usually means a misconfigured embedder or store; surface it.
+if [ "${BRAIN_INDEX:-}" = "1" ] && ! npm run brain:index; then
   echo "WARN: brain:index failed. Review the output above; re-run with --force after fixing config."
   exit 1
 fi

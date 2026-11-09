@@ -1,0 +1,128 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { sourceOf, namedCommands, callRuns, createInjectionTracker, mergeInjectionSummaries, FOLLOW_WINDOW } from '../scripts/companion-injections.mjs';
+import { createSessionFold, slimInjections } from '../scripts/brain-companion.mjs';
+
+const T = Date.parse('2026-10-22T10:00:00Z');
+const iso = (ms) => new Date(ms).toISOString();
+const inject = (ms, text, hookName = 'PreToolUse:Bash') => ({ type: 'attachment', timestamp: iso(ms), attachment: { type: 'hook_additional_context', content: [text], hookName, hookEvent: hookName.split(':')[0] } });
+const call = (ms, name, input, extra = {}) => ({ type: 'assistant', timestamp: iso(ms), message: { content: [{ type: 'tool_use', id: `t${ms}`, name, input }] }, ...extra });
+
+test('sources and named commands', () => {
+  assert.equal(sourceOf('Project Brain: this looks like a raw code search…'), 'brain');
+  assert.equal(sourceOf('## Brain: session state after compaction #3'), 'brain');
+  assert.equal(sourceOf('Note from the user, sent from the companion while you were working'), 'companion');
+  assert.equal(sourceOf('[impeccable@1] Design hook scanned …'), 'other');
+  assert.deepEqual(namedCommands('use `npm run brain:search -- "x"` (or brain:ask), or the MCP tool brain_why'), ['search', 'ask', 'why']);
+  assert.deepEqual(namedCommands('nothing here'), []);
+  assert.equal(callRuns({ name: 'Bash', input: { command: 'npm run brain:search -- billing' } }, ['search']), 'search');
+  assert.equal(callRuns({ name: 'mcp__project-brain__brain_why', input: {} }, ['why']), 'why');
+  assert.equal(callRuns({ name: 'Bash', input: { command: 'node scripts/brain-radar.mjs' } }, ['radar']), 'radar');
+  assert.equal(callRuns({ name: 'Bash', input: { command: 'grep -r x' } }, ['search']), null);
+});
+
+test('followed within five calls, missed after, other sources never scored', () => {
+  const t = createInjectionTracker();
+  t.record(inject(T, 'Project Brain: use `npm run brain:search -- "<terms>"` instead of grep'));
+  t.record(call(T + 1, 'Bash', { command: 'grep -r invoice src' }));
+  t.record(call(T + 2, 'Bash', { command: 'npm run brain:search -- invoice' }));
+  t.record(inject(T + 3, 'Project Brain (ambient) — before you edit: next: brain:radar'));
+  for (let i = 0; i < FOLLOW_WINDOW; i++) t.record(call(T + 4 + i, 'Read', { file_path: `/r/${i}.ts` }));
+  t.record(call(T + 20, 'Bash', { command: 'npm run brain:radar' })); // too late
+  t.record(inject(T + 21, '[impeccable@1] scanned a.tsx', 'PostToolUse:Write'));
+  t.record(call(T + 22, 'Bash', { command: 'npm run brain:radar' }, { isSidechain: true }));
+  const s = t.summary();
+  assert.equal(s.count, 3);
+  assert.equal(s.bySource.brain.count, 2);
+  assert.equal(s.bySource.brain.actionable, 2);
+  assert.equal(s.bySource.brain.followed, 1);
+  assert.equal(s.bySource.brain.followedShare, 0.5);
+  assert.equal(s.bySource.other.actionable, 0);
+  assert.deepEqual(s.last.map((i) => i.followed), ['search', false, null]);
+  assert.deepEqual(Object.keys(s.byEvent), ['brain · PreToolUse', 'other · PostToolUse']);
+  const m = mergeInjectionSummaries([s, s, null]);
+  assert.equal(m.count, 6);
+  assert.equal(m.bySource.brain.followedShare, 0.5);
+});
+
+test('the session fold carries what the agent got, slim', () => {
+  const f = createSessionFold();
+  f.feed({ type: 'user', sessionId: 'a', cwd: '/r', timestamp: iso(T), message: { role: 'user', content: 'go' } });
+  f.feed(inject(T + 1, 'Project Brain: about to read a source file directly. brain:search finds it faster. ' + 'x'.repeat(400), 'PreToolUse:Read'));
+  const snap = f.snapshot({ now: T + 2 });
+  assert.equal(snap.injections.count, 1);
+  assert.equal(snap.injections.bySource.brain.count, 1);
+  assert.equal(snap.injections.last[0].text.length, 280);
+  assert.equal(snap.injections.last[0].event, 'PreToolUse:Read');
+  assert.equal(slimInjections({ count: 0 }), null);
+});
+
+test('merging a full summary with a slim one (the state shape) never yields NaN or null numbers', () => {
+  const t = createInjectionTracker();
+  t.record(inject(T, 'Project Brain: use brain:search'));
+  const full = t.summary();
+  const slim = slimInjections(full);
+  const m = mergeInjectionSummaries([full, slim]);
+  assert.equal(m.count, 2);
+  assert.ok(Number.isFinite(m.chars) && Number.isFinite(m.estTokens), JSON.stringify(m));
+  for (const b of Object.values(m.bySource)) for (const v of [b.count, b.chars, b.estTokens, b.actionable, b.followed]) assert.ok(Number.isFinite(v));
+  assert.ok(!JSON.stringify(m).includes('null') || m.bySource.brain.followedShare === null);
+});
+
+import { kindOf } from '../scripts/companion-injections.mjs';
+
+test('only hints are scored: a warm snapshot or an answer that mentions a command is not a hint', () => {
+  assert.equal(kindOf('## Brain: session state after compaction #3 (269k → 72k)\n- next: brain:warm show'), 'state');
+  assert.equal(kindOf('Project Brain (ambient, deterministic) — before you edit:\n- run brain:why first'), 'answer');
+  assert.equal(kindOf('Project Brain: this looks like a raw code search. A fresh semantic index exists: brain:search'), 'hint');
+  assert.equal(kindOf('Project Brain routing (auto-surfaced) — next steps'), 'hint');
+  const t = createInjectionTracker();
+  const att = (text, hookName) => ({ type: 'attachment', timestamp: new Date().toISOString(), attachment: { type: 'hook_additional_context', content: [text], hookName } });
+  t.record(att('## Brain: session state after compaction\n- brain:warm show', 'SessionStart'));
+  t.record(att('Project Brain (ambient, deterministic) — before you edit:\n- brain:why', 'PreToolUse:Edit'));
+  t.record(att('Project Brain: raw search; try brain:search', 'PreToolUse:Bash'));
+  const s = t.summary();
+  assert.equal(s.bySource.brain.count, 3);
+  assert.equal(s.bySource.brain.actionable, 1, 'one of three asks for a command');
+  assert.deepEqual(Object.fromEntries(Object.entries(s.byKind).map(([k, v]) => [k, v.actionable])), { state: 0, answer: 0, hint: 1 });
+});
+
+test('names sources, counts plain SessionStart stdout once, and keeps the biggest by size', async () => {
+  const { createInjectionTracker, nameOf, stdoutIsContext } = await import('../scripts/companion-injections.mjs');
+  assert.equal(nameOf('# Vercel Plugin Session Context\n\nUse…', 'node "${CLAUDE_PLUGIN_ROOT}/hooks/x.mjs"'), 'Vercel Plugin Session Context');
+  assert.equal(nameOf('anything', 'bash /u/.claude/plugins/cache/caveman/caveman/18e/src/hook.sh'), 'caveman');
+  assert.equal(nameOf('=== Project Brain: Active State (digest) ===', ''), 'brain');
+  assert.equal(stdoutIsContext({ type: 'hook_success', hookEvent: 'SessionStart', content: 'plain text' }), true);
+  assert.equal(stdoutIsContext({ type: 'hook_success', hookEvent: 'SessionStart', content: '{"hookSpecificOutput":{}}' }), false);
+  assert.equal(stdoutIsContext({ type: 'hook_success', hookEvent: 'PreToolUse', content: 'plain' }), false);
+  const t = createInjectionTracker();
+  const big = '# Vercel Plugin Session Context\n' + 'x'.repeat(4000);
+  t.record({ type: 'attachment', timestamp: '2026-10-20T10:00:00Z', attachment: { type: 'hook_success', hookName: 'SessionStart:startup', hookEvent: 'SessionStart', content: big, command: 'node inject.mjs' } });
+  t.record({ type: 'attachment', timestamp: '2026-10-20T10:00:00Z', attachment: { type: 'hook_additional_context', hookName: 'SessionStart', hookEvent: 'SessionStart', content: big } });
+  t.record({ type: 'attachment', timestamp: '2026-10-20T10:00:01Z', attachment: { type: 'hook_additional_context', hookName: 'UserPromptSubmit', hookEvent: 'UserPromptSubmit', content: 'CAVEMAN MODE ACTIVE (full).' } });
+  const sum = t.summary();
+  assert.equal(sum.count, 2, 'the double recording counts once');
+  assert.deepEqual(Object.keys(sum.byName), ['Vercel Plugin Session Context', 'CAVEMAN MODE ACTIVE (full)']);
+  assert.equal(sum.byName['Vercel Plugin Session Context'].event, 'SessionStart');
+});
+
+test('pluginHookIndex names the plugin behind a hook command; the switched-on one when two share it', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const { pluginHookIndex, createInjectionTracker } = await import('../scripts/companion-injections.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfg-'));
+  const put = (market, plugin, file, hooks) => { const p = path.join(dir, 'plugins', 'cache', market, plugin, '1.0.0', file); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify({ hooks })); };
+  const cmd = 'node "${CLAUDE_PLUGIN_ROOT}/hooks/inject.mjs"';
+  put('official', 'vercel', 'hooks/hooks.json', { SessionStart: [{ hooks: [{ type: 'command', command: cmd }] }] });
+  put('other', 'vercel-plugin', 'hooks/hooks.json', { SessionStart: [{ hooks: [{ type: 'command', command: cmd }] }] });
+  put('cave', 'caveman', '.claude-plugin/plugin.json', { SessionStart: [{ hooks: [{ type: 'command', command: 'x', statusMessage: 'Loading caveman mode...' }] }] });
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ enabledPlugins: { 'vercel@official': true } }));
+  const idx = pluginHookIndex([dir]);
+  assert.equal(idx.get(cmd), 'vercel@official', 'the enabled one of two');
+  assert.equal(idx.get('Loading caveman mode...'), 'caveman@cave', 'inline hooks in plugin.json count');
+  const t = createInjectionTracker({ plugins: idx });
+  t.record({ type: 'attachment', attachment: { type: 'hook_success', hookEvent: 'SessionStart', content: 'CAVEMAN MODE ACTIVE — level: full', command: 'Loading caveman mode...' } });
+  t.record({ type: 'attachment', attachment: { type: 'hook_additional_context', hookEvent: 'UserPromptSubmit', content: 'CAVEMAN MODE ACTIVE (full). Drop articles.' } });
+  const by = t.summary().byName;
+  assert.equal(by.caveman.count, 2, 'the prompt-time note inherits the plugin from the session-start output');
+  assert.equal(by.caveman.plugin, 'caveman@cave');
+});

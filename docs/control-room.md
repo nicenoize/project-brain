@@ -1,5 +1,10 @@
 # Control Room — the complete guide
 
+> **Legacy surface (2026-10-24).** The product leads with the receipt, session
+> parking and the companion (see the README). The Control Room, leases, briefs
+> and orchestration stay available under `project-brain serve` / `leanlamp x`;
+> our own usage ledger shows they are hardly used, so they get no new work.
+
 The Control Room is the local surface over the brain. It answers the questions
 an agent-manager actually asks, and it lets you act on the answers. Nothing in
 it calls an LLM: every number is computed from your git history and your
@@ -206,7 +211,7 @@ Eight task-shaped tools:
 | `brain_why` | module, governing decisions, recent history for one file |
 | `brain_danger` | per-file danger ranking with receipt |
 | `brain_leases` | who holds what, TTL, conflicts against an actor |
-| `brain_search` | indexed search (degrades to lexical with a warning) |
+| `brain_search` | indexed search (degrades to lexical with a warning); listed only with `BRAIN_INDEX=1` (ADR 0039) |
 | `brain_next` | ranked next actions with auto/human boundary |
 
 Every result carries a **provenance line** and a staleness warning when the
@@ -238,7 +243,12 @@ Rules that make this acceptable rather than annoying (ADR 0029):
   goes first, the lease line never — an unseen lease is the one failure that
   costs real work.
 - **Fails open**: no stdin, no git, no brain → exit 0, emit nothing.
-- Opt out: `BRAIN_ANSWER_HOOK=0`.
+- Opt in: `BRAIN_ANSWER_HOOK=1` (off by default since ADR 0037). This answer is
+  not a hint; the command hints (prompt-time routing and the Bash/Read tool
+  nudges) have their own switch, `BRAIN_HINTS=1`, e.g. as
+  `"env": { "BRAIN_HINTS": "1" }` in a settings file. `leanlamp receipt` shows the three kinds apart: hints (scored:
+  did the agent run the command within five calls?), answers before edits, and
+  the warm state after a compaction.
 
 ---
 

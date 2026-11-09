@@ -1,11 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexableFiles, parseDoc, isFastMode, truthyFrontmatter, filterGitignoredRelativePaths, splitEnv, readHashHandoff } from './common.mjs';
+import { ROOT, BRAIN_DIR, MANIFEST, ensureDir, read, write, sha256, listIndexSet, parseDoc, isFastMode, truthyFrontmatter, splitEnv, readHashHandoff, writeSyncState } from './common.mjs';
 import { dispatchChunker } from './chunk.mjs';
 import { openEmbedder } from './embed.mjs';
 import { openStore } from './store.mjs';
 import { loadTsSemanticContext } from './ts-graph.mjs';
-import { discoverProjects, isFleetMode } from './projects.mjs';
 import { inferType, inferModule, inferFeature, inferDecision, inferSourceKind } from './infer.mjs';
 import { contextualChunksEnabled, situateEmbeddingText, repoLabel } from './contextual.mjs';
 import { rationaleEnabled, extractRationale, buildRationaleRecord } from './rationale.mjs';
@@ -49,6 +48,27 @@ if (process.env.BRAIN_SYNC_LOCK) {
   process.on('SIGTERM', () => { release(); process.exit(143); });
 }
 
+// A background run never gets to take the machine down. brain-sync sets
+// BRAIN_INDEX_MAX_MB for the runs it detaches: over the cap, or when macOS
+// reports critical memory pressure, the run stops without writing a manifest,
+// so the next sync starts over from the same state. memoryUsage's rss misses
+// compressed and swapped pages; heapTotal + external count what was allocated.
+if (Number(process.env.BRAIN_INDEX_MAX_MB) > 0) {
+  const maxMb = Number(process.env.BRAIN_INDEX_MAX_MB);
+  const { memoryPressure } = await import('./procs.mjs');
+  let tick = 0;
+  setInterval(() => {
+    const m = process.memoryUsage();
+    const mb = Math.max(m.rss, m.heapTotal + m.external) / 1048576;
+    const critical = ++tick % 5 === 0 && memoryPressure() === 'critical';
+    if (mb <= maxMb && !critical) return;
+    const reason = critical ? 'macOS reports critical memory pressure' : `over its ${maxMb} MB cap (${Math.round(mb)} MB)`;
+    console.error(`Project Brain index: stopped — ${reason}. Run \`npm run brain:sync\` in the foreground when the machine has room.`);
+    try { writeSyncState({ action: 'aborted', reason, mb: Math.round(mb) }); } catch {}
+    process.exit(75);
+  }, 1000).unref();
+}
+
 let oldManifest = { files: {} };
 try {
   oldManifest = JSON.parse(read(MANIFEST, '{"files":{}}'));
@@ -71,32 +91,11 @@ const store = await openStore({ model: embedder.modelName, dims: embedder.dims, 
 const METADATA_ONLY = { vectors: false };
 
 // Fleet discovery: if ≥ 2 sibling projects (and BRAIN_FLEET_MODE doesn't
-// override), build the file list as the union of per-project listings and
-// remember which project each file belongs to so records get tagged.
-const projects = discoverProjects(ROOT);
-const fleetMode = isFleetMode(projects);
-const projectByFile = new Map();
-let files;
-if (fleetMode) {
-  const all = [];
-  for (const project of projects) {
-    const projAbs = path.join(ROOT, project.dir);
-    const projFiles = filterGitignoredRelativePaths(
-      await listIndexableFiles({ root: projAbs }),
-      { root: projAbs }
-    );
-    for (const f of projFiles) {
-      const fleetRel = path.posix.join(project.dir, f);
-      all.push(fleetRel);
-      projectByFile.set(fleetRel, project.name);
-    }
-  }
-  files = all;
-  if (!process.env.BRAIN_QUIET) {
-    console.log(`Project Brain: fleet mode — ${projects.length} projects (${projects.map(p => p.name).join(', ')})`);
-  }
-} else {
-  files = filterGitignoredRelativePaths(await listIndexableFiles());
+// override), the file list is the union of per-project listings, and each
+// file remembers its project so records get tagged (common.mjs listIndexSet).
+const { files, projects, fleetMode, projectByFile } = await listIndexSet();
+if (fleetMode && !process.env.BRAIN_QUIET) {
+  console.log(`Project Brain: fleet mode — ${projects.length} projects (${projects.map(p => p.name).join(', ')})`);
 }
 
 const indexableSet = new Set(files);
@@ -302,7 +301,8 @@ existingVectorByChunkSha.clear();
 if (reuseVectors && (reuseStats.reused || reuseStats.embedded)) {
   const total = reuseStats.reused + reuseStats.embedded;
   const pct = total ? Math.round((reuseStats.reused / total) * 100) : 0;
-  console.log(`Project Brain: embedded ${reuseStats.embedded} new chunks, reused ${reuseStats.reused} (${pct}% cache hit).`);
+  if (embedder.lexical) console.log(`Project Brain: indexed ${reuseStats.embedded} new chunks for keyword search (no embedding model installed).`);
+  else console.log(`Project Brain: embedded ${reuseStats.embedded} new chunks, reused ${reuseStats.reused} (${pct}% cache hit).`);
 }
 
 const dirtyFiles = new Set([...changedFiles, ...deletedFiles]);

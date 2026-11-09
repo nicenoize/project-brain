@@ -241,9 +241,9 @@ test('tools/list returns every tool with valid JSON schemas', async () => {
   // at the number instead of the change.
   assert.deepEqual(tools.map((t) => t.name).sort(), [
     'brain_blast', 'brain_danger', 'brain_leases', 'brain_next',
-    'brain_outline', 'brain_overview', 'brain_recall', 'brain_risk', 'brain_search',
+    'brain_outline', 'brain_overview', 'brain_recall', 'brain_risk',
     'brain_status', 'brain_why'
-  ]);
+  ], 'brain_search is opt-in (BRAIN_INDEX=1, ADR 0039)');
   for (const t of tools) {
     assert.ok(t.description && t.description.length > 20, `${t.name} needs a real description`);
     assert.equal(t.inputSchema.type, 'object', `${t.name} schema must be an object schema`);
@@ -259,7 +259,9 @@ test('tools/list returns every tool with valid JSON schemas', async () => {
   }
   // Required args are declared where the tool cannot work without them.
   assert.deepEqual(tools.find((t) => t.name === 'brain_why').inputSchema.required, ['file']);
-  assert.deepEqual(tools.find((t) => t.name === 'brain_search').inputSchema.required, ['query']);
+  const { TOOLS, activeTools } = await import('../scripts/brain-mcp.mjs');
+  assert.deepEqual(TOOLS.find((t) => t.name === 'brain_search').inputSchema.required, ['query']);
+  assert.ok(activeTools({ BRAIN_INDEX: '1' }).some((t) => t.name === 'brain_search'));
 });
 
 test('unknown method → -32601, server stays alive', async () => {

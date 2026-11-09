@@ -94,7 +94,7 @@ export async function retrieve(query, store, embedder, opts = {}) {
   // ablation switch first: it answers "what do the vectors add over BM25?",
   // which decides whether the embedder has to run at all (the plan's System 1
   // → System 2 cascade).
-  const useDense = opts.dense ?? (process.env.BRAIN_DENSE !== '0');
+  const useDense = opts.dense ?? (process.env.BRAIN_DENSE !== '0' && !(embedder && embedder.lexical));
   if (!useDense) return retrieveLexical(query, store, { ...opts, topK, candidates, filter });
   const queryVector = await embedder.embed(query);
   const dense = (await store.search(queryVector, candidates, filter))
