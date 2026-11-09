@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>leanlamp banner</title>
+<!-- Source of .github/assets/banner.png (1280×640, also the social preview).
+     Render: serve the repo root, open this page at 1280×640, screenshot at 2×. -->
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=Doto:wght@900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root { --accent: #ff5a1f; --dim: #3a3a3a; --rule: #2a2a2a; --muted: #b8b8b8; }
+  * { box-sizing: border-box; border-radius: 0; margin: 0; }
+  html, body { width: 1280px; height: 640px; background: #000; color: #fff; overflow: hidden; }
+  body { font: 400 18px/1.4 'JetBrains Mono', monospace; font-variant-ligatures: none; position: relative; }
+  .frame { position: absolute; inset: 0; padding: 56px 64px; display: grid; grid-template-rows: auto 1fr auto; }
+  .top { display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .brand { display: flex; align-items: center; gap: 14px; color: #fff; font: 800 30px/1 'Bricolage Grotesque', sans-serif; letter-spacing: -.04em; text-transform: none; }
+  .mark { display: inline-flex; gap: 3px; height: 22px; }
+  .mark i { display: block; width: 5px; height: 22px; background: var(--dim); }
+  .mark i.on { background: var(--accent); }
+  .mid { align-self: center; display: grid; grid-template-columns: 1fr 400px; gap: 48px; align-items: center; }
+  .rcpt { border: 2px solid #fff; padding: 4px 20px 14px; font-size: 13px; }
+  .rh { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--rule); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .src { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; padding: 11px 0 0; }
+  .src b { font: 900 22px/.9 'Doto', monospace; }
+  .src i { grid-column: 1 / -1; height: 6px; background: var(--rule); position: relative; }
+  .src s { position: absolute; inset: 0 auto 0 0; background: #fff; }
+  .src.hot b { color: var(--accent); }
+  .src.hot s { background: var(--accent); }
+  h1 { font: 800 136px/.9 'Bricolage Grotesque', sans-serif; letter-spacing: -.05em; }
+  h1 .o { color: var(--accent); }
+  .bottom { display: grid; grid-template-columns: repeat(3, 1fr) 1.3fr; border-top: 2px solid #fff; }
+  .bottom > div { padding: 18px 24px 0 0; border-right: 1px solid var(--rule); }
+  .bottom > div + div { padding-left: 24px; }
+  .bottom > div:last-child { border-right: 0; }
+  .n { font: 900 46px/.9 'Doto', monospace; display: block; margin-bottom: 10px; }
+  .n.o { color: var(--accent); }
+  .l { font-size: 13px; color: var(--muted); }
+  .say { font-size: 15px; line-height: 1.5; align-self: end; }
+  .say b { color: var(--accent); }
+  .corner { position: absolute; width: 22px; height: 22px; border: 3px solid var(--accent); }
+  .tl { top: 24px; left: 24px; border-right: 0; border-bottom: 0; }
+  .br { bottom: 24px; right: 24px; border-left: 0; border-top: 0; }
+</style>
+</head>
+<body>
+  <span class="corner tl"></span><span class="corner br"></span>
+  <div class="frame">
+    <div class="top">
+      <span class="brand"><span class="mark"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span>leanlamp</span>
+      <span>for Claude Code · macOS · local</span>
+    </div>
+    <div class="mid">
+      <h1>Context,<br><span class="o">itemised.</span></h1>
+      <div class="rcpt">
+        <div class="rh"><span>What fills one session</span><span>example</span></div>
+        <div class="src hot"><span>command output</span><b>61k</b><i><s style="width:41%"></s></i></div>
+        <div class="src"><span>system, tools, CLAUDE.md</span><b>48k</b><i><s style="width:32%"></s></i></div>
+        <div class="src"><span>file reads</span><b>22k</b><i><s style="width:15%"></s></i></div>
+        <div class="src"><span>plugins at session start</span><b>12k</b><i><s style="width:8%"></s></i></div>
+      </div>
+    </div>
+    <div class="bottom">
+      <div><span class="n">0</span><span class="l">LLM calls</span></div>
+      <div><span class="n o">0 B</span><span class="l">sent off your Mac</span></div>
+      <div><span class="n">9</span><span class="l">verbs, one engine</span></div>
+      <div class="say">Who fills your agent's context, what it cost, whether it was used. <b>Then park what you only kept open for it.</b></div>
+    </div>
+  </div>
+</body>
+</html>
